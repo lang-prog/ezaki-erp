@@ -168,7 +168,7 @@ class AccountingReportService
             ['path' => LengthAwarePaginator::resolveCurrentPath(), 'query' => request()->query()],
         );
 
-        return ['rows' => $rows, 'threshold' => $threshold];
+        return ['rows' => $rows, 'threshold' => $threshold, 'total_outstanding' => round((float) $qualified->sum('balance_due'), 2)];
     }
 
     private function balancesByType(Company $company, array $types, ?string $from, ?string $to): Collection

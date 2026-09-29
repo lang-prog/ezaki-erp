@@ -38,6 +38,11 @@ const strings = {
         periodName: 'Period name', periodStart: 'Starts on', periodEnd: 'Ends on', createPeriod: 'Create period',
         operations: 'Operations', purchases: 'Purchases', sales: 'Sales', fleet: 'Fleet', trips: 'Trips', internalNumber: 'Internal number', supplier: 'Supplier', customer: 'Customer', settings: 'Settings', addType: 'Add type', addDiameter: 'Add diameter', masterData: 'Master data', filter: 'Filter', draft: 'Draft', approved: 'Approved', reversed: 'Reversed',
         dailySales: 'Daily sales', paymentsReceipts: 'Payments vs receipts', payments: 'Payments', topSoldProducts: 'Top sold products', salesByCustomer: 'Sales by customer',
+        counterpartyType: 'Counterparty type', otherAccount: 'Other account', accountNumber: 'Account number', source: 'Source', reverse: 'Reverse', print: 'Print', apply: 'Apply', fromDate: 'From date', toDate: 'To date', minimum: 'Minimum',
+        warehouseEntryDate: 'Warehouse entry date', totalFactoryWeight: 'Total factory weight', actualReviewWeight: 'Actual review weight', totalActualWeight: 'Total actual weight', totalPackages: 'Total packages', lines: 'Lines', addLine: 'Add line', remove: 'Remove', unitPrice: 'Unit price', packages: 'Packages', optionalPackages: 'Packages (optional)', factoryWeight: 'Factory weight', actualWeight: 'Actual weight',
+        searchType: 'Search type', exportCsv: 'Export CSV', profile: 'Profile',
+        branch: 'Branch', supplierBillNumber: 'Supplier bill number', customerBillNumber: 'Customer bill number', paymentMethod: 'Payment method', cash: 'Cash', creditPayment: 'Credit', partialPayment: 'Partial', externalVehicle: 'External vehicle', externalPlate: 'External plate', driverName: 'Driver name', transport: 'Transport', loading: 'Loading', extras: 'Extras', vat: 'VAT %', revisionReason: 'Revision reason', saveRevision: 'Save revision', allocateExtras: 'Allocate extras by ton', saveDraft: 'Save as draft', saveApprove: 'Save & approve', allocationByTon: 'Display-only allocation by ton', line: 'Line',
+        cancel: 'Cancel', roles: 'Roles', permissions: 'Permissions', activity: 'Activity', activate: 'Activate', deactivate: 'Deactivate', resetPassword: 'Reset password', saveUser: 'Save user', close: 'Close', firstName: 'First name', secondName: 'Second name',
     },
     ar: {
         companyWorkspace: 'مساحة عمل الشركة', platformAdmin: 'إدارة المنصة',
@@ -78,6 +83,11 @@ const strings = {
         periodName: 'اسم الفترة', periodStart: 'تبدأ في', periodEnd: 'تنتهي في', createPeriod: 'إنشاء فترة',
         operations: 'العمليات', purchases: 'المشتريات', sales: 'المبيعات', fleet: 'الأسطول', trips: 'الرحلات', internalNumber: 'الرقم الداخلي', supplier: 'المورد', customer: 'العميل', settings: 'الإعدادات', addType: 'إضافة نوع', addDiameter: 'إضافة قطر', masterData: 'البيانات الأساسية', filter: 'تصفية', draft: 'مسودة', approved: 'معتمدة', reversed: 'معكوسة',
         dailySales: 'المبيعات اليومية', paymentsReceipts: 'المدفوعات مقابل المقبوضات', payments: 'المدفوعات', topSoldProducts: 'أكثر الأصناف مبيعًا', salesByCustomer: 'المبيعات حسب العميل',
+        counterpartyType: 'نوع الجهة', otherAccount: 'حساب آخر', accountNumber: 'رقم الحساب', source: 'المستند', reverse: 'عكس القيد', print: 'طباعة', apply: 'تطبيق', fromDate: 'من تاريخ', toDate: 'إلى تاريخ', minimum: 'الحد الأدنى',
+        warehouseEntryDate: 'تاريخ دخول المخزن', totalFactoryWeight: 'إجمالي وزن المصنع', actualReviewWeight: 'الوزن الفعلي للمراجعة', totalActualWeight: 'إجمالي الوزن الفعلي', totalPackages: 'إجمالي الطرود', lines: 'البنود', addLine: 'إضافة بند', remove: 'حذف', unitPrice: 'سعر الوحدة', packages: 'الطرود', optionalPackages: 'الطرود (اختياري)', factoryWeight: 'وزن المصنع', actualWeight: 'الوزن الفعلي',
+        searchType: 'البحث بالنوع', exportCsv: 'تصدير CSV', profile: 'الملف',
+        branch: 'الفرع', supplierBillNumber: 'رقم فاتورة المورد', customerBillNumber: 'رقم فاتورة العميل', paymentMethod: 'طريقة السداد', cash: 'نقدي', creditPayment: 'آجل', partialPayment: 'جزئي', externalVehicle: 'مركبة خارجية', externalPlate: 'لوحة المركبة الخارجية', driverName: 'اسم السائق', transport: 'النقل', loading: 'التحميل', extras: 'مصاريف إضافية', vat: 'ضريبة القيمة المضافة %', revisionReason: 'سبب المراجعة', saveRevision: 'حفظ المراجعة', allocateExtras: 'توزيع المصاريف على الأطنان', saveDraft: 'حفظ كمسودة', saveApprove: 'حفظ واعتماد', allocationByTon: 'توزيع استرشادي حسب الطن', line: 'البند',
+        cancel: 'إلغاء', roles: 'الأدوار', permissions: 'الصلاحيات', activity: 'النشاط', activate: 'تفعيل', deactivate: 'تعطيل', resetPassword: 'إعادة تعيين كلمة المرور', saveUser: 'حفظ المستخدم', close: 'إغلاق', firstName: 'الاسم الأول', secondName: 'الاسم الثاني',
     },
 };
 

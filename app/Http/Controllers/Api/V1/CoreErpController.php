@@ -43,21 +43,25 @@ class CoreErpController extends Controller
         $companyId = (int) $company->id;
         $from = now()->startOfMonth()->toDateString();
         $to = now()->endOfMonth()->toDateString();
+        $debtors = $reports->debtors($company);
 
         return response()->json(['data' => [
             'metrics' => [
                 'branches' => Branch::query()->where('company_id', $companyId)->whereNull('archived_at')->count(),
                 'warehouses' => Warehouse::query()->where('company_id', $companyId)->whereNull('archived_at')->count(),
                 'parties' => CustomerSupplier::query()->where('company_id', $companyId)->where('status', 'active')->count(),
-                'debtors' => $reports->debtors($company)['rows']->total(),
+                'debtors' => $debtors['total_outstanding'],
+                'debtor_count' => $debtors['rows']->total(),
                 'monthly_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [$from, $to])->sum('total'),
                 'monthly_purchases' => DB::table('purchase_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('supplier_bill_date', [$from, $to])->sum('total'),
             ],
             'daily_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [$from, $to])->select('bill_date', DB::raw('SUM(total) as total'))->groupBy('bill_date')->orderBy('bill_date')->get(),
             'payments_receipts' => [
-                'payments' => (float) DB::table('payment_vouchers')->where('company_id', $companyId)->whereBetween('voucher_date', [$from, $to])->sum('amount'),
-                'receipts' => (float) DB::table('receipts')->where('company_id', $companyId)->whereBetween('receipt_date', [$from, $to])->sum('amount'),
+                'payments' => (float) DB::table('payment_vouchers')->where('company_id', $companyId)->where('status', 'posted')->whereBetween('voucher_date', [$from, $to])->sum('amount'),
+                'receipts' => (float) DB::table('receipts')->where('company_id', $companyId)->where('status', 'posted')->whereBetween('receipt_date', [$from, $to])->sum('amount'),
             ],
+            'top_sold_products' => DB::table('sales_bill_lines')->join('sales_bills', 'sales_bills.id', '=', 'sales_bill_lines.sales_bill_id')->join('products', 'products.id', '=', 'sales_bill_lines.product_id')->where('sales_bills.company_id', $companyId)->where('sales_bills.status', 'approved')->whereBetween('sales_bills.bill_date', [$from, $to])->select('products.name', DB::raw('SUM(sales_bill_lines.actual_weight) as quantity'))->groupBy('products.id', 'products.name')->orderByDesc('quantity')->limit(5)->get(),
+            'sales_by_customer' => DB::table('sales_bills')->join('customer_suppliers', 'customer_suppliers.id', '=', 'sales_bills.customer_id')->where('sales_bills.company_id', $companyId)->where('sales_bills.status', 'approved')->whereBetween('sales_bills.bill_date', [$from, $to])->select('customer_suppliers.name', DB::raw('SUM(sales_bills.total) as total'))->groupBy('customer_suppliers.id', 'customer_suppliers.name')->orderByDesc('total')->limit(5)->get(),
         ]]);
     }
 

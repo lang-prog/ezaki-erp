@@ -1,5 +1,26 @@
-@php($arabic = ($locale ?? 'ar') === 'ar')
+@php
+    $arabic = ($locale ?? 'ar') === 'ar';
+    $statuses = $arabic
+        ? ['draft' => 'مسودة', 'approved' => 'معتمدة', 'reversed' => 'معكوسة']
+        : ['draft' => 'Draft', 'approved' => 'Approved', 'reversed' => 'Reversed'];
+@endphp
 <!doctype html>
 <html lang="{{ $arabic ? 'ar' : 'en' }}" dir="{{ $arabic ? 'rtl' : 'ltr' }}">
-<head><meta charset="utf-8"><title>{{ $document->internal_number }}</title><style>body{font-family:Arial,sans-serif;margin:32px;color:#202823}table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #ccd3cc;padding:8px;text-align:{{ $arabic ? 'right' : 'left' }}}.summary{margin-top:20px}</style></head>
-<body><h1>{{ $company->name }} - {{ $arabic ? 'فاتورة مبيعات' : 'Sales Bill' }}</h1><p><strong>{{ $document->internal_number }}</strong> | {{ $arabic ? 'رقم فاتورة العميل' : 'Customer bill' }}: {{ $document->customer_bill_number }} | {{ $arabic ? 'الحالة' : 'Status' }}: {{ $document->status }}</p><p>{{ $arabic ? 'العميل' : 'Customer' }}: {{ $document->customer->name }} | {{ $arabic ? 'التاريخ' : 'Date' }}: {{ $document->bill_date?->toDateString() }}</p><table><thead><tr><th>{{ $arabic ? 'النوع' : 'Type' }}</th><th>{{ $arabic ? 'القطر' : 'Diameter' }}</th><th>{{ $arabic ? 'الوزن الفعلي' : 'Actual weight' }}</th><th>{{ $arabic ? 'الطرود' : 'Packages' }}</th><th>{{ $arabic ? 'سعر الوحدة' : 'Unit price' }}</th><th>{{ $arabic ? 'إجمالي البند' : 'Line total' }}</th></tr></thead><tbody>@foreach($document->lines as $line)<tr><td>{{ $line->product->type?->name ?? $line->product->name }}</td><td>{{ $line->product->diameter?->millimeters }}</td><td>{{ $line->actual_weight }}</td><td>{{ $line->packages ?? '' }}</td><td>{{ $line->unit_price }}</td><td>{{ $line->line_total }}</td></tr>@endforeach</tbody></table><div class="summary"><p>{{ $arabic ? 'الإجمالي الفرعي' : 'Subtotal' }}: {{ $document->subtotal }}</p><p>{{ $arabic ? 'النقل والتحميل والمصاريف' : 'Transport/loading/extras' }}: {{ $document->transport_cost + $document->loading_cost + $document->extra_cost }}</p><p>{{ $arabic ? 'الخصم' : 'Discount' }}: {{ $document->discount }}</p><p>{{ $arabic ? 'ضريبة القيمة المضافة' : 'VAT' }}: {{ $document->vat_amount }}</p><h2>{{ $arabic ? 'الإجمالي' : 'Total' }}: {{ $document->total }} EGP</h2></div></body></html>
+<head>
+    <meta charset="utf-8">
+    <title>{{ $document->internal_number }}</title>
+    <style>
+        body{font-family:Arial,sans-serif;margin:32px;color:#202823}table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #ccd3cc;padding:8px;text-align:{{ $arabic ? 'right' : 'left' }}}.summary{margin-top:20px}@media print{body{margin:12mm}thead{display:table-header-group}tr{break-inside:avoid}}
+    </style>
+</head>
+<body>
+    <h1>{{ $company->name }} - {{ $arabic ? 'فاتورة مبيعات' : 'Sales Bill' }}</h1>
+    <p><strong>{{ $document->internal_number }}</strong> | {{ $arabic ? 'رقم فاتورة العميل' : 'Customer bill' }}: {{ $document->customer_bill_number }} | {{ $arabic ? 'الحالة' : 'Status' }}: {{ $statuses[$document->status] ?? $document->status }}</p>
+    <p>{{ $arabic ? 'العميل' : 'Customer' }}: {{ $document->customer->name }} | {{ $arabic ? 'التاريخ' : 'Date' }}: {{ $document->bill_date?->toDateString() }}</p>
+    <table>
+        <thead><tr><th>{{ $arabic ? 'النوع' : 'Type' }}</th><th>{{ $arabic ? 'القطر' : 'Diameter' }}</th><th>{{ $arabic ? 'الوزن الفعلي' : 'Actual weight' }}</th><th>{{ $arabic ? 'الطرود' : 'Packages' }}</th><th>{{ $arabic ? 'سعر الوحدة' : 'Unit price' }}</th><th>{{ $arabic ? 'إجمالي البند' : 'Line total' }}</th></tr></thead>
+        <tbody>@foreach($document->lines as $line)<tr><td>{{ $line->product->type?->name ?? $line->product->name }}</td><td>{{ $line->product->diameter?->millimeters }}</td><td>{{ $line->actual_weight }}</td><td>{{ $line->packages ?? '' }}</td><td>{{ $line->unit_price }}</td><td>{{ $line->line_total }}</td></tr>@endforeach</tbody>
+    </table>
+    <div class="summary"><p>{{ $arabic ? 'الإجمالي الفرعي' : 'Subtotal' }}: {{ $document->subtotal }}</p><p>{{ $arabic ? 'النقل والتحميل والمصاريف' : 'Transport/loading/extras' }}: {{ $document->transport_cost + $document->loading_cost + $document->extra_cost }}</p><p>{{ $arabic ? 'الخصم' : 'Discount' }}: {{ $document->discount }}</p><p>{{ $arabic ? 'ضريبة القيمة المضافة' : 'VAT' }}: {{ $document->vat_amount }}</p><h2>{{ $arabic ? 'الإجمالي' : 'Total' }}: {{ $document->total }} EGP</h2></div>
+</body>
+</html>

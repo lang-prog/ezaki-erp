@@ -473,3 +473,34 @@ The operator explicitly requested continuation through the remaining program. A 
 Validation evidence from the Sandbox clone: `vendor/bin/phpunit` passed **66 tests and 884 assertions**; `vendor/bin/pint --test` passed **122 files**; `composer validate --no-check-publish` passed; `npm run build` passed with Vite 6.4.3 and 802 modules; `npm audit --omit=optional` reported 0 vulnerabilities. Temporary HTTP validation returned `/api/v1/health` HTTP 200 with all security headers, `/api/v1/version` HTTP 200 with application/Laravel version data, and `/login` HTTP 200 with security headers.
 
 Phase 3 remains `PARTIALLY_COMPLETED` for the backlog statuses that explicitly require operator-visible MySQL/browser evidence. Phase 4 is now `IN_PROGRESS`, not `COMPLETED`: MySQL/XAMPP execution, authenticated browser walkthrough, production mail, and any real deployment acceptance still require operator-side validation. The pure type+diameter schema migration remains intentionally deferred because it changes persisted inventory/bill identity and requires a controlled historical mapping decision; the current compatibility layer is retained.
+
+
+### editandnew implementation-completion pass — 2026-09-30
+
+A full code-level audit of all `IN_PROGRESS` groups in `editandnew.md` was completed. This pass closes the implementation gaps that remained after the earlier reconciliation while preserving the backlog rule that operator-visible MySQL/browser confirmation is required before changing an item to `DONE`.
+
+Implemented in this pass:
+
+- **Bills A4/A5/A11:** purchase lines now remove/ignore legacy line-level `actual_weight`; the persisted column is nullable through an additive migration; purchase stock/value remains factory-weight based; purchase header totals and actual review weight are grouped at the top; Arabic print maps statuses and no longer renders line-level actual weight.
+- **Accounting B7/B16:** report controls and table actions use localized labels; print output hides navigation/forms and applies A4 table rules; inactive posting accounts are excluded from the Other-account selectors.
+- **Inventory C5:** type search, warehouse filtering, printable matrix, and permission-protected CSV export were added. Matrix totals recalculate for the visible search result.
+- **Customers/suppliers D2/D3:** list names now open tenant-scoped profiles; customer and supplier routes enforce the requested kind; statement/collection/payment actions are permission-gated.
+- **Access E3/E7:** direct permission updates for a Company Owner are rejected server-side; user/access and bill workflows use active-locale labels for their remaining operator-facing controls.
+- **Fleet F3:** all relationship IDs (branch, vehicle, driver, trip) are resolved inside the active company; cross-company IDs return 404. Vehicle/driver/trip/expense/maintenance forms now expose the persisted operational fields. Maintenance notes were added through an additive migration. A single `FleetReportService` now powers vehicle P&L, trip cost, fuel cost, driver performance, expenses by category, maintenance by period, inactive vehicles, and branch performance with date/branch filters, printable views, and permission-protected CSV exports.
+- **Dashboard F4:** debtor KPI is now an amount instead of a row count (with a separate debtor count in the payload); receipts/payments include posted records only; daily sales scale to the actual monthly maximum and render every returned month day; top sold products and sales by customer are now visible; API dashboard parity was completed.
+- **Regression coverage:** added focused tests for ignored/non-persisted purchase line actual weight, tenant-scoped fleet foreign keys, immutable owner direct permissions, route kind enforcement for party profiles, and 403 behavior on inventory/fleet export routes without export permissions.
+
+Verification:
+
+- `vendor/bin/phpunit` — **71 tests, 919 assertions, 0 failures**.
+- `vendor/bin/pint --test` — **125 files passed**.
+- `composer validate --no-check-publish` — valid.
+- `npm run build` — Vite 6.4.3 build passed; **802 modules transformed**.
+- `npm audit --omit=optional` — **0 vulnerabilities**.
+- `git diff --check` — clean.
+- Fleet and inventory route listings include the new view/export endpoints.
+
+External acceptance boundary:
+
+- `F2` remains intentionally `DEFERRED`: the pure type+diameter schema cutover requires historical-data mapping and is not necessary for the current compatibility model.
+- Per the binding backlog rule, items that require operator-visible MySQL/XAMPP/browser evidence remain `IN_PROGRESS` in `editandnew.md` until the operator runs the additive migrations and completes the supplied acceptance checklist. No `.env` was read and no destructive migration/reset command was run.

@@ -158,3 +158,21 @@ Do not start C/D/E.
 - D2/D3 profile routes and tenant isolation are covered by the Phase Two page test; the shared `PartyProfile` page exposes statement plus collection/payment actions.
 
 Do not read `.env`. No `migrate:fresh`.
+
+
+### Implementation completion evidence — 2026-09-30
+
+The code-level completion pass for all `IN_PROGRESS` groups is implemented and regression-tested. Statuses remain `IN_PROGRESS` only because this file requires operator-visible MySQL/XAMPP/browser evidence before `DONE`.
+
+| Scope | New completion evidence |
+|---|---|
+| A4/A5/A11 | Purchase line actual weight is removed from UI/request persistence and the legacy column is additive-migrated to nullable; header totals are top-grouped; Arabic print uses translated statuses and factory-weight-only lines. |
+| B7/B16 | Accounting report controls/actions are localized and print-safe; Other-account options reject inactive, header, and selected cash/bank accounts. |
+| C5 | Matrix now supports type search, warehouse filtering, print, and `inventory.export`-protected CSV export. |
+| D2/D3 | Customer/supplier names open type-enforced, tenant-scoped profiles; statement and payment/collection actions respect accounting permissions. |
+| E3/E7 | Company Owner direct-permission mutation is server-rejected; remaining bill and access controls are localized in the active locale. |
+| F3 | Fleet foreign keys are tenant-scoped; persisted CRUD fields are exposed; eight date/branch-filtered reports share one service; CSV export requires `fleet.export`. |
+| F4 | Debtors KPI is an amount, posted receipts/payments are used, daily-sales scaling is data-driven, and product/customer breakdowns are rendered and returned by API. |
+| Regression | `71 tests / 919 assertions`, Pint 125 files, Composer valid, Vite build 802 modules, npm audit 0 vulnerabilities. |
+
+Operator acceptance still required before changing these rows to `DONE`: run `php artisan migrate` on the XAMPP/MySQL copy, then visually verify Arabic RTL bill print, report print/date filters, inventory CSV, customer/supplier profile actions, fleet CRUD/reports/CSV, and Dashboard charts using real company data. `F2` remains intentionally `DEFERRED` pending a historical mapping decision.

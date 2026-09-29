@@ -459,4 +459,65 @@ class PhaseThreeOperationsTest extends TestCase
         $this->assertNotSame($one['company']->id, $two['company']->id);
         $this->assertSame($one['company']->id, $one['user']->company_id);
     }
+
+    public function test_purchase_line_actual_weight_is_ignored_and_not_persisted(): void
+    {
+        $context = $this->tenant('purchase-line-contract');
+        Sanctum::actingAs($context['user']);
+
+        $billId = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'CONTRACT-1'))
+            ->assertCreated()
+            ->json('data.id');
+
+        $this->assertNull(DB::table('purchase_bill_lines')->where('purchase_bill_id', $billId)->value('actual_weight'));
+    }
+
+    public function test_fleet_foreign_keys_are_tenant_scoped_on_create(): void
+    {
+        $one = $this->tenant('fleet-relations-one');
+        $two = $this->tenant('fleet-relations-two');
+        $foreignVehicle = Vehicle::query()->create(['company_id' => $two['company']->id, 'branch_id' => $two['branch']->id, 'plate' => 'FOREIGN-1', 'ownership' => 'company', 'status' => 'active']);
+        Sanctum::actingAs($one['user']);
+
+        $this->postJson('/api/v1/fleet/vehicles', ['branch_id' => $two['branch']->id, 'plate' => 'BAD-BRANCH', 'ownership' => 'company', 'status' => 'active'])->assertNotFound();
+        $this->postJson('/api/v1/fleet/trips', ['vehicle_id' => $foreignVehicle->id, 'trip_type' => 'delivery', 'trip_at' => now()->toDateTimeString()])->assertNotFound();
+    }
+
+    public function test_company_owner_direct_permissions_are_immutable(): void
+    {
+        $context = $this->tenant('owner-direct-permissions');
+        Role::query()->where('company_id', $context['company']->id)->firstOrFail()->forceFill(['name' => 'Company Owner'])->save();
+        $registrar = app(PermissionRegistrar::class);
+        $registrar->setPermissionsTeamId((int) $context['company']->id);
+        $context['user']->givePermissionTo(Permission::query()->firstOrCreate(['name' => 'users.update', 'guard_name' => 'web']));
+        $registrar->forgetCachedPermissions();
+        Sanctum::actingAs($context['user']);
+
+        $this->putJson('/api/v1/users/'.$context['user']->id.'/permissions', ['permissions' => []])->assertForbidden();
+    }
+
+    public function test_party_profile_routes_enforce_customer_and_supplier_type(): void
+    {
+        $context = $this->tenant('party-profile-types');
+        $this->actingAs($context['user']);
+
+        $this->get('/customers/'.$context['customer']->id)->assertOk()->assertInertia(fn ($page) => $page->component('Company/PartyProfile')->where('kind', 'customer'));
+        $this->get('/suppliers/'.$context['supplier']->id)->assertOk()->assertInertia(fn ($page) => $page->component('Company/PartyProfile')->where('kind', 'supplier'));
+        $this->get('/customers/'.$context['supplier']->id)->assertNotFound();
+        $this->get('/suppliers/'.$context['customer']->id)->assertNotFound();
+    }
+
+    public function test_inventory_and_fleet_exports_require_export_permissions(): void
+    {
+        $context = $this->tenant('export-permissions');
+        $role = Role::query()->where('company_id', $context['company']->id)->firstOrFail();
+        $role->revokePermissionTo(['inventory.export', 'fleet.export']);
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
+        $this->actingAs($context['user']);
+
+        $this->get('/inventory')->assertOk();
+        $this->get('/inventory/export')->assertForbidden();
+        $this->get('/fleet/reports/vehicle-pl')->assertOk();
+        $this->get('/fleet/reports/vehicle-pl/export')->assertForbidden();
+    }
 }

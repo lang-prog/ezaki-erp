@@ -110,7 +110,7 @@ Route::prefix('v1')->group(function (): void {
         Route::middleware('can:fleet.maintenance')->put('/fleet/maintenance/{record}', [OperationsController::class, 'updateMaintenance']);
         Route::middleware('can:fleet.approve')->post('/fleet/maintenance/{record}/reverse', [OperationsController::class, 'reverseMaintenance']);
         Route::middleware('can:fleet.approve')->post('/fleet/maintenance/{record}/approve', [OperationsController::class, 'approveMaintenance']);
-        Route::middleware('can:fleet.view')->get('/fleet/reports/{report}', [OperationsController::class, 'report'])->whereIn('report', ['vehicle-pl', 'trip-cost', 'fuel', 'driver-performance', 'expenses-by-category', 'maintenance-period', 'inactive-vehicles']);
+        Route::middleware('can:fleet.view')->get('/fleet/reports/{report}', [OperationsController::class, 'report'])->whereIn('report', ['vehicle-pl', 'trip-cost', 'fuel', 'driver-performance', 'expenses-by-category', 'maintenance-period', 'inactive-vehicles', 'branch-performance']);
         Route::middleware('can:roles.view')->get('/roles', [CompanyAccessController::class, 'roles']);
         Route::middleware('can:roles.create')->post('/roles', [CompanyAccessController::class, 'storeRole']);
         Route::middleware('can:roles.assign_permissions')->put('/roles/{role}', [CompanyAccessController::class, 'updateRole']);

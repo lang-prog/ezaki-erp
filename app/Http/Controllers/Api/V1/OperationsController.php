@@ -12,10 +12,10 @@ use App\Models\PurchaseBill;
 use App\Models\SalesBill;
 use App\Models\Trip;
 use App\Models\Vehicle;
+use App\Services\FleetReportService;
 use App\Services\OperationsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class OperationsController
@@ -235,7 +235,7 @@ class OperationsController
     public function updateExpense(Request $request, FleetExpense $expense): JsonResponse
     {
         $this->owned($expense, $request);
-        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'expense_date' => ['required', 'date'], 'category' => ['required', 'string'], 'amount' => ['required', 'numeric', 'gt:0'], 'notes' => ['nullable', 'string']]);
+        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'trip_id' => ['nullable', 'integer'], 'expense_date' => ['required', 'date'], 'category' => ['required', 'in:fuel,maintenance,parts,oil,tires,tolls,loading,driver_wages,insurance,licensing,fines,other'], 'amount' => ['required', 'numeric', 'gt:0'], 'notes' => ['nullable', 'string']]);
 
         return response()->json(['data' => $this->operations->updateExpense($this->company($request), $request->user(), $expense, $data)]);
     }
@@ -243,7 +243,7 @@ class OperationsController
     public function updateMaintenance(Request $request, MaintenanceRecord $record): JsonResponse
     {
         $this->owned($record, $request);
-        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'maintenance_type' => ['required', 'in:preventive,emergency'], 'issue' => ['required', 'string'], 'cost' => ['required', 'numeric', 'gt:0'], 'starts_on' => ['required', 'date'], 'notes' => ['nullable', 'string']]);
+        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'maintenance_type' => ['required', 'in:preventive,emergency'], 'issue' => ['required', 'string'], 'parts' => ['nullable', 'string'], 'labor_cost' => ['nullable', 'numeric'], 'parts_cost' => ['nullable', 'numeric'], 'vendor' => ['nullable', 'string'], 'cost' => ['required', 'numeric', 'gt:0'], 'starts_on' => ['required', 'date'], 'ends_on' => ['nullable', 'date'], 'next_due_on' => ['nullable', 'date'], 'vehicle_status' => ['required', 'in:in_service,out_of_service'], 'notes' => ['nullable', 'string']]);
 
         return response()->json(['data' => $this->operations->updateMaintenance($this->company($request), $request->user(), $record, $data)]);
     }
@@ -262,13 +262,10 @@ class OperationsController
         return response()->json(['data' => $this->operations->reverseMaintenance($this->company($request), $request->user(), $record, $request->validate(['date' => ['required', 'date']])['date'])]);
     }
 
-    public function report(Request $request, string $report): JsonResponse
+    public function report(Request $request, FleetReportService $reports, string $report): JsonResponse
     {
-        $company = $this->company($request);
-        $query = Trip::query()->where('company_id', $company->id);
-        $data = match ($report) {
-            'vehicle-pl' => $query->select('vehicle_id', DB::raw('SUM(revenue) revenue'), DB::raw('SUM(fuel_cost+road_fees+loading_fees) expenses'))->groupBy('vehicle_id')->get(), 'trip-cost' => $query->select('id', 'vehicle_id', DB::raw('fuel_cost+road_fees+loading_fees as cost'))->get(), 'fuel' => $query->select('vehicle_id', DB::raw('SUM(fuel_cost) fuel_cost'))->groupBy('vehicle_id')->get(), 'driver-performance' => $query->select('driver_id', DB::raw('COUNT(*) trips'), DB::raw('SUM(revenue) revenue'))->groupBy('driver_id')->get(), 'expenses-by-category' => FleetExpense::query()->where('company_id', $company->id)->select('category', DB::raw('SUM(amount) total'))->groupBy('category')->get(), 'maintenance-period' => MaintenanceRecord::query()->where('company_id', $company->id)->whereBetween('starts_on', [$request->input('from', '2000-01-01'), $request->input('to', '2100-01-01')])->select('vehicle_id', DB::raw('SUM(cost) total'))->groupBy('vehicle_id')->get(), 'inactive-vehicles' => Vehicle::query()->where('company_id', $company->id)->where('status', 'inactive')->get(), default => abort(404)
-        };
+        $filters = $request->validate(['from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'branch_id' => ['nullable', 'integer']]);
+        $data = $reports->report($this->company($request), $report, $filters['from'] ?? null, $filters['to'] ?? null, isset($filters['branch_id']) ? (int) $filters['branch_id'] : null);
 
         return response()->json(['data' => $data]);
     }
@@ -285,7 +282,7 @@ class OperationsController
 
     private function purchaseData(Request $request): array
     {
-        return $request->validate(['branch_id' => ['required', 'integer'], 'warehouse_id' => ['required', 'integer'], 'supplier_id' => ['required', 'integer'], 'supplier_bill_number' => ['required', 'string', 'max:100'], 'supplier_bill_date' => ['required', 'date'], 'warehouse_entry_date' => ['nullable', 'date'], 'total_factory_weight' => ['required', 'numeric', 'gte:0'], 'total_actual_weight' => ['nullable', 'numeric', 'gte:0'], 'total_packages' => ['required', 'numeric', 'gte:0'], 'transport_cost' => ['nullable', 'numeric', 'gte:0'], 'loading_cost' => ['nullable', 'numeric', 'gte:0'], 'extra_cost' => ['nullable', 'numeric', 'gte:0'], 'discount' => ['nullable', 'numeric', 'gte:0'], 'vat_rate' => ['nullable', 'numeric', 'gte:0'], 'notes' => ['nullable', 'string'], 'vehicle_id' => ['nullable', 'integer'], 'external_vehicle_plate' => ['nullable', 'string'], 'external_driver_name' => ['nullable', 'string'], 'lines' => ['required', 'array', 'min:1'], 'lines.*.product_id' => ['nullable', 'integer'], 'lines.*.product_type_id' => ['nullable', 'integer'], 'lines.*.diameter_id' => ['nullable', 'integer'], 'lines.*.factory_weight' => ['required', 'numeric', 'gt:0'], 'lines.*.actual_weight' => ['nullable', 'numeric', 'gte:0'], 'lines.*.packages' => ['nullable', 'numeric', 'gte:0'], 'lines.*.unit_price' => ['required', 'numeric', 'gte:0']]);
+        return $request->validate(['branch_id' => ['required', 'integer'], 'warehouse_id' => ['required', 'integer'], 'supplier_id' => ['required', 'integer'], 'supplier_bill_number' => ['required', 'string', 'max:100'], 'supplier_bill_date' => ['required', 'date'], 'warehouse_entry_date' => ['nullable', 'date'], 'total_factory_weight' => ['required', 'numeric', 'gte:0'], 'total_actual_weight' => ['nullable', 'numeric', 'gte:0'], 'total_packages' => ['required', 'numeric', 'gte:0'], 'transport_cost' => ['nullable', 'numeric', 'gte:0'], 'loading_cost' => ['nullable', 'numeric', 'gte:0'], 'extra_cost' => ['nullable', 'numeric', 'gte:0'], 'discount' => ['nullable', 'numeric', 'gte:0'], 'vat_rate' => ['nullable', 'numeric', 'gte:0'], 'notes' => ['nullable', 'string'], 'vehicle_id' => ['nullable', 'integer'], 'external_vehicle_plate' => ['nullable', 'string'], 'external_driver_name' => ['nullable', 'string'], 'lines' => ['required', 'array', 'min:1'], 'lines.*.product_id' => ['nullable', 'integer'], 'lines.*.product_type_id' => ['nullable', 'integer'], 'lines.*.diameter_id' => ['nullable', 'integer'], 'lines.*.factory_weight' => ['required', 'numeric', 'gt:0'], 'lines.*.actual_weight' => ['exclude'], 'lines.*.packages' => ['nullable', 'numeric', 'gte:0'], 'lines.*.unit_price' => ['required', 'numeric', 'gte:0']]);
     }
 
     private function salesData(Request $request): array

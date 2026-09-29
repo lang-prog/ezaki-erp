@@ -30,3 +30,18 @@
 @media(max-width:560px){.laravel-shell .stats-grid{grid-template-columns:1fr}.laravel-shell .top-actions{gap:8px}.laravel-shell .role-switch{display:none}.laravel-shell .page-header,.laravel-shell .welcome-row{display:block}.laravel-shell .page-header .primary-button,.laravel-shell .welcome-row .primary-button{margin-top:16px}.laravel-shell .form-grid{grid-template-columns:1fr}.laravel-shell .table-toolbar{display:block}.laravel-shell .table-tools{margin-top:12px}.laravel-shell .search-box{width:100%}}
 
 .chart-bars{position:absolute;inset:0 0 25px;display:flex;align-items:flex-end;justify-content:space-around;gap:8px;padding:8px 10px 0}.chart-bars i{display:block;flex:1;max-width:34px;background:linear-gradient(180deg,#13b8a6,#8ddbd2);border-radius:5px 5px 0 0;min-height:5px;opacity:.9}.chart-bars i:nth-child(even){background:#b8dcd8}
+
+
+@media print {
+    @page { size: A4; margin: 12mm; }
+    body { background: #fff !important; color: #111 !important; font-size: 11pt; }
+    .sidebar, .topbar, .no-print { display: none !important; }
+    .app-shell, .main-content, .page-body, .printable-report { display: block !important; width: 100% !important; margin: 0 !important; padding: 0 !important; background: #fff !important; box-shadow: none !important; }
+    .printable-report { direction: inherit; }
+    .printable-report table { min-width: 0 !important; width: 100% !important; border-collapse: collapse; }
+    .printable-report th, .printable-report td { border: 1px solid #777 !important; padding: 6px !important; color: #111 !important; }
+    .printable-report thead { display: table-header-group; }
+    .printable-report tr { break-inside: avoid; }
+}
+
+.metric-bars{display:grid;gap:18px;margin-top:28px}.metric-bars>div{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;font-size:11px}.metric-bars strong{font:700 12px Manrope,sans-serif}.metric-bars i{grid-column:1/-1;display:block;height:10px;min-width:4px;max-width:100%;border-radius:999px;background:linear-gradient(90deg,var(--teal),#65c9bf)}.metric-bars>div:nth-child(2) i{background:linear-gradient(90deg,#5d82c1,#9db6df)}

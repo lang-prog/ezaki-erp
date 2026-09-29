@@ -226,6 +226,7 @@ class CompanyAccessController extends Controller
     public function setDirectPermissions(Request $request, User $user, AuditRecorder $audit): JsonResponse
     {
         abort_unless((int) $user->company_id === (int) $request->user()->company_id, 404);
+        abort_if($user->hasRole('Company Owner'), 403, 'The company owner permissions cannot be changed directly.');
         $data = $request->validate(['permissions' => ['array'], 'permissions.*' => ['string', 'exists:permissions,name']]);
         $assignable = $request->user()->getAllPermissions()->pluck('name')->all();
         abort_if(array_diff($data['permissions'] ?? [], $assignable), 403, 'You cannot grant permissions you do not hold.');

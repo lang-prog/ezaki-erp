@@ -127,6 +127,7 @@ class OperationsService
     public function updateVehicle(Company $company, User $actor, Vehicle $vehicle, array $data): Vehicle
     {
         abort_unless((int) $vehicle->company_id === (int) $company->id, 404);
+        $data['branch_id'] = $this->fleetRelationId('branches', $company, $data['branch_id'] ?? null, true);
         $vehicle->fill($data)->save();
         $this->audit->record('vehicles.updated', $vehicle, $company->id, $actor->id);
 
@@ -146,6 +147,7 @@ class OperationsService
     {
         abort_unless((int) $expense->company_id === (int) $company->id, 404);
         abort_if($expense->status !== 'draft', 409, 'Only draft expenses can be edited.');
+        $data = $this->expenseRelations($company, $data);
         $expense->fill($data)->save();
         $this->audit->record('fleet_expenses.updated', $expense, $company->id, $actor->id);
 
@@ -156,6 +158,7 @@ class OperationsService
     {
         abort_unless((int) $record->company_id === (int) $company->id, 404);
         abort_if($record->status !== 'draft', 409, 'Only draft maintenance records can be edited.');
+        $data['vehicle_id'] = $this->fleetRelationId('vehicles', $company, $data['vehicle_id']);
         $record->fill($data)->save();
         $this->audit->record('maintenance.updated', $record, $company->id, $actor->id);
 
@@ -164,6 +167,7 @@ class OperationsService
 
     public function createManualTrip(Company $company, User $actor, array $data): Trip
     {
+        $data = $this->tripRelations($company, $data);
         $trip = Trip::query()->create(['company_id' => $company->id, ...$data, 'status' => 'draft']);
         $this->audit->record('trips.created', $trip, $company->id, $actor->id);
 
@@ -174,6 +178,7 @@ class OperationsService
     {
         abort_unless((int) $trip->company_id === (int) $company->id, 404);
         abort_if($trip->status === 'approved', 409, 'Approved trips cannot be edited.');
+        $data = $this->tripRelations($company, $data);
         $trip->fill($data)->save();
         $this->audit->record('trips.updated', $trip, $company->id, $actor->id);
 
@@ -241,6 +246,7 @@ class OperationsService
     public function createVehicle(Company $company, User $actor, array $data): Vehicle
     {
         return DB::transaction(function () use ($company, $actor, $data): Vehicle {
+            $data['branch_id'] = $this->fleetRelationId('branches', $company, $data['branch_id'] ?? null, true);
             $vehicle = Vehicle::query()->create(['company_id' => $company->id, ...$data]);
             $this->audit->record('vehicles.created', $vehicle, $company->id, $actor->id);
 
@@ -258,6 +264,7 @@ class OperationsService
 
     public function createExpense(Company $company, User $actor, array $data, bool $approve = false): FleetExpense
     {
+        $data = $this->expenseRelations($company, $data);
         $expense = FleetExpense::query()->create(['company_id' => $company->id, ...$data, 'status' => 'draft']);
         if ($approve) {
             return $this->approveExpense($company, $actor, $expense);
@@ -281,6 +288,7 @@ class OperationsService
 
     public function createMaintenance(Company $company, User $actor, array $data, bool $approve = false): MaintenanceRecord
     {
+        $data['vehicle_id'] = $this->fleetRelationId('vehicles', $company, $data['vehicle_id']);
         $record = MaintenanceRecord::query()->create(['company_id' => $company->id, ...$data, 'status' => 'draft']);
         if ($approve) {
             return $this->approveMaintenance($company, $actor, $record);
@@ -336,10 +344,9 @@ class OperationsService
         return collect($lines)->map(function (array $line) use ($company): array {
             $product = $this->lineProduct($company, $line);
             $factory = (float) $line['factory_weight'];
-            $actual = (float) ($line['actual_weight'] ?? 0);
             $price = (float) $line['unit_price'];
 
-            return ['product_id' => $product->id, 'factory_weight' => $factory, 'actual_weight' => $actual, 'packages' => (float) ($line['packages'] ?? 0), 'unit_price' => $price, 'line_total' => round($factory * $price, 2), 'notes' => $line['notes'] ?? null];
+            return ['product_id' => $product->id, 'factory_weight' => $factory, 'actual_weight' => null, 'packages' => (float) ($line['packages'] ?? 0), 'unit_price' => $price, 'line_total' => round($factory * $price, 2), 'notes' => $line['notes'] ?? null];
         })->all();
     }
 
@@ -466,6 +473,41 @@ class OperationsService
     private function vehicleId(Company $company, array $data): ?int
     {
         return empty($data['vehicle_id']) ? null : (int) Vehicle::query()->where('company_id', $company->id)->where('status', 'active')->findOrFail((int) $data['vehicle_id'])->id;
+    }
+
+    private function tripRelations(Company $company, array $data): array
+    {
+        $data['vehicle_id'] = $this->fleetRelationId('vehicles', $company, $data['vehicle_id']);
+        $data['driver_id'] = $this->fleetRelationId('drivers', $company, $data['driver_id'] ?? null, true);
+        $data['branch_id'] = $this->fleetRelationId('branches', $company, $data['branch_id'] ?? null, true);
+
+        return $data;
+    }
+
+    private function expenseRelations(Company $company, array $data): array
+    {
+        $data['vehicle_id'] = $this->fleetRelationId('vehicles', $company, $data['vehicle_id']);
+        $data['trip_id'] = $this->fleetRelationId('trips', $company, $data['trip_id'] ?? null, true);
+        if ($data['trip_id']) {
+            $tripVehicle = (int) DB::table('trips')->where('id', $data['trip_id'])->value('vehicle_id');
+            abort_unless($tripVehicle === (int) $data['vehicle_id'], 422, 'The selected trip does not belong to the selected vehicle.');
+        }
+
+        return $data;
+    }
+
+    private function fleetRelationId(string $table, Company $company, mixed $id, bool $nullable = false): ?int
+    {
+        if ($nullable && ($id === null || $id === '')) {
+            return null;
+        }
+
+        $query = DB::table($table)->where('company_id', $company->id)->where('id', (int) $id);
+        if ($table === 'branches') {
+            $query->whereNull('archived_at');
+        }
+
+        return ($resolved = $query->value('id')) ? (int) $resolved : abort(404);
     }
 
     private function createTrip(Company $company, User $actor, mixed $bill, string $type): void

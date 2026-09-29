@@ -24,11 +24,13 @@ use App\Models\Vehicle;
 use App\Models\Warehouse;
 use App\Services\AccountingFoundationService;
 use App\Services\AccountingReportService;
+use App\Services\FleetReportService;
 use App\Services\InventoryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class CoreErpPageController extends Controller
 {
@@ -36,6 +38,7 @@ class CoreErpPageController extends Controller
     {
         $company = $request->attributes->get('company');
         $companyId = (int) $company->id;
+        $debtors = $reports->debtors($company);
 
         return Inertia::render('Company/Dashboard', [
             'capabilities' => $this->capabilities($request, ['dashboard.view', 'branches.view', 'inventory.view', 'parties.view', 'accounting.view', 'reports.view', 'purchases.view', 'sales.view', 'fleet.view', 'users.view']),
@@ -45,12 +48,13 @@ class CoreErpPageController extends Controller
                 'products' => DB::table('products')->where('company_id', $companyId)->whereNull('archived_at')->count(),
                 'stock_quantity' => (float) DB::table('stock_balances')->where('company_id', $companyId)->sum('quantity'),
                 'parties' => DB::table('customer_suppliers')->where('company_id', $companyId)->where('status', 'active')->count(),
-                'debtors' => $reports->debtors($company)['rows']->total(),
+                'debtors' => $debtors['total_outstanding'],
+                'debtor_count' => $debtors['rows']->total(),
                 'monthly_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('total'),
                 'monthly_purchases' => DB::table('purchase_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('supplier_bill_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('total'),
             ],
             'daily_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->select('bill_date', DB::raw('SUM(total) as total'))->groupBy('bill_date')->orderBy('bill_date')->get(),
-            'payments_receipts' => ['payments' => (float) DB::table('payment_vouchers')->where('company_id', $companyId)->whereBetween('voucher_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('amount'), 'receipts' => (float) DB::table('receipts')->where('company_id', $companyId)->whereBetween('receipt_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('amount')],
+            'payments_receipts' => ['payments' => (float) DB::table('payment_vouchers')->where('company_id', $companyId)->where('status', 'posted')->whereBetween('voucher_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('amount'), 'receipts' => (float) DB::table('receipts')->where('company_id', $companyId)->where('status', 'posted')->whereBetween('receipt_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('amount')],
             'top_sold_products' => DB::table('sales_bill_lines')->join('sales_bills', 'sales_bills.id', '=', 'sales_bill_lines.sales_bill_id')->join('products', 'products.id', '=', 'sales_bill_lines.product_id')->where('sales_bills.company_id', $companyId)->where('sales_bills.status', 'approved')->select('products.name', DB::raw('SUM(sales_bill_lines.actual_weight) as quantity'))->groupBy('products.id', 'products.name')->orderByDesc('quantity')->limit(5)->get(),
             'sales_by_customer' => DB::table('sales_bills')->join('customer_suppliers', 'customer_suppliers.id', '=', 'sales_bills.customer_id')->where('sales_bills.company_id', $companyId)->where('sales_bills.status', 'approved')->select('customer_suppliers.name', DB::raw('SUM(sales_bills.total) as total'))->groupBy('customer_suppliers.id', 'customer_suppliers.name')->orderByDesc('total')->limit(5)->get(),
         ]);
@@ -79,6 +83,23 @@ class CoreErpPageController extends Controller
         ]);
     }
 
+    public function exportInventory(Request $request, InventoryService $inventory): StreamedResponse
+    {
+        $filters = $request->validate(['warehouse_id' => ['nullable', 'integer'], 'q' => ['nullable', 'string', 'max:255']]);
+        $matrix = $inventory->matrix($request->attributes->get('company'), isset($filters['warehouse_id']) ? (int) $filters['warehouse_id'] : null);
+        $query = mb_strtolower(trim((string) ($filters['q'] ?? '')));
+        $rows = collect($matrix['rows'])->when($query !== '', fn ($items) => $items->filter(fn ($row) => str_contains(mb_strtolower($row['type']), $query)))->values();
+
+        return response()->streamDownload(function () use ($rows, $matrix): void {
+            $output = fopen('php://output', 'wb');
+            fputcsv($output, ['Type', ...array_map(fn ($diameter) => $diameter.' mm', $matrix['diameter_columns']), 'Total']);
+            foreach ($rows as $row) {
+                fputcsv($output, [$row['type'], ...array_map(fn ($diameter) => $row['cells'][$diameter] ?? 0, $matrix['diameter_columns']), $row['total']]);
+            }
+            fclose($output);
+        }, 'inventory-matrix.csv', ['Content-Type' => 'text/csv; charset=UTF-8']);
+    }
+
     public function parties(Request $request, AccountingFoundationService $foundation): Response
     {
         return $this->partyPage($request, $foundation, null);
@@ -94,11 +115,26 @@ class CoreErpPageController extends Controller
         return $this->partyPage($request, $foundation, 'supplier');
     }
 
-    public function partyProfile(Request $request, CustomerSupplier $party): Response
+    public function customerProfile(Request $request, CustomerSupplier $party): Response
     {
-        abort_unless((int) $party->company_id === (int) $request->attributes->get('company')->id, 404);
+        return $this->partyProfile($request, $party, 'customer');
+    }
 
-        return Inertia::render('Company/PartyProfile', ['party' => $party->load('account:id,code,name'), 'kind' => $party->is_supplier && ! $party->is_customer ? 'supplier' : 'customer']);
+    public function supplierProfile(Request $request, CustomerSupplier $party): Response
+    {
+        return $this->partyProfile($request, $party, 'supplier');
+    }
+
+    private function partyProfile(Request $request, CustomerSupplier $party, string $kind): Response
+    {
+        $matchesKind = $kind === 'customer' ? $party->is_customer : $party->is_supplier;
+        abort_unless((int) $party->company_id === (int) $request->attributes->get('company')->id && $matchesKind, 404);
+
+        return Inertia::render('Company/PartyProfile', [
+            'party' => $party->load('account:id,code,name'),
+            'kind' => $kind,
+            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.post']),
+        ]);
     }
 
     private function partyPage(Request $request, AccountingFoundationService $foundation, ?string $kind): Response
@@ -178,6 +214,7 @@ class CoreErpPageController extends Controller
         $companyId = (int) $request->user()->company_id;
 
         return Inertia::render('Company/Fleet', [
+            'branches' => Branch::query()->where('company_id', $companyId)->whereNull('archived_at')->orderBy('name')->get(['id', 'name']),
             'vehicles' => Vehicle::query()->where('company_id', $companyId)->latest()->paginate(25, ['*'], 'vehicles_page'),
             'drivers' => Driver::query()->where('company_id', $companyId)->latest()->paginate(25, ['*'], 'drivers_page'),
             'trips' => Trip::query()->where('company_id', $companyId)->with('vehicle:id,plate')->latest('trip_at')->paginate(25, ['*'], 'trips_page'),
@@ -187,15 +224,30 @@ class CoreErpPageController extends Controller
         ]);
     }
 
-    public function fleetReport(Request $request, string $report): Response
+    public function fleetReport(Request $request, FleetReportService $reports, string $report): Response
     {
-        abort_unless(in_array($report, ['maintenance-period', 'inactive-vehicles'], true), 404);
-        $companyId = (int) $request->user()->company_id;
-        $data = $report === 'maintenance-period'
-            ? MaintenanceRecord::query()->where('company_id', $companyId)->whereBetween('starts_on', [$request->input('from', '2000-01-01'), $request->input('to', '2100-01-01')])->select('vehicle_id', DB::raw('SUM(cost) as total'))->groupBy('vehicle_id')->get()
-            : Vehicle::query()->where('company_id', $companyId)->where('status', 'inactive')->get();
+        $filters = $request->validate(['from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'branch_id' => ['nullable', 'integer']]);
+        $company = $request->attributes->get('company');
+        $data = $reports->report($company, $report, $filters['from'] ?? null, $filters['to'] ?? null, isset($filters['branch_id']) ? (int) $filters['branch_id'] : null);
 
-        return Inertia::render('Company/FleetReport', ['report' => $report, 'rows' => $data, 'capabilities' => $this->capabilities($request, ['fleet.view', 'fleet.export'])]);
+        return Inertia::render('Company/FleetReport', [...$data, 'branches' => Branch::query()->where('company_id', $company->id)->whereNull('archived_at')->orderBy('name')->get(['id', 'name']), 'capabilities' => $this->capabilities($request, ['fleet.view', 'fleet.export'])]);
+    }
+
+    public function exportFleetReport(Request $request, FleetReportService $reports, string $report): StreamedResponse
+    {
+        $filters = $request->validate(['from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'branch_id' => ['nullable', 'integer']]);
+        $data = $reports->report($request->attributes->get('company'), $report, $filters['from'] ?? null, $filters['to'] ?? null, isset($filters['branch_id']) ? (int) $filters['branch_id'] : null);
+        $rows = collect($data['rows']);
+        $columns = $rows->flatMap(fn ($row) => array_keys($row))->unique()->values()->all();
+
+        return response()->streamDownload(function () use ($rows, $columns): void {
+            $output = fopen('php://output', 'wb');
+            fputcsv($output, $columns);
+            foreach ($rows as $row) {
+                fputcsv($output, array_map(fn ($column) => $row[$column] ?? '', $columns));
+            }
+            fclose($output);
+        }, $report.'.csv', ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 
     public function billForm(Request $request, string|int|null $first = null, string|int|null $second = null): Response
