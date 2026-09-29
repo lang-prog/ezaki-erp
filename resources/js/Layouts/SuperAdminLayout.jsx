@@ -4,27 +4,5 @@ import { translate } from '../i18n';
 export default function SuperAdminLayout({ title, children }) {
     const { auth, locale } = usePage().props;
     const isArabic = locale === 'ar';
-
-    return (
-        <div className="min-h-screen bg-[#f5f1ec] text-[#262522]">
-            <Head title={title} />
-            <header className="flex min-h-16 items-center justify-between border-b border-[#ded8cf] bg-white px-5 md:px-10">
-                <Link href="/super-admin" className="font-semibold">E-Zaki <span className="text-[#a64b36]">Platform</span></Link>
-                <span className="text-sm text-[#68645f]">{auth?.user?.name}</span>
-                <Link href={`/locale/${isArabic ? 'en' : 'ar'}`} method="post" as="button" className="text-sm">{isArabic ? 'English' : 'العربية'}</Link>
-                <Link href="/logout" method="post" as="button" className="text-sm underline">{translate(locale, 'signOut')}</Link>
-            </header>
-            <div className="mx-auto grid max-w-7xl md:grid-cols-[220px_1fr]">
-                <aside className="border-b border-[#ded8cf] px-5 py-6 md:min-h-[calc(100vh-4rem)] md:border-b-0 md:border-r">
-                    <p className="mb-3 text-xs font-semibold uppercase text-[#766f67]">{translate(locale, 'platformAdmin')}</p>
-                    <Link href="/super-admin" className="block rounded px-3 py-2 text-sm hover:bg-[#eee7df]">{translate(locale, 'overview')}</Link>
-                    <Link href="/super-admin#companies" className="block rounded px-3 py-2 text-sm hover:bg-[#eee7df]">{translate(locale, 'companies')}</Link>
-                    <Link href="/super-admin#plans" className="block rounded px-3 py-2 text-sm hover:bg-[#eee7df]">{translate(locale, 'plans')}</Link>
-                    <Link href="/super-admin#coupons" className="block rounded px-3 py-2 text-sm hover:bg-[#eee7df]">{translate(locale, 'coupons')}</Link>
-                    <Link href="/super-admin#registrations" className="block rounded px-3 py-2 text-sm hover:bg-[#eee7df]">{translate(locale, 'registrationRequests')}</Link>
-                </aside>
-                <main className="min-w-0 px-5 py-8 md:px-10">{children}</main>
-            </div>
-        </div>
-    );
+    return <div className="app-shell laravel-shell super-laravel"><Head title={title} /><aside className="sidebar" style={{ background: '#251e3b' }}><div className="brand"><div className="brand-mark" style={{ background: '#a17bdd' }}>◆</div><div><strong>E‑Zaki</strong><span>PLATFORM CONTROL</span></div></div><div className="workspace" style={{ background: '#352b50' }}><div className="workspace-logo" style={{ background: '#e8defc', color: '#7653a8' }}>SA</div><div><strong>{locale === 'ar' ? 'إدارة المنصة' : 'Platform admin'}</strong><small>Super Admin</small></div></div><nav><div className="nav-group"><div className="nav-label">{locale === 'ar' ? 'إدارة المنصة' : 'Platform management'}</div><Link href="/super-admin" className="nav-item active"><b>▦</b><span>{translate(locale, 'overview')}</span></Link><Link href="/super-admin#companies" className="nav-item"><b>▣</b><span>{translate(locale, 'companies')}</span></Link><Link href="/super-admin#plans" className="nav-item"><b>◈</b><span>{translate(locale, 'plans')}</span></Link><Link href="/super-admin#registrations" className="nav-item"><b>▤</b><span>{translate(locale, 'registrationRequests')}</span></Link><Link href="/super-admin#coupons" className="nav-item"><b>◎</b><span>{translate(locale, 'coupons')}</span></Link></div></nav><div className="sidebar-footer"><div className="profile-mini"><div className="avatar avatar-purple">SA</div><div><strong>{auth?.user?.name}</strong><span>Super Admin</span></div></div></div></aside><main className="main-content"><header className="topbar"><div className="crumbs"><span>{translate(locale, 'platformAdmin')}</span><span>‹</span><strong>{title}</strong></div><div className="top-actions"><Link className="icon-button" href={`/locale/${isArabic ? 'en' : 'ar'}`} method="post" as="button"><span>{isArabic ? 'EN' : 'ع'}</span></Link><div className="top-user"><div className="avatar avatar-purple">SA</div><div><strong>{auth?.user?.name}</strong><span>Super Admin</span></div></div><Link className="icon-button" href="/logout" method="post" as="button">↪</Link></div></header><div className="page-body">{children}</div></main></div>;
 }

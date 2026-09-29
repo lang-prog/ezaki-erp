@@ -1,42 +1,27 @@
 import { Head, Link, usePage } from '@inertiajs/react';
 import { translate } from '../i18n';
 
+const groups = [
+    { label: 'نظرة عامة', items: [['dashboard.view', 'لوحة التحكم', '/dashboard', '▦']] },
+    { label: 'إدارة الشركة', items: [['users.view', 'المستخدمون والصلاحيات', '/settings/access', '♙'], ['subscriptions.view', 'الاشتراك والترخيص', '/subscription', '▣'], ['branches.view', 'الفروع والمخازن', '/branches', '⌖']] },
+    { label: 'العمليات', items: [['sales.view', 'المبيعات', '/operations#sales', '↗'], ['purchases.view', 'المشتريات', '/operations#purchases', '↙'], ['inventory.view', 'المخزون', '/inventory', '▤'], ['parties.view', 'العملاء والموردون', '/parties', '◎'], ['fleet.view', 'الأسطول', '/fleet', '▱'], ['accounting.view', 'المحاسبة', '/accounting', '◫']] },
+    { label: 'التقارير والإعدادات', items: [['reports.view', 'التقارير', '/reports/journal', '◒']] },
+];
+
 export default function CompanyLayout({ title, children }) {
     const { auth, locale, subscriptionWarning, capabilities = {} } = usePage().props;
     const isArabic = locale === 'ar';
-
-    return (
-        <div className="min-h-screen bg-[#f1f3ed] text-[#202823]">
-            <Head title={title} />
-            <header className="flex min-h-16 items-center justify-between border-b border-[#d7ddd5] bg-white px-5 md:px-10">
-                <Link href="/dashboard" className="font-semibold tracking-normal">E-Zaki <span className="text-[#34795c]">ERP</span></Link>
-                <div className="flex items-center gap-4 text-sm">
-                    <span>{auth?.user?.name}</span>
-                    <Link href={`/locale/${isArabic ? 'en' : 'ar'}`} method="post" as="button" className="border-l border-[#d7ddd5] pl-4">{isArabic ? 'English' : 'العربية'}</Link>
-                    <Link href="/logout" method="post" as="button" className="border-l border-[#d7ddd5] pl-4">{translate(locale, 'signOut')}</Link>
-                </div>
-            </header>
-            <div className="mx-auto grid max-w-7xl md:grid-cols-[220px_1fr]">
-                <aside className="border-b border-[#d7ddd5] px-5 py-6 md:min-h-[calc(100vh-4rem)] md:border-b-0 md:border-r">
-                    <p className="mb-3 text-xs font-semibold uppercase text-[#68736b]">{translate(locale, 'companyWorkspace')}</p>
-                    {capabilities['dashboard.view'] && <Link href="/dashboard" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'overview')}</Link>}
-                    {capabilities['users.view'] && <Link href="/settings/access" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'usersAccess')}</Link>}
-                    {capabilities['subscriptions.view'] && <Link href="/subscription" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'settings')}</Link>}
-                    {capabilities['branches.view'] && <Link href="/branches" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'branches')}</Link>}
-                    {capabilities['inventory.view'] && <Link href="/inventory" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'inventory')}</Link>}
-                    {capabilities['parties.view'] && <Link href="/customers" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'customers')}</Link>}
-                    {capabilities['parties.view'] && <Link href="/suppliers" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'suppliers')}</Link>}
-                    {capabilities['accounting.view'] && <Link href="/accounting" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'accounting')}</Link>}
-                    {capabilities['purchases.view'] && <Link href="/operations#purchases" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'purchases')}</Link>}
-                    {capabilities['sales.view'] && <Link href="/operations#sales" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'sales')}</Link>}
-                    {capabilities['reports.view'] && <Link href="/reports/journal" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'reports')}</Link>}
-                    {capabilities['fleet.view'] && <Link href="/fleet" className="block rounded px-3 py-2 text-sm hover:bg-[#e4ebe3]">{translate(locale, 'fleet')}</Link>}
-                </aside>
-                <main className="min-w-0 px-5 py-8 md:px-10">
-                    {subscriptionWarning && <p className="mb-6 border-l-4 border-[#d7a94f] bg-white px-4 py-3 text-sm">{translate(locale, 'renewalWarning')}</p>}
-                    {children}
-                </main>
-            </div>
-        </div>
-    );
+    const user = auth?.user;
+    const initials = (user?.name || 'EZ').split(' ').slice(0, 2).map((part) => part[0]).join('');
+    const activePath = typeof window !== 'undefined' ? window.location.pathname : '';
+    return <div className="app-shell laravel-shell">
+        <Head title={title} />
+        <aside className="sidebar">
+            <div className="brand"><div className="brand-mark">◆</div><div><strong>E‑Zaki</strong><span>ERP / BUSINESS OS</span></div></div>
+            <div className="workspace"><div className="workspace-logo">EZ</div><div><strong>{user?.company?.name || 'شركة E‑Zaki'}</strong><small>{translate(locale, 'companyWorkspace')}</small></div><span>‹</span></div>
+            <nav>{groups.map((group) => <div className="nav-group" key={group.label}><div className="nav-label">{locale === 'ar' ? group.label : group.label}</div>{group.items.map(([permission, label, href, icon]) => capabilities[permission] && <Link key={href} href={href} className={`nav-item ${activePath === href.split('#')[0] ? 'active' : ''}`}><b>{icon}</b><span>{translate(locale, label) === label ? label : translate(locale, label)}</span></Link>)}</div>)}</nav>
+            <div className="sidebar-footer"><div className="help-card"><div className="help-icon">?</div><div><strong>{locale === 'ar' ? 'هل تحتاج مساعدة؟' : 'Need help?'}</strong><span>{locale === 'ar' ? 'تواصل مع الدعم' : 'Contact support'}</span></div><span>‹</span></div><div className="profile-mini"><div className="avatar avatar-blue">{initials}</div><div><strong>{user?.name}</strong><span>{locale === 'ar' ? 'مستخدم الشركة' : 'Company user'}</span></div></div></div>
+        </aside>
+        <main className="main-content"><header className="topbar"><div className="crumbs"><span>{locale === 'ar' ? 'الرئيسية' : 'Home'}</span><span>‹</span><strong>{title}</strong></div><div className="top-actions"><Link className="icon-button" href={`/locale/${isArabic ? 'en' : 'ar'}`} method="post" as="button"><span>{isArabic ? 'EN' : 'ع'}</span></Link><div className="top-user"><div className="avatar avatar-blue">{initials}</div><div><strong>{user?.name}</strong><span>{locale === 'ar' ? 'حساب الشركة' : 'Company account'}</span></div></div><Link className="icon-button" href="/logout" method="post" as="button" title={translate(locale, 'signOut')}>↪</Link></div></header><div className="page-body">{subscriptionWarning && <div className="notice-card">{translate(locale, 'renewalWarning')}</div>}{children}</div></main>
+    </div>;
 }

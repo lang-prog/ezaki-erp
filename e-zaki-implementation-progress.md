@@ -436,3 +436,31 @@ If a later session begins, the agent must:
 4. Inspect the actual repository.
 5. Continue the first phase that is not `COMPLETED`.
 6. Stop after that phase.
+
+
+### GitHub integration and local release verification — 2026-09-29
+
+The public repository `https://github.com/lang-prog/ezaki-erp` was cloned and treated as the Laravel source of truth; the separate React prototype was not copied over the existing Laravel/Inertia application. The clone contains Laravel 12, Inertia React, Sanctum, tenant middleware, Phase 1/2/3 services, APIs, pages, and migrations.
+
+For reproducible tests in a clean clone, `phpunit.xml` now supplies an isolated non-production test `APP_KEY`, and `tests/TestCase.php` disables only CSRF middleware for PHPUnit requests. No `.env` was opened, created, or modified. These changes are test-environment-only.
+
+Verification in the clone:
+
+- `vendor/bin/phpunit` — **64 tests, 864 assertions, 0 failures**.
+- `vendor/bin/pint --test` — **120 files passed**.
+- `composer validate --no-check-publish` — valid.
+- `npm run build` — Vite 6.4.3 build passed; 802 modules transformed.
+- `npm audit --omit=optional` — 0 vulnerabilities.
+- Temporary Laravel HTTP server with isolated env: `/` HTTP 200, `/login` HTTP 200, `/api/v1/health` returns `{"status":"ok","version":"v1"}`.
+- API route listing returned 96 rows; Super Admin route listing returned 17 rows.
+
+The repository was not force-pushed or overwritten. A local integration commit/patch is prepared separately for operator review and push from the authenticated Windows GitHub environment.
+
+
+### React/Vite visual integration into Laravel/Inertia — 2026-09-29
+
+The standalone React/Vite prototype was integrated at the presentation layer without copying its demo state or replacing Laravel business logic. The Laravel/Inertia CompanyLayout and SuperAdminLayout now use the E‑Zaki teal/dark-shell design language, workspace navigation, responsive sidebar, branded topbar, cards, tables, RTL typography, and the prototype's Arabic/English visual direction. Company Dashboard and Auth Login were rebuilt with the first prototype's dashboard/login composition while consuming real Laravel metrics, capabilities, routes, subscription status, operations, reports, and authentication. The prototype CSS was incorporated into `resources/css/app.css` with responsive and form/table overrides.
+
+No business rules were moved into React, no localStorage/demo records were introduced, and no existing migrations, controllers, API routes, or tenant services were replaced. The standalone `/home/ubuntu/e-zaki-erp` remains a reference prototype; the Laravel repository is the integrated source of truth.
+
+Validation after integration: Vite build passed with 802 modules and npm audit reported 0 vulnerabilities; the Laravel PHPUnit suite passed with 64 tests and 864 assertions, Pint passed 120 files, and Composer validation passed. Operator must push the local integration branch from the authenticated Windows checkout after review.
