@@ -464,3 +464,12 @@ The standalone React/Vite prototype was integrated at the presentation layer wit
 No business rules were moved into React, no localStorage/demo records were introduced, and no existing migrations, controllers, API routes, or tenant services were replaced. The standalone `/home/ubuntu/e-zaki-erp` remains a reference prototype; the Laravel repository is the integrated source of truth.
 
 Validation after integration: Vite build passed with 802 modules and npm audit reported 0 vulnerabilities; the Laravel PHPUnit suite passed with 64 tests and 864 assertions, Pint passed 120 files, and Composer validation passed. Operator must push the local integration branch from the authenticated Windows checkout after review.
+
+
+### Phase 4 security/API/release continuation — 2026-09-30
+
+The operator explicitly requested continuation through the remaining program. A code-audited Phase 4 slice was implemented without changing tenant business rules: a global `SecurityHeaders` middleware now adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`, and HSTS only when the request is HTTPS. The versioned API now exposes public `/api/v1/version`, and authenticated company consumers have `/api/v1/me` and permission-protected `/api/v1/dashboard` using the same tenant/subscription/license middleware and dashboard aggregates as the Inertia dashboard.
+
+Validation evidence from the Sandbox clone: `vendor/bin/phpunit` passed **66 tests and 884 assertions**; `vendor/bin/pint --test` passed **122 files**; `composer validate --no-check-publish` passed; `npm run build` passed with Vite 6.4.3 and 802 modules; `npm audit --omit=optional` reported 0 vulnerabilities. Temporary HTTP validation returned `/api/v1/health` HTTP 200 with all security headers, `/api/v1/version` HTTP 200 with application/Laravel version data, and `/login` HTTP 200 with security headers.
+
+Phase 3 remains `PARTIALLY_COMPLETED` for the backlog statuses that explicitly require operator-visible MySQL/browser evidence. Phase 4 is now `IN_PROGRESS`, not `COMPLETED`: MySQL/XAMPP execution, authenticated browser walkthrough, production mail, and any real deployment acceptance still require operator-side validation. The pure type+diameter schema migration remains intentionally deferred because it changes persisted inventory/bill identity and requires a controlled historical mapping decision; the current compatibility layer is retained.

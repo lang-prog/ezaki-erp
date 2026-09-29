@@ -1,0 +1,190 @@
+From 5c79ad3727d4ef253b95de97822f4a52efc4f790 Mon Sep 17 00:00:00 2001
+From: Manus Agent <manus@localhost>
+Date: Tue, 29 Sep 2026 22:22:04 +0000
+Subject: [PATCH] Advance Phase 4 security API and release checks
+
+---
+ .../Controllers/Api/V1/CoreErpController.php  | 31 +++++++++++++++++++
+ app/Http/Middleware/SecurityHeaders.php       | 28 +++++++++++++++++
+ bootstrap/app.php                             |  2 ++
+ e-zaki-implementation-progress.md             |  9 ++++++
+ routes/api.php                                |  3 ++
+ tests/Feature/PhaseFourReleaseTest.php        | 31 +++++++++++++++++++
+ 6 files changed, 104 insertions(+)
+ create mode 100644 app/Http/Middleware/SecurityHeaders.php
+ create mode 100644 tests/Feature/PhaseFourReleaseTest.php
+
+diff --git a/app/Http/Controllers/Api/V1/CoreErpController.php b/app/Http/Controllers/Api/V1/CoreErpController.php
+index bbc4373..cb0e4bb 100644
+--- a/app/Http/Controllers/Api/V1/CoreErpController.php
++++ b/app/Http/Controllers/Api/V1/CoreErpController.php
+@@ -30,6 +30,37 @@
+ 
+ class CoreErpController extends Controller
+ {
++    public function me(Request $request): JsonResponse
++    {
++        return response()->json(['data' => $request->user()->only([
++            'id', 'name', 'first_name', 'second_name', 'email', 'account_type', 'company_id', 'status',
++        ])]);
++    }
++
++    public function dashboard(Request $request, AccountingReportService $reports): JsonResponse
++    {
++        $company = $this->company($request);
++        $companyId = (int) $company->id;
++        $from = now()->startOfMonth()->toDateString();
++        $to = now()->endOfMonth()->toDateString();
++
++        return response()->json(['data' => [
++            'metrics' => [
++                'branches' => Branch::query()->where('company_id', $companyId)->whereNull('archived_at')->count(),
++                'warehouses' => Warehouse::query()->where('company_id', $companyId)->whereNull('archived_at')->count(),
++                'parties' => CustomerSupplier::query()->where('company_id', $companyId)->where('status', 'active')->count(),
++                'debtors' => $reports->debtors($company)['rows']->total(),
++                'monthly_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [$from, $to])->sum('total'),
++                'monthly_purchases' => DB::table('purchase_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('supplier_bill_date', [$from, $to])->sum('total'),
++            ],
++            'daily_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [$from, $to])->select('bill_date', DB::raw('SUM(total) as total'))->groupBy('bill_date')->orderBy('bill_date')->get(),
++            'payments_receipts' => [
++                'payments' => (float) DB::table('payment_vouchers')->where('company_id', $companyId)->whereBetween('voucher_date', [$from, $to])->sum('amount'),
++                'receipts' => (float) DB::table('receipts')->where('company_id', $companyId)->whereBetween('receipt_date', [$from, $to])->sum('amount'),
++            ],
++        ]]);
++    }
++
+     public function branches(Request $request): JsonResponse
+     {
+         return response()->json(['data' => Branch::query()->where('company_id', $this->company($request)->id)->whereNull('archived_at')->with('warehouses')->orderBy('name')->paginate(25)]);
+diff --git a/app/Http/Middleware/SecurityHeaders.php b/app/Http/Middleware/SecurityHeaders.php
+new file mode 100644
+index 0000000..06ad4eb
+--- /dev/null
++++ b/app/Http/Middleware/SecurityHeaders.php
+@@ -0,0 +1,28 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Http\Middleware;
++
++use Closure;
++use Illuminate\Http\Request;
++use Symfony\Component\HttpFoundation\Response;
++
++final class SecurityHeaders
++{
++    public function handle(Request $request, Closure $next): Response
++    {
++        $response = $next($request);
++
++        $response->headers->set('X-Content-Type-Options', 'nosniff');
++        $response->headers->set('X-Frame-Options', 'SAMEORIGIN');
++        $response->headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
++        $response->headers->set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
++
++        if ($request->isSecure()) {
++            $response->headers->set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
++        }
++
++        return $response;
++    }
++}
+diff --git a/bootstrap/app.php b/bootstrap/app.php
+index 23a17b8..7a88e19 100644
+--- a/bootstrap/app.php
++++ b/bootstrap/app.php
+@@ -4,6 +4,7 @@
+ use App\Http\Middleware\CheckSubscriptionStatus;
+ use App\Http\Middleware\EnsureLocalLicense;
+ use App\Http\Middleware\HandleInertiaRequests;
++use App\Http\Middleware\SecurityHeaders;
+ use App\Http\Middleware\SetLocale;
+ use App\Http\Middleware\SetTenantContext;
+ use Illuminate\Foundation\Application;
+@@ -18,6 +19,7 @@
+         health: '/up',
+     )
+     ->withMiddleware(function (Middleware $middleware): void {
++        $middleware->append(SecurityHeaders::class);
+         $middleware->statefulApi();
+         $middleware->web(append: [SetLocale::class, HandleInertiaRequests::class]);
+         $middleware->alias([
+diff --git a/e-zaki-implementation-progress.md b/e-zaki-implementation-progress.md
+index a615789..a66e997 100644
+--- a/e-zaki-implementation-progress.md
++++ b/e-zaki-implementation-progress.md
+@@ -464,3 +464,12 @@ ### React/Vite visual integration into Laravel/Inertia — 2026-09-29
+ No business rules were moved into React, no localStorage/demo records were introduced, and no existing migrations, controllers, API routes, or tenant services were replaced. The standalone `/home/ubuntu/e-zaki-erp` remains a reference prototype; the Laravel repository is the integrated source of truth.
+ 
+ Validation after integration: Vite build passed with 802 modules and npm audit reported 0 vulnerabilities; the Laravel PHPUnit suite passed with 64 tests and 864 assertions, Pint passed 120 files, and Composer validation passed. Operator must push the local integration branch from the authenticated Windows checkout after review.
++
++
++### Phase 4 security/API/release continuation — 2026-09-30
++
++The operator explicitly requested continuation through the remaining program. A code-audited Phase 4 slice was implemented without changing tenant business rules: a global `SecurityHeaders` middleware now adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`, and HSTS only when the request is HTTPS. The versioned API now exposes public `/api/v1/version`, and authenticated company consumers have `/api/v1/me` and permission-protected `/api/v1/dashboard` using the same tenant/subscription/license middleware and dashboard aggregates as the Inertia dashboard.
++
++Validation evidence from the Sandbox clone: `vendor/bin/phpunit` passed **66 tests and 884 assertions**; `vendor/bin/pint --test` passed **122 files**; `composer validate --no-check-publish` passed; `npm run build` passed with Vite 6.4.3 and 802 modules; `npm audit --omit=optional` reported 0 vulnerabilities. Temporary HTTP validation returned `/api/v1/health` HTTP 200 with all security headers, `/api/v1/version` HTTP 200 with application/Laravel version data, and `/login` HTTP 200 with security headers.
++
++Phase 3 remains `PARTIALLY_COMPLETED` for the backlog statuses that explicitly require operator-visible MySQL/browser evidence. Phase 4 is now `IN_PROGRESS`, not `COMPLETED`: MySQL/XAMPP execution, authenticated browser walkthrough, production mail, and any real deployment acceptance still require operator-side validation. The pure type+diameter schema migration remains intentionally deferred because it changes persisted inventory/bill identity and requires a controlled historical mapping decision; the current compatibility layer is retained.
+diff --git a/routes/api.php b/routes/api.php
+index f00122c..add659a 100644
+--- a/routes/api.php
++++ b/routes/api.php
+@@ -12,6 +12,7 @@
+ 
+ Route::prefix('v1')->group(function (): void {
+     Route::get('/health', fn () => response()->json(['status' => 'ok', 'version' => 'v1']))->name('api.v1.health');
++    Route::get('/version', fn () => response()->json(['data' => ['api' => 'v1', 'application' => config('app.name'), 'laravel' => app()->version()]]))->name('api.v1.version');
+     Route::post('/login', [AuthenticationController::class, 'login'])->middleware('throttle:6,1')->name('api.v1.login');
+     Route::post('/license/activate', [LocalLicenseController::class, 'activate'])->middleware('throttle:5,1')->name('api.v1.license.activate');
+     Route::middleware(['auth:sanctum', 'account.type:company', 'tenant', 'subscription', 'local.license'])->group(function (): void {
+@@ -27,6 +28,8 @@
+         Route::put('/password', [CompanyProfileController::class, 'updatePassword'])->name('api.v1.password.update');
+         Route::put('/profile', [CompanyProfileController::class, 'update'])->name('api.v1.profile.update');
+         Route::post('/logout', [AuthenticationController::class, 'logout'])->name('api.v1.logout');
++        Route::get('/me', [CoreErpController::class, 'me'])->name('api.v1.me');
++        Route::get('/dashboard', [CoreErpController::class, 'dashboard'])->middleware('can:dashboard.view')->name('api.v1.dashboard');
+         Route::middleware('can:branches.view')->group(function (): void {
+             Route::get('/branches', [CoreErpController::class, 'branches'])->name('api.v1.branches.index');
+             Route::get('/warehouses', [CoreErpController::class, 'warehouses'])->name('api.v1.warehouses.index');
+diff --git a/tests/Feature/PhaseFourReleaseTest.php b/tests/Feature/PhaseFourReleaseTest.php
+new file mode 100644
+index 0000000..b4ea0db
+--- /dev/null
++++ b/tests/Feature/PhaseFourReleaseTest.php
+@@ -0,0 +1,31 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Tests\Feature;
++
++use Tests\TestCase;
++
++final class PhaseFourReleaseTest extends TestCase
++{
++    public function test_public_health_and_version_endpoints_are_json_and_securely_headered(): void
++    {
++        $this->getJson('/api/v1/health')
++            ->assertOk()
++            ->assertJsonPath('status', 'ok')
++            ->assertHeader('X-Content-Type-Options', 'nosniff')
++            ->assertHeader('X-Frame-Options', 'SAMEORIGIN')
++            ->assertHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
++
++        $this->getJson('/api/v1/version')
++            ->assertOk()
++            ->assertJsonPath('data.api', 'v1')
++            ->assertJsonStructure(['data' => ['api', 'application', 'laravel']]);
++    }
++
++    public function test_browser_login_and_static_home_responses_receive_security_headers(): void
++    {
++        $this->get('/')->assertOk()->assertHeader('X-Content-Type-Options', 'nosniff');
++        $this->get('/login')->assertOk()->assertHeader('X-Frame-Options', 'SAMEORIGIN');
++    }
++}
+-- 
+2.43.0
+

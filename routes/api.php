@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
     Route::get('/health', fn () => response()->json(['status' => 'ok', 'version' => 'v1']))->name('api.v1.health');
+    Route::get('/version', fn () => response()->json(['data' => ['api' => 'v1', 'application' => config('app.name'), 'laravel' => app()->version()]]))->name('api.v1.version');
     Route::post('/login', [AuthenticationController::class, 'login'])->middleware('throttle:6,1')->name('api.v1.login');
     Route::post('/license/activate', [LocalLicenseController::class, 'activate'])->middleware('throttle:5,1')->name('api.v1.license.activate');
     Route::middleware(['auth:sanctum', 'account.type:company', 'tenant', 'subscription', 'local.license'])->group(function (): void {
@@ -27,6 +28,8 @@ Route::prefix('v1')->group(function (): void {
         Route::put('/password', [CompanyProfileController::class, 'updatePassword'])->name('api.v1.password.update');
         Route::put('/profile', [CompanyProfileController::class, 'update'])->name('api.v1.profile.update');
         Route::post('/logout', [AuthenticationController::class, 'logout'])->name('api.v1.logout');
+        Route::get('/me', [CoreErpController::class, 'me'])->name('api.v1.me');
+        Route::get('/dashboard', [CoreErpController::class, 'dashboard'])->middleware('can:dashboard.view')->name('api.v1.dashboard');
         Route::middleware('can:branches.view')->group(function (): void {
             Route::get('/branches', [CoreErpController::class, 'branches'])->name('api.v1.branches.index');
             Route::get('/warehouses', [CoreErpController::class, 'warehouses'])->name('api.v1.warehouses.index');

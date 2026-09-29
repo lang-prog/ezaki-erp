@@ -30,6 +30,37 @@ use Illuminate\Validation\Rule;
 
 class CoreErpController extends Controller
 {
+    public function me(Request $request): JsonResponse
+    {
+        return response()->json(['data' => $request->user()->only([
+            'id', 'name', 'first_name', 'second_name', 'email', 'account_type', 'company_id', 'status',
+        ])]);
+    }
+
+    public function dashboard(Request $request, AccountingReportService $reports): JsonResponse
+    {
+        $company = $this->company($request);
+        $companyId = (int) $company->id;
+        $from = now()->startOfMonth()->toDateString();
+        $to = now()->endOfMonth()->toDateString();
+
+        return response()->json(['data' => [
+            'metrics' => [
+                'branches' => Branch::query()->where('company_id', $companyId)->whereNull('archived_at')->count(),
+                'warehouses' => Warehouse::query()->where('company_id', $companyId)->whereNull('archived_at')->count(),
+                'parties' => CustomerSupplier::query()->where('company_id', $companyId)->where('status', 'active')->count(),
+                'debtors' => $reports->debtors($company)['rows']->total(),
+                'monthly_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [$from, $to])->sum('total'),
+                'monthly_purchases' => DB::table('purchase_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('supplier_bill_date', [$from, $to])->sum('total'),
+            ],
+            'daily_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [$from, $to])->select('bill_date', DB::raw('SUM(total) as total'))->groupBy('bill_date')->orderBy('bill_date')->get(),
+            'payments_receipts' => [
+                'payments' => (float) DB::table('payment_vouchers')->where('company_id', $companyId)->whereBetween('voucher_date', [$from, $to])->sum('amount'),
+                'receipts' => (float) DB::table('receipts')->where('company_id', $companyId)->whereBetween('receipt_date', [$from, $to])->sum('amount'),
+            ],
+        ]]);
+    }
+
     public function branches(Request $request): JsonResponse
     {
         return response()->json(['data' => Branch::query()->where('company_id', $this->company($request)->id)->whereNull('archived_at')->with('warehouses')->orderBy('name')->paginate(25)]);

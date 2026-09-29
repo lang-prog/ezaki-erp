@@ -4,6 +4,7 @@ use App\Http\Middleware\CheckAccountType;
 use App\Http\Middleware\CheckSubscriptionStatus;
 use App\Http\Middleware\EnsureLocalLicense;
 use App\Http\Middleware\HandleInertiaRequests;
+use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\SetLocale;
 use App\Http\Middleware\SetTenantContext;
 use Illuminate\Foundation\Application;
@@ -18,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
         $middleware->web(append: [SetLocale::class, HandleInertiaRequests::class]);
         $middleware->alias([
