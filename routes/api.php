@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthenticationController;
+use App\Http\Controllers\Api\V1\AccountingSettingsController;
 use App\Http\Controllers\Api\V1\CompanyProfileController;
 use App\Http\Controllers\Api\V1\CoreErpController;
 use App\Http\Controllers\Api\V1\LocalLicenseController;
@@ -27,6 +28,8 @@ Route::prefix('v1')->group(function (): void {
         })->name('api.v1.subscription');
         Route::put('/password', [CompanyProfileController::class, 'updatePassword'])->name('api.v1.password.update');
         Route::put('/profile', [CompanyProfileController::class, 'update'])->name('api.v1.profile.update');
+        Route::get('/accounting-settings', [AccountingSettingsController::class, 'show'])->name('api.v1.accounting-settings.show');
+        Route::put('/accounting-settings', [AccountingSettingsController::class, 'update'])->name('api.v1.accounting-settings.update');
         Route::post('/logout', [AuthenticationController::class, 'logout'])->name('api.v1.logout');
         Route::get('/me', [CoreErpController::class, 'me'])->name('api.v1.me');
         Route::get('/dashboard', [CoreErpController::class, 'dashboard'])->middleware('can:dashboard.view')->name('api.v1.dashboard');

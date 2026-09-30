@@ -24,6 +24,7 @@ use App\Models\Vehicle;
 use App\Models\Warehouse;
 use App\Services\AccountingFoundationService;
 use App\Services\AccountingReportService;
+use App\Services\CompanyAccountingPolicyService;
 use App\Services\FleetReportService;
 use App\Services\InventoryService;
 use Illuminate\Http\Request;
@@ -50,11 +51,11 @@ class CoreErpPageController extends Controller
                 'parties' => DB::table('customer_suppliers')->where('company_id', $companyId)->where('status', 'active')->count(),
                 'debtors' => $debtors['total_outstanding'],
                 'debtor_count' => $debtors['rows']->total(),
-                'monthly_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('total'),
-                'monthly_purchases' => DB::table('purchase_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('supplier_bill_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('total'),
+                'monthly_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereDate('bill_date', '>=', now()->startOfMonth()->toDateString())->whereDate('bill_date', '<=', now()->endOfMonth()->toDateString())->sum('total'),
+                'monthly_purchases' => DB::table('purchase_bills')->where('company_id', $companyId)->where('status', 'approved')->whereDate('supplier_bill_date', '>=', now()->startOfMonth()->toDateString())->whereDate('supplier_bill_date', '<=', now()->endOfMonth()->toDateString())->sum('total'),
             ],
-            'daily_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereBetween('bill_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->select('bill_date', DB::raw('SUM(total) as total'))->groupBy('bill_date')->orderBy('bill_date')->get(),
-            'payments_receipts' => ['payments' => (float) DB::table('payment_vouchers')->where('company_id', $companyId)->where('status', 'posted')->whereBetween('voucher_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('amount'), 'receipts' => (float) DB::table('receipts')->where('company_id', $companyId)->where('status', 'posted')->whereBetween('receipt_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])->sum('amount')],
+            'daily_sales' => DB::table('sales_bills')->where('company_id', $companyId)->where('status', 'approved')->whereDate('bill_date', '>=', now()->startOfMonth()->toDateString())->whereDate('bill_date', '<=', now()->endOfMonth()->toDateString())->select('bill_date', DB::raw('SUM(total) as total'))->groupBy('bill_date')->orderBy('bill_date')->get(),
+            'payments_receipts' => ['payments' => (float) DB::table('payment_vouchers')->where('company_id', $companyId)->where('status', 'posted')->whereDate('voucher_date', '>=', now()->startOfMonth()->toDateString())->whereDate('voucher_date', '<=', now()->endOfMonth()->toDateString())->sum('amount'), 'receipts' => (float) DB::table('receipts')->where('company_id', $companyId)->where('status', 'posted')->whereDate('receipt_date', '>=', now()->startOfMonth()->toDateString())->whereDate('receipt_date', '<=', now()->endOfMonth()->toDateString())->sum('amount')],
             'top_sold_products' => DB::table('sales_bill_lines')->join('sales_bills', 'sales_bills.id', '=', 'sales_bill_lines.sales_bill_id')->join('products', 'products.id', '=', 'sales_bill_lines.product_id')->where('sales_bills.company_id', $companyId)->where('sales_bills.status', 'approved')->select('products.name', DB::raw('SUM(sales_bill_lines.actual_weight) as quantity'))->groupBy('products.id', 'products.name')->orderByDesc('quantity')->limit(5)->get(),
             'sales_by_customer' => DB::table('sales_bills')->join('customer_suppliers', 'customer_suppliers.id', '=', 'sales_bills.customer_id')->where('sales_bills.company_id', $companyId)->where('sales_bills.status', 'approved')->select('customer_suppliers.name', DB::raw('SUM(sales_bills.total) as total'))->groupBy('customer_suppliers.id', 'customer_suppliers.name')->orderByDesc('total')->limit(5)->get(),
         ]);
@@ -169,6 +170,14 @@ class CoreErpPageController extends Controller
         ]);
     }
 
+    public function accountingSettings(Request $request, CompanyAccountingPolicyService $policies): Response
+    {
+        abort_unless($request->user()->isCompanyOwner(), 403);
+        $company = $request->attributes->get('company');
+
+        return Inertia::render('Company/AccountingSettings', ['policy' => $policies->get($company)]);
+    }
+
     public function report(Request $request, AccountingReportService $reports, string $report): Response
     {
         $company = $request->attributes->get('company');
@@ -201,8 +210,8 @@ class CoreErpPageController extends Controller
         $companyId = (int) $request->user()->company_id;
 
         return Inertia::render('Company/Operations', [
-            'purchases' => PurchaseBill::query()->where('company_id', $companyId)->with('supplier:id,name')->latest()->paginate(15, ['*'], 'purchases_page'),
-            'sales' => SalesBill::query()->where('company_id', $companyId)->with('customer:id,name')->latest()->paginate(15, ['*'], 'sales_page'),
+            'purchases' => PurchaseBill::query()->where('company_id', $companyId)->with('supplier:id,name')->orderByDesc('id')->paginate(15, ['*'], 'purchases_page'),
+            'sales' => SalesBill::query()->where('company_id', $companyId)->with('customer:id,name')->orderByDesc('id')->paginate(15, ['*'], 'sales_page'),
             'vehicles' => Vehicle::query()->where('company_id', $companyId)->where('status', 'active')->orderBy('plate')->get(['id', 'plate', 'ownership']),
             'trips' => Trip::query()->where('company_id', $companyId)->with('vehicle:id,plate')->latest('trip_at')->limit(15)->get(),
             'capabilities' => $this->capabilities($request, ['purchases.view', 'purchases.create', 'purchases.update', 'purchases.approve', 'purchases.update_approved', 'purchases.reverse', 'purchases.print', 'sales.view', 'sales.create', 'sales.update', 'sales.approve', 'sales.update_approved', 'sales.reverse', 'sales.print', 'fleet.view', 'fleet.create', 'fleet.expenses', 'fleet.maintenance']),
@@ -275,6 +284,9 @@ class CoreErpPageController extends Controller
             'productTypes' => ProductType::query()->where('company_id', $companyId)->where('status', 'active')->orderBy('name')->get(['id', 'name']),
             'diameters' => Diameter::query()->where('company_id', $companyId)->orderBy('millimeters')->get(['id', 'millimeters']),
             'vehicles' => Vehicle::query()->where('company_id', $companyId)->where('status', 'active')->orderBy('plate')->get(['id', 'plate']),
+            'cashboxes' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'accountingPolicy' => app(CompanyAccountingPolicyService::class)->get($request->attributes->get('company')),
             'capabilities' => $this->capabilities($request, [$type === 'purchase' ? 'purchases.create' : 'sales.create', $type === 'purchase' ? 'purchases.update' : 'sales.update', $type === 'purchase' ? 'purchases.approve' : 'sales.approve', $type === 'purchase' ? 'purchases.update_approved' : 'sales.update_approved', $type === 'purchase' ? 'purchases.reverse' : 'sales.reverse', $type === 'purchase' ? 'purchases.print' : 'sales.print', $type === 'purchase' ? 'purchases.export' : 'sales.export']),
         ]);
     }

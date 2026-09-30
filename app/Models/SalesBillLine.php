@@ -9,9 +9,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SalesBillLine extends Model
 {
-    protected $fillable = ['sales_bill_id', 'company_id', 'product_id', 'actual_weight', 'packages', 'unit_price', 'line_total', 'notes'];
+    protected $fillable = ['sales_bill_id', 'company_id', 'product_id', 'actual_weight', 'packages', 'unit_price', 'line_total', 'inventory_cost', 'notes'];
 
-    protected $casts = ['actual_weight' => 'decimal:3', 'packages' => 'decimal:3', 'unit_price' => 'decimal:2', 'line_total' => 'decimal:2'];
+    protected $casts = ['actual_weight' => 'decimal:3', 'packages' => 'decimal:3', 'unit_price' => 'decimal:2', 'line_total' => 'decimal:2', 'inventory_cost' => 'decimal:2'];
 
     public function product(): BelongsTo
     {

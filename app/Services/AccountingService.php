@@ -216,10 +216,13 @@ class AccountingService
         });
     }
 
-    public function reverseJournal(Company $company, User $actor, JournalEntry $entry, string $date): JournalEntry
+    public function reverseJournal(Company $company, User $actor, JournalEntry $entry, string $date, bool $fromSourceWorkflow = false): JournalEntry
     {
-        return DB::transaction(function () use ($company, $actor, $entry, $date): JournalEntry {
-            abort_unless((int) $entry->company_id === (int) $company->id, 404);
+        return DB::transaction(function () use ($company, $actor, $entry, $date, $fromSourceWorkflow): JournalEntry {
+            $entry = JournalEntry::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($entry->id);
+            if (! $fromSourceWorkflow && in_array($entry->source_type, [\App\Models\PurchaseBill::class, \App\Models\SalesBill::class, \App\Models\FleetExpense::class, \App\Models\MaintenanceRecord::class], true)) {
+                abort(409, 'Reverse the source document from its own workflow.');
+            }
             abort_unless($entry->status === 'posted' && $entry->reversed_by_id === null, 409, 'Only an unreversed posted journal can be reversed.');
             $period = $this->foundation->openPeriodFor($company, $date);
             $lines = $entry->lines()->get()->map(fn ($line) => [
@@ -256,7 +259,7 @@ class AccountingService
         return $period;
     }
 
-    private function paymentSourceAccount(Company $company, array $data): Account
+    public function paymentSourceAccount(Company $company, array $data): Account
     {
         $hasCashbox = ! empty($data['cashbox_id']);
         $hasBank = ! empty($data['bank_id']);

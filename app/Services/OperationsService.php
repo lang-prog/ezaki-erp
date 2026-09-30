@@ -24,30 +24,50 @@ use Illuminate\Validation\ValidationException;
 
 class OperationsService
 {
-    public function __construct(private readonly AccountingService $accounting, private readonly AuditRecorder $audit) {}
+    public function __construct(
+        private readonly AccountingService $accounting,
+        private readonly AccountingFoundationService $foundation,
+        private readonly CompanyAccountingPolicyService $policies,
+        private readonly InventoryValuationService $valuation,
+        private readonly AuditRecorder $audit,
+    ) {}
 
     public function savePurchase(Company $company, User $actor, array $data, bool $approve = false): PurchaseBill
     {
         return DB::transaction(function () use ($company, $actor, $data, $approve): PurchaseBill {
             $supplier = CustomerSupplier::query()->where('company_id', $company->id)->where('is_supplier', true)->findOrFail((int) $data['supplier_id']);
             $this->validateHeader($data, true);
+            $this->assertWarehouseBelongsToBranch($company, (int) $data['branch_id'], (int) $data['warehouse_id']);
             $this->duplicateCheck($company, 'purchase', $data, $data['id'] ?? null);
             $lines = $this->purchaseLines($company, $data['lines']);
-            $totals = $this->purchaseTotals($lines, $data);
-            $bill = isset($data['id']) ? PurchaseBill::query()->where('company_id', $company->id)->findOrFail($data['id']) : new PurchaseBill(['company_id' => $company->id, 'created_by' => $actor->id, 'internal_number' => $this->nextNumber($company, 'purchase_bills', 'PB')]);
+            $totals = $this->purchaseTotals($company, $lines, $data);
+            $payment = $this->paymentFields($company, $data, (float) $totals['total'], 'purchase');
+            $bill = isset($data['id'])
+                ? PurchaseBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($data['id'])
+                : new PurchaseBill(['company_id' => $company->id, 'created_by' => $actor->id, 'internal_number' => $this->nextNumber($company, 'purchase_bills', 'PB')]);
             abort_if($bill->exists && $bill->status !== 'draft', 409, 'Only draft purchase bills can be edited.');
-            $bill->fill([...$totals, 'branch_id' => $this->ownedId('branches', $company, (int) $data['branch_id']), 'warehouse_id' => $this->ownedId('warehouses', $company, (int) $data['warehouse_id']), 'supplier_id' => $supplier->id, 'supplier_bill_number' => $data['supplier_bill_number'], 'supplier_bill_date' => $data['supplier_bill_date'], 'warehouse_entry_date' => $data['warehouse_entry_date'] ?? null, 'vehicle_id' => $this->vehicleId($company, $data), 'external_vehicle_plate' => $data['external_vehicle_plate'] ?? null, 'external_driver_name' => $data['external_driver_name'] ?? null, 'notes' => $data['notes'] ?? null, 'status' => 'draft']);
+            $bill->fill([
+                ...$totals, ...$payment,
+                'branch_id' => $this->ownedId('branches', $company, (int) $data['branch_id']),
+                'warehouse_id' => $this->ownedId('warehouses', $company, (int) $data['warehouse_id']),
+                'supplier_id' => $supplier->id,
+                'supplier_bill_number' => $data['supplier_bill_number'],
+                'supplier_bill_date' => $data['supplier_bill_date'],
+                'warehouse_entry_date' => $data['warehouse_entry_date'] ?? null,
+                'vehicle_id' => $this->vehicleId($company, $data),
+                'external_vehicle_plate' => $data['external_vehicle_plate'] ?? null,
+                'external_driver_name' => $data['external_driver_name'] ?? null,
+                'notes' => $data['notes'] ?? null,
+                'status' => 'draft',
+            ]);
             $bill->save();
             $bill->lines()->delete();
             foreach ($lines as $line) {
                 $bill->lines()->create(['company_id' => $company->id, ...$line]);
             }
             $this->audit->record('purchase_bills.saved', $bill, $company->id, $actor->id);
-            if ($approve) {
-                return $this->approvePurchase($company, $actor, $bill);
-            }
 
-            return $bill->load('lines');
+            return $approve ? $this->approvePurchase($company, $actor, $bill) : $bill->load('lines');
         });
     }
 
@@ -56,40 +76,68 @@ class OperationsService
         return DB::transaction(function () use ($company, $actor, $data, $approve): SalesBill {
             $customer = CustomerSupplier::query()->where('company_id', $company->id)->where('is_customer', true)->findOrFail((int) $data['customer_id']);
             $this->validateHeader($data, false);
+            $this->assertWarehouseBelongsToBranch($company, (int) $data['branch_id'], (int) $data['warehouse_id']);
             $this->duplicateCheck($company, 'sales', $data, $data['id'] ?? null);
             $lines = $this->salesLines($company, $data['lines']);
-            $totals = $this->salesTotals($lines, $data);
+            $totals = $this->salesTotals($company, $lines, $data);
             if ((float) ($totals['discount'] ?? 0) > 0 && ! $this->canDiscount($actor)) {
                 throw ValidationException::withMessages(['discount' => 'Discounts require owner or accounts manager authorization.']);
             }
-            $this->creditCheck($company, $customer, $data, $totals['total']);
-            $bill = isset($data['id']) ? SalesBill::query()->where('company_id', $company->id)->findOrFail($data['id']) : new SalesBill(['company_id' => $company->id, 'created_by' => $actor->id, 'internal_number' => $this->nextNumber($company, 'sales_bills', 'SB')]);
+            $payment = $this->paymentFields($company, $data, (float) $totals['total'], 'sales');
+            $this->creditCheck($company, $customer, $payment, (float) $totals['total']);
+            $bill = isset($data['id'])
+                ? SalesBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($data['id'])
+                : new SalesBill(['company_id' => $company->id, 'created_by' => $actor->id, 'internal_number' => $this->nextNumber($company, 'sales_bills', 'SB')]);
             abort_if($bill->exists && $bill->status !== 'draft', 409, 'Only draft sales bills can be edited.');
-            $bill->fill([...$totals, 'branch_id' => $this->ownedId('branches', $company, (int) $data['branch_id']), 'warehouse_id' => $this->ownedId('warehouses', $company, (int) $data['warehouse_id']), 'customer_id' => $customer->id, 'customer_bill_number' => $data['customer_bill_number'], 'bill_date' => $data['bill_date'], 'vehicle_id' => $this->vehicleId($company, $data), 'external_vehicle_plate' => $data['external_vehicle_plate'] ?? null, 'external_driver_name' => $data['external_driver_name'] ?? null, 'payment_method' => $data['payment_method'], 'due_date' => $data['due_date'] ?? null, 'notes' => $data['notes'] ?? null, 'status' => 'draft']);
+            $bill->fill([
+                ...$totals, ...$payment,
+                'branch_id' => $this->ownedId('branches', $company, (int) $data['branch_id']),
+                'warehouse_id' => $this->ownedId('warehouses', $company, (int) $data['warehouse_id']),
+                'customer_id' => $customer->id,
+                'customer_bill_number' => $data['customer_bill_number'],
+                'bill_date' => $data['bill_date'],
+                'vehicle_id' => $this->vehicleId($company, $data),
+                'external_vehicle_plate' => $data['external_vehicle_plate'] ?? null,
+                'external_driver_name' => $data['external_driver_name'] ?? null,
+                'notes' => $data['notes'] ?? null,
+                'status' => 'draft',
+            ]);
             $bill->save();
             $bill->lines()->delete();
             foreach ($lines as $line) {
                 $bill->lines()->create(['company_id' => $company->id, ...$line]);
             }
             $this->audit->record('sales_bills.saved', $bill, $company->id, $actor->id);
-            if ($approve) {
-                return $this->approveSales($company, $actor, $bill);
-            }
 
-            return $bill->load('lines');
+            return $approve ? $this->approveSales($company, $actor, $bill) : $bill->load('lines');
         });
     }
 
     public function approvePurchase(Company $company, User $actor, PurchaseBill $bill): PurchaseBill
     {
         return DB::transaction(function () use ($company, $actor, $bill): PurchaseBill {
-            $this->assertBill($company, $bill, 'draft');
-            $bill->load('lines');
-            foreach ($bill->lines as $line) {
-                $this->adjustStock($company, $actor, $bill->warehouse_id, $line->product_id, (float) $line->factory_weight, PurchaseBill::class, $bill->id, 'purchase_in');
+            $bill = PurchaseBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($bill->id);
+            if ($bill->status === 'approved') {
+                return $bill->load('lines');
             }
-            $entry = $this->accounting->postOperationalJournal($company, $actor, $bill->supplier_bill_date->toDateString(), 'Purchase '.$bill->internal_number, PurchaseBill::class, $bill->id, [['account_id' => $this->accountId($company, '4.1'), 'party_id' => $bill->supplier_id, 'debit' => $bill->total, 'credit' => 0, 'description' => 'Purchase value'], ['account_id' => $bill->supplier->account_id, 'party_id' => $bill->supplier_id, 'debit' => 0, 'credit' => $bill->total, 'description' => 'Supplier payable']]);
+            $this->assertBill($company, $bill, 'draft');
+            $this->foundation->seedCompany($company);
+            $bill->load('lines', 'supplier');
+            $inventoryTotal = round((float) $bill->total - (float) $bill->vat_amount, 2);
+            $allocated = 0.0;
+            foreach ($bill->lines as $index => $line) {
+                $lineValue = $index === $bill->lines->count() - 1
+                    ? round($inventoryTotal - $allocated, 2)
+                    : round($inventoryTotal * ((float) $line->line_total / max(0.01, (float) $bill->subtotal)), 2);
+                $allocated += $lineValue;
+                $quantity = $this->purchaseInventoryQuantity($company, $line);
+                $this->valuation->receive($company, $actor, $bill->warehouse_id, $line->product_id, $quantity, $lineValue, PurchaseBill::class, $bill->id, 'purchase_in');
+                $line->forceFill(['inventory_value' => $lineValue])->save();
+            }
+            $lines = $this->purchaseJournalLines($company, $bill);
+            $entry = $this->accounting->postOperationalJournal($company, $actor, $bill->supplier_bill_date->toDateString(), 'Purchase '.$bill->internal_number, PurchaseBill::class, $bill->id, $lines);
             $bill->forceFill(['status' => 'approved', 'approved_by' => $actor->id, 'approved_at' => now(), 'journal_entry_id' => $entry->id])->save();
+            $this->recordPaymentAllocation($bill, 'purchase', $entry->id);
             $this->createTrip($company, $actor, $bill, 'purchase');
             $this->audit->record('purchase_bills.approved', $bill, $company->id, $actor->id, ['journal_entry_id' => $entry->id]);
 
@@ -100,15 +148,25 @@ class OperationsService
     public function approveSales(Company $company, User $actor, SalesBill $bill): SalesBill
     {
         return DB::transaction(function () use ($company, $actor, $bill): SalesBill {
-            $this->assertBill($company, $bill, 'draft');
-            $bill->load('lines', 'customer');
-            foreach ($bill->lines as $line) {
-                $this->adjustStock($company, $actor, $bill->warehouse_id, $line->product_id, -(float) $line->actual_weight, SalesBill::class, $bill->id, 'sale_out');
+            $bill = SalesBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($bill->id);
+            if ($bill->status === 'approved') {
+                return $bill->load('lines');
             }
-            $entry = $this->accounting->postOperationalJournal($company, $actor, $bill->bill_date->toDateString(), 'Sale '.$bill->internal_number, SalesBill::class, $bill->id, [['account_id' => $bill->customer->account_id, 'party_id' => $bill->customer_id, 'debit' => $bill->total, 'credit' => 0, 'description' => 'Customer receivable'], ['account_id' => $this->accountId($company, '5.1'), 'party_id' => $bill->customer_id, 'debit' => 0, 'credit' => $bill->total, 'description' => 'Sales revenue']]);
+            $this->assertBill($company, $bill, 'draft');
+            $this->foundation->seedCompany($company);
+            $bill->load('lines', 'customer');
+            $cost = 0.0;
+            foreach ($bill->lines as $line) {
+                $lineCost = $this->valuation->issue($company, $actor, $bill->warehouse_id, $line->product_id, (float) $line->actual_weight, SalesBill::class, $bill->id, 'sale_out');
+                $line->forceFill(['inventory_cost' => $lineCost])->save();
+                $cost += $lineCost;
+            }
+            $lines = $this->salesJournalLines($company, $bill, round($cost, 2));
+            $entry = $this->accounting->postOperationalJournal($company, $actor, $bill->bill_date->toDateString(), 'Sale '.$bill->internal_number, SalesBill::class, $bill->id, $lines);
             $bill->forceFill(['status' => 'approved', 'approved_by' => $actor->id, 'approved_at' => now(), 'journal_entry_id' => $entry->id])->save();
+            $this->recordPaymentAllocation($bill, 'sales', $entry->id);
             $this->createTrip($company, $actor, $bill, 'sales');
-            $this->audit->record('sales_bills.approved', $bill, $company->id, $actor->id, ['journal_entry_id' => $entry->id]);
+            $this->audit->record('sales_bills.approved', $bill, $company->id, $actor->id, ['journal_entry_id' => $entry->id, 'inventory_cost' => round($cost, 2)]);
 
             return $bill->fresh('lines');
         });
@@ -188,9 +246,12 @@ class OperationsService
     public function reverseExpense(Company $company, User $actor, FleetExpense $expense, string $date): FleetExpense
     {
         return DB::transaction(function () use ($company, $actor, $expense, $date): FleetExpense {
-            abort_unless((int) $expense->company_id === (int) $company->id, 404);
+            $expense = FleetExpense::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($expense->id);
+            if ($expense->status === 'reversed') {
+                return $expense;
+            }
             abort_if($expense->status !== 'approved' || ! $expense->journal_entry_id, 409, 'Only approved expenses can be reversed.');
-            $reversal = $this->accounting->reverseJournal($company, $actor, JournalEntry::query()->where('company_id', $company->id)->findOrFail($expense->journal_entry_id), $date);
+            $reversal = $this->accounting->reverseJournal($company, $actor, JournalEntry::query()->where('company_id', $company->id)->findOrFail($expense->journal_entry_id), $date, true);
             $expense->forceFill(['status' => 'reversed'])->save();
             $this->audit->record('fleet_expenses.reversed', $expense, $company->id, $actor->id, ['reversal_entry_id' => $reversal->id]);
 
@@ -201,9 +262,12 @@ class OperationsService
     public function reverseMaintenance(Company $company, User $actor, MaintenanceRecord $record, string $date): MaintenanceRecord
     {
         return DB::transaction(function () use ($company, $actor, $record, $date): MaintenanceRecord {
-            abort_unless((int) $record->company_id === (int) $company->id, 404);
+            $record = MaintenanceRecord::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($record->id);
+            if ($record->status === 'reversed') {
+                return $record;
+            }
             abort_if($record->status !== 'approved' || ! $record->journal_entry_id, 409, 'Only approved maintenance can be reversed.');
-            $reversal = $this->accounting->reverseJournal($company, $actor, JournalEntry::query()->where('company_id', $company->id)->findOrFail($record->journal_entry_id), $date);
+            $reversal = $this->accounting->reverseJournal($company, $actor, JournalEntry::query()->where('company_id', $company->id)->findOrFail($record->journal_entry_id), $date, true);
             $record->forceFill(['status' => 'reversed'])->save();
             $this->audit->record('maintenance.reversed', $record, $company->id, $actor->id, ['reversal_entry_id' => $reversal->id]);
 
@@ -214,30 +278,28 @@ class OperationsService
     public function revise(Company $company, User $actor, string $type, int $id, array $data): mixed
     {
         return DB::transaction(function () use ($company, $actor, $type, $id, $data): mixed {
-            $bill = $type === 'purchase' ? PurchaseBill::query()->where('company_id', $company->id)->findOrFail($id) : SalesBill::query()->where('company_id', $company->id)->findOrFail($id);
-            abort_if($bill->status !== 'approved', 409, 'Only approved bills can be revised.');
-            $this->accountingPeriod($company, $type === 'purchase' ? $data['supplier_bill_date'] : $data['bill_date']);
+            $bill = $type === 'purchase'
+                ? PurchaseBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($id)
+                : SalesBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($id);
+            $this->assertBill($company, $bill, 'approved');
+            throw_if(empty(trim((string) ($data['revision_reason'] ?? ''))), ValidationException::withMessages(['revision_reason' => 'A revision reason is required.']));
             $before = $bill->load('lines')->toArray();
-            if ($type === 'purchase') {
-                $lines = $this->purchaseLines($company, $data['lines']);
-                $totals = $this->purchaseTotals($lines, $data);
-                $bill->fill([...$totals, 'notes' => $data['notes'] ?? null]);
-            } else {
-                $lines = $this->salesLines($company, $data['lines']);
-                $totals = $this->salesTotals($lines, $data);
-                if ((float) ($totals['discount'] ?? 0) > 0 && ! $this->canDiscount($actor)) {
-                    throw ValidationException::withMessages(['discount' => 'Discounts require owner or accounts manager authorization.']);
-                }
-                $bill->fill([...$totals, 'notes' => $data['notes'] ?? null]);
-            }
-            $bill->save();
-            $bill->lines()->delete();
-            foreach ($lines as $line) {
-                $bill->lines()->create(['company_id' => $company->id, ...$line]);
-            }
-            $updated = $bill->fresh('lines');
-            $revision = BillRevision::query()->create(['company_id' => $company->id, 'document_type' => $type, 'document_id' => $id, 'user_id' => $actor->id, 'reason' => $data['revision_reason'], 'before_data' => $before, 'after_data' => $updated->toArray()]);
-            $this->audit->record('bills.revised', $revision, $company->id, $actor->id, ['document_type' => $type, 'document_id' => $id]);
+            $this->unpostBill($company, $actor, $bill, $type === 'purchase', $type === 'purchase' ? $bill->supplier_bill_date->toDateString() : $bill->bill_date->toDateString());
+            $bill->forceFill(['status' => 'draft', 'journal_entry_id' => null, 'approved_at' => null, 'approved_by' => null])->save();
+            $payload = [...$data, 'id' => $bill->id];
+            $updated = $type === 'purchase'
+                ? $this->savePurchase($company, $actor, $payload, true)
+                : $this->saveSales($company, $actor, $payload, true);
+            $revision = BillRevision::query()->create([
+                'company_id' => $company->id,
+                'document_type' => $type,
+                'document_id' => $id,
+                'user_id' => $actor->id,
+                'reason' => $data['revision_reason'],
+                'before_data' => $before,
+                'after_data' => $updated->load('lines')->toArray(),
+            ]);
+            $this->audit->record('bills.revised', $revision, $company->id, $actor->id, ['document_type' => $type, 'document_id' => $id, 'reposted' => true]);
 
             return $updated;
         });
@@ -276,7 +338,10 @@ class OperationsService
     public function approveExpense(Company $company, User $actor, FleetExpense $expense): FleetExpense
     {
         return DB::transaction(function () use ($company, $actor, $expense): FleetExpense {
-            abort_unless((int) $expense->company_id === (int) $company->id, 404);
+            $expense = FleetExpense::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($expense->id);
+            if ($expense->status === 'approved') {
+                return $expense;
+            }
             abort_if($expense->status !== 'draft', 409);
             $entry = $this->accounting->postOperationalJournal($company, $actor, $expense->expense_date->toDateString(), 'Fleet expense '.$expense->category, FleetExpense::class, $expense->id, [['account_id' => $this->accountId($company, '4.2'), 'debit' => $expense->amount, 'credit' => 0, 'description' => $expense->category], ['account_id' => $this->accountId($company, '1.2'), 'debit' => 0, 'credit' => $expense->amount, 'description' => 'Fleet expense payment']]);
             $expense->forceFill(['status' => 'approved', 'journal_entry_id' => $entry->id])->save();
@@ -300,7 +365,10 @@ class OperationsService
     public function approveMaintenance(Company $company, User $actor, MaintenanceRecord $record): MaintenanceRecord
     {
         return DB::transaction(function () use ($company, $actor, $record): MaintenanceRecord {
-            abort_unless((int) $record->company_id === (int) $company->id, 404);
+            $record = MaintenanceRecord::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($record->id);
+            if ($record->status === 'approved') {
+                return $record;
+            }
             abort_if($record->status !== 'draft', 409);
             $entry = $this->accounting->postOperationalJournal($company, $actor, $record->starts_on->toDateString(), 'Vehicle maintenance '.$record->issue, MaintenanceRecord::class, $record->id, [['account_id' => $this->accountId($company, '4.2'), 'debit' => $record->cost, 'credit' => 0, 'description' => 'Maintenance'], ['account_id' => $this->accountId($company, '1.2'), 'debit' => 0, 'credit' => $record->cost, 'description' => 'Maintenance payment']]);
             $record->forceFill(['status' => 'approved', 'journal_entry_id' => $entry->id])->save();
@@ -341,12 +409,18 @@ class OperationsService
 
     private function purchaseLines(Company $company, array $lines): array
     {
-        return collect($lines)->map(function (array $line) use ($company): array {
+        $usesActual = $this->policies->purchaseInventoryBasis($company) === CompanyAccountingPolicyService::ACTUAL_WEIGHT;
+
+        return collect($lines)->map(function (array $line) use ($company, $usesActual): array {
             $product = $this->lineProduct($company, $line);
             $factory = (float) $line['factory_weight'];
+            $actual = $usesActual ? (float) ($line['actual_weight'] ?? 0) : null;
+            if ($usesActual && $actual <= 0) {
+                throw ValidationException::withMessages(['lines' => 'Actual weight is required for every purchase line under the selected company policy.']);
+            }
             $price = (float) $line['unit_price'];
 
-            return ['product_id' => $product->id, 'factory_weight' => $factory, 'actual_weight' => null, 'packages' => (float) ($line['packages'] ?? 0), 'unit_price' => $price, 'line_total' => round($factory * $price, 2), 'notes' => $line['notes'] ?? null];
+            return ['product_id' => $product->id, 'factory_weight' => $factory, 'actual_weight' => $actual, 'packages' => (float) ($line['packages'] ?? 0), 'unit_price' => $price, 'line_total' => round($factory * $price, 2), 'inventory_value' => 0, 'notes' => $line['notes'] ?? null];
         })->all();
     }
 
@@ -361,31 +435,35 @@ class OperationsService
         })->all();
     }
 
-    private function purchaseTotals(array $lines, array $data): array
+    private function purchaseTotals(Company $company, array $lines, array $data): array
     {
         $subtotal = round(array_sum(array_column($lines, 'line_total')), 2);
         $this->match($data, 'total_factory_weight', array_sum(array_column($lines, 'factory_weight')));
         $this->match($data, 'total_packages', array_sum(array_column($lines, 'packages')));
+        if ($this->policies->purchaseInventoryBasis($company) === CompanyAccountingPolicyService::ACTUAL_WEIGHT) {
+            $this->match($data, 'total_actual_weight', array_sum(array_column($lines, 'actual_weight')));
+        }
 
-        return $this->totals($data, $subtotal) + ['total_factory_weight' => (float) $data['total_factory_weight'], 'total_actual_weight' => isset($data['total_actual_weight']) ? (float) $data['total_actual_weight'] : null, 'total_packages' => (float) $data['total_packages']];
+        return $this->totals($company, $data, $subtotal) + ['total_factory_weight' => (float) $data['total_factory_weight'], 'total_actual_weight' => isset($data['total_actual_weight']) ? (float) $data['total_actual_weight'] : null, 'total_packages' => (float) $data['total_packages']];
     }
 
-    private function salesTotals(array $lines, array $data): array
+    private function salesTotals(Company $company, array $lines, array $data): array
     {
         $subtotal = round(array_sum(array_column($lines, 'line_total')), 2);
         $this->match($data, 'total_actual_weight', array_sum(array_column($lines, 'actual_weight')));
 
-        return $this->totals($data, $subtotal) + ['total_actual_weight' => (float) $data['total_actual_weight']];
+        return $this->totals($company, $data, $subtotal) + ['total_actual_weight' => (float) $data['total_actual_weight']];
     }
 
-    private function totals(array $data, float $subtotal): array
+    private function totals(Company $company, array $data, float $subtotal): array
     {
         $discount = (float) ($data['discount'] ?? 0);
         $extras = (float) ($data['transport_cost'] ?? 0) + (float) ($data['loading_cost'] ?? 0) + (float) ($data['extra_cost'] ?? 0);
         $base = round($subtotal - $discount + $extras, 2);
-        $vat = round($base * (float) ($data['vat_rate'] ?? 0) / 100, 2);
+        $vatRate = $this->policies->vatRate($company);
+        $vat = round($base * $vatRate / 100, 2);
 
-        return ['subtotal' => $subtotal, 'discount' => $discount, 'transport_cost' => (float) ($data['transport_cost'] ?? 0), 'loading_cost' => (float) ($data['loading_cost'] ?? 0), 'extra_cost' => (float) ($data['extra_cost'] ?? 0), 'vat_rate' => $data['vat_rate'] ?? null, 'vat_amount' => $vat, 'total' => round($base + $vat, 2)];
+        return ['subtotal' => $subtotal, 'discount' => $discount, 'transport_cost' => (float) ($data['transport_cost'] ?? 0), 'loading_cost' => (float) ($data['loading_cost'] ?? 0), 'extra_cost' => (float) ($data['extra_cost'] ?? 0), 'vat_rate' => $vatRate > 0 ? $vatRate : null, 'vat_amount' => $vat, 'total' => round($base + $vat, 2)];
     }
 
     private function match(array $data, string $field, float $expected): void
@@ -405,10 +483,10 @@ class OperationsService
 
     private function creditCheck(Company $company, CustomerSupplier $customer, array $data, float $total): void
     {
-        if (($data['payment_method'] ?? null) !== 'credit' || $customer->credit_limit === null) {
+        if (! in_array($data['payment_method'] ?? null, ['credit', 'partial'], true) || $customer->credit_limit === null) {
             return;
         } $balance = (float) $customer->opening_balance + (float) DB::table('journal_lines')->where('company_id', $company->id)->where('party_id', $customer->id)->sum(DB::raw('debit-credit'));
-        throw_if($balance + $total > (float) $customer->credit_limit, ValidationException::withMessages(['customer_id' => 'Customer credit limit exceeded.']));
+        throw_if($balance + max(0, $total - (float) ($data['paid_amount'] ?? 0)) > (float) $customer->credit_limit, ValidationException::withMessages(['customer_id' => 'Customer credit limit exceeded.']));
     }
 
     private function adjustStock(Company $company, User $actor, int $warehouseId, int $productId, float $delta, string $source, int $sourceId, string $type): void
@@ -424,16 +502,146 @@ class OperationsService
     private function reverse(Company $company, User $actor, mixed $bill, string $class, string $date, bool $purchase): mixed
     {
         return DB::transaction(function () use ($company, $actor, $bill, $class, $date, $purchase) {
+            $bill = $class === PurchaseBill::class
+                ? PurchaseBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($bill->id)
+                : SalesBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($bill->id);
+            if ($bill->status === 'reversed') {
+                return $bill->load('lines');
+            }
             $this->assertBill($company, $bill, 'approved');
-            $bill->load('lines');
-            foreach ($bill->lines as $line) {
-                $this->adjustStock($company, $actor, $bill->warehouse_id, $line->product_id, $purchase ? -(float) $line->factory_weight : (float) $line->actual_weight, $class, $bill->id, $purchase ? 'purchase_reverse' : 'sale_reverse');
-            } $reversal = $this->accounting->reverseJournal($company, $actor, JournalEntry::query()->where('company_id', $company->id)->findOrFail($bill->journal_entry_id), $date);
+            $reversal = $this->unpostBill($company, $actor, $bill, $purchase, $date);
             $bill->forceFill(['status' => 'reversed', 'reversal_journal_entry_id' => $reversal->id, 'reversed_by' => $actor->id, 'cancelled_at' => now()])->save();
             $this->audit->record('bills.reversed', $bill, $company->id, $actor->id, ['reversal_journal_entry_id' => $reversal->id]);
 
             return $bill->fresh('lines');
         });
+    }
+
+    private function unpostBill(Company $company, User $actor, mixed $bill, bool $purchase, string $date): JournalEntry
+    {
+        $bill->load('lines');
+        foreach ($bill->lines as $line) {
+            if ($purchase) {
+                $this->valuation->reverseReceipt($company, $actor, $bill->warehouse_id, $line->product_id, $this->purchaseInventoryQuantity($company, $line), (float) $line->inventory_value, PurchaseBill::class, $bill->id, 'purchase_reverse');
+            } else {
+                $this->valuation->receive($company, $actor, $bill->warehouse_id, $line->product_id, (float) $line->actual_weight, (float) $line->inventory_cost, SalesBill::class, $bill->id, 'sale_reverse');
+            }
+        }
+        $reversal = $this->accounting->reverseJournal($company, $actor, JournalEntry::query()->where('company_id', $company->id)->findOrFail($bill->journal_entry_id), $date, true);
+        DB::table('bill_payment_allocations')->where('company_id', $company->id)->where('bill_type', $purchase ? 'purchase' : 'sales')->where('bill_id', $bill->id)->where('status', 'posted')->update(['status' => 'reversed', 'updated_at' => now()]);
+        Trip::query()->where('company_id', $company->id)->where('bill_type', $purchase ? 'purchase' : 'sales')->where('bill_id', $bill->id)->where('status', 'approved')->update(['status' => 'reversed', 'updated_at' => now()]);
+
+        return $reversal;
+    }
+
+    private function purchaseInventoryQuantity(Company $company, mixed $line): float
+    {
+        return $this->policies->purchaseInventoryBasis($company) === CompanyAccountingPolicyService::ACTUAL_WEIGHT
+            ? (float) $line->actual_weight
+            : (float) $line->factory_weight;
+    }
+
+    private function paymentFields(Company $company, array $data, float $total, string $type): array
+    {
+        $method = (string) ($data['payment_method'] ?? 'credit');
+        abort_unless(in_array($method, ['cash', 'credit', 'partial'], true), 422, 'Invalid payment method.');
+        $paid = match ($method) {
+            'cash' => $total,
+            'credit' => 0.0,
+            default => round((float) ($data['paid_amount'] ?? 0), 2),
+        };
+        if ($paid < 0 || $paid > $total || ($method === 'partial' && ($paid <= 0 || $paid >= $total))) {
+            throw ValidationException::withMessages(['paid_amount' => 'Partial payment must be greater than zero and less than the invoice total.']);
+        }
+        if (($method === 'partial' || ($type === 'sales' && $method === 'credit')) && empty($data['due_date'])) {
+            throw ValidationException::withMessages(['due_date' => 'A due date is required for deferred payment.']);
+        }
+        if ($paid > 0) {
+            $this->accounting->paymentSourceAccount($company, $data);
+        }
+
+        return [
+            'payment_method' => $method,
+            'cashbox_id' => $paid > 0 ? ($data['cashbox_id'] ?? null) : null,
+            'bank_id' => $paid > 0 ? ($data['bank_id'] ?? null) : null,
+            'paid_amount' => $paid,
+            'due_date' => $method === 'cash' ? null : ($data['due_date'] ?? null),
+        ];
+    }
+
+    private function purchaseJournalLines(Company $company, PurchaseBill $bill): array
+    {
+        $base = round((float) $bill->total - (float) $bill->vat_amount, 2);
+        $outstanding = round((float) $bill->total - (float) $bill->paid_amount, 2);
+        $lines = [[
+            'account_id' => $this->foundation->systemAccount($company, 'inventory_asset')->id,
+            'party_id' => $bill->supplier_id,
+            'debit' => $base,
+            'credit' => 0,
+            'description' => 'Inventory purchase',
+        ]];
+        if ((float) $bill->vat_amount > 0) {
+            $lines[] = ['account_id' => $this->foundation->systemAccount($company, 'input_vat')->id, 'party_id' => $bill->supplier_id, 'debit' => (float) $bill->vat_amount, 'credit' => 0, 'description' => 'Recoverable input VAT'];
+        }
+        if ((float) $bill->paid_amount > 0) {
+            $source = $this->accounting->paymentSourceAccount($company, $bill->toArray());
+            $lines[] = ['account_id' => $source->id, 'party_id' => $bill->supplier_id, 'debit' => 0, 'credit' => (float) $bill->paid_amount, 'description' => 'Purchase payment'];
+        }
+        if ($outstanding > 0) {
+            $lines[] = ['account_id' => $bill->supplier->account_id, 'party_id' => $bill->supplier_id, 'debit' => 0, 'credit' => $outstanding, 'description' => 'Supplier payable'];
+        }
+
+        return $lines;
+    }
+
+    private function salesJournalLines(Company $company, SalesBill $bill, float $cost): array
+    {
+        $base = round((float) $bill->total - (float) $bill->vat_amount, 2);
+        $outstanding = round((float) $bill->total - (float) $bill->paid_amount, 2);
+        $lines = [];
+        if ((float) $bill->paid_amount > 0) {
+            $source = $this->accounting->paymentSourceAccount($company, $bill->toArray());
+            $lines[] = ['account_id' => $source->id, 'party_id' => $bill->customer_id, 'debit' => (float) $bill->paid_amount, 'credit' => 0, 'description' => 'Sale receipt'];
+        }
+        if ($outstanding > 0) {
+            $lines[] = ['account_id' => $bill->customer->account_id, 'party_id' => $bill->customer_id, 'debit' => $outstanding, 'credit' => 0, 'description' => 'Customer receivable'];
+        }
+        $lines[] = ['account_id' => $this->accountId($company, '5.1'), 'party_id' => $bill->customer_id, 'debit' => 0, 'credit' => $base, 'description' => 'Sales revenue'];
+        if ((float) $bill->vat_amount > 0) {
+            $lines[] = ['account_id' => $this->foundation->systemAccount($company, 'output_vat')->id, 'party_id' => $bill->customer_id, 'debit' => 0, 'credit' => (float) $bill->vat_amount, 'description' => 'Output VAT payable'];
+        }
+        if ($cost > 0) {
+            $lines[] = ['account_id' => $this->foundation->systemAccount($company, 'cost_of_goods_sold')->id, 'party_id' => $bill->customer_id, 'debit' => $cost, 'credit' => 0, 'description' => 'Cost of goods sold'];
+            $lines[] = ['account_id' => $this->foundation->systemAccount($company, 'inventory_asset')->id, 'party_id' => $bill->customer_id, 'debit' => 0, 'credit' => $cost, 'description' => 'Inventory issued'];
+        }
+
+        return $lines;
+    }
+
+    private function recordPaymentAllocation(mixed $bill, string $type, int $journalEntryId): void
+    {
+        if ((float) $bill->paid_amount <= 0) {
+            return;
+        }
+        DB::table('bill_payment_allocations')->insert([
+            'company_id' => $bill->company_id,
+            'bill_type' => $type,
+            'bill_id' => $bill->id,
+            'cashbox_id' => $bill->cashbox_id,
+            'bank_id' => $bill->bank_id,
+            'journal_entry_id' => $journalEntryId,
+            'amount' => $bill->paid_amount,
+            'status' => 'posted',
+            'allocated_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    private function assertWarehouseBelongsToBranch(Company $company, int $branchId, int $warehouseId): void
+    {
+        $valid = DB::table('warehouses')->where('company_id', $company->id)->where('branch_id', $branchId)->where('id', $warehouseId)->whereNull('archived_at')->exists();
+        abort_unless($valid, 422, 'The selected warehouse does not belong to the selected branch.');
     }
 
     private function assertBill(Company $company, mixed $bill, string $status): void

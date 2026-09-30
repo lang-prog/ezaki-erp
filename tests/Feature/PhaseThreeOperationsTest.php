@@ -56,9 +56,10 @@ class PhaseThreeOperationsTest extends TestCase
         [$branch, $warehouse] = $this->branch($company, $user);
         $supplier = app(AccountingService::class)->createParty($company, $user, ['parent_account_id' => Account::query()->where('company_id', $company->id)->where('code', '2.1')->value('id'), 'name' => 'Supplier', 'is_customer' => false, 'is_supplier' => true, 'opening_balance' => 0, 'credit_limit' => null]);
         $customer = app(AccountingService::class)->createParty($company, $user, ['parent_account_id' => Account::query()->where('company_id', $company->id)->where('code', '1.2')->value('id'), 'name' => 'Customer', 'is_customer' => true, 'is_supplier' => false, 'opening_balance' => 0, 'credit_limit' => $creditLimit]);
+        $cashbox = app(AccountingService::class)->createCashbox($company, $user, 'Main cashbox');
         $product = app(InventoryService::class)->createProduct($company, $user, ['warehouse_id' => $warehouse->id, 'sku' => 'STEEL-10', 'name' => 'Steel 10', 'unit' => 'ton', 'minimum_stock' => 0, 'opening_balance' => 0]);
 
-        return compact('company', 'user', 'branch', 'warehouse', 'supplier', 'customer', 'product');
+        return compact('company', 'user', 'branch', 'warehouse', 'supplier', 'customer', 'cashbox', 'product');
     }
 
     private function branch(Company $company, User $user): array
@@ -75,7 +76,7 @@ class PhaseThreeOperationsTest extends TestCase
 
     private function salesPayload(array $context, string $number = 'CUS-1'): array
     {
-        return ['branch_id' => $context['branch']->id, 'warehouse_id' => $context['warehouse']->id, 'customer_id' => $context['customer']->id, 'customer_bill_number' => $number, 'bill_date' => now()->toDateString(), 'total_actual_weight' => 4, 'payment_method' => 'cash', 'lines' => [['product_id' => $context['product']->id, 'actual_weight' => 4, 'unit_price' => 150]]];
+        return ['branch_id' => $context['branch']->id, 'warehouse_id' => $context['warehouse']->id, 'customer_id' => $context['customer']->id, 'customer_bill_number' => $number, 'bill_date' => now()->toDateString(), 'total_actual_weight' => 4, 'payment_method' => 'cash', 'cashbox_id' => $context['cashbox']->id, 'lines' => [['product_id' => $context['product']->id, 'actual_weight' => 4, 'unit_price' => 150]]];
     }
 
     public function test_draft_purchase_and_sale_do_not_change_stock_or_gl_and_approval_posts_once(): void
@@ -95,9 +96,52 @@ class PhaseThreeOperationsTest extends TestCase
         $this->postJson("/api/v1/sales-bills/{$sale}/approve")->assertOk();
         $this->assertSame(6.0, (float) $context['product']->fresh()->stockBalances()->sum('quantity'));
         $this->assertSame($beforeJournals + 2, JournalEntry::query()->count());
+        $this->assertSame(600.0, (float) $context['product']->fresh()->stockBalances()->sum('inventory_value'));
+        $this->assertSame(400.0, (float) DB::table('sales_bill_lines')->where('sales_bill_id', $sale)->value('inventory_cost'));
+        $this->actingAs($context['user'])->get('/dashboard')->assertOk()->assertInertia(fn ($page) => $page
+            ->where('metrics.monthly_sales', 600)
+            ->where('metrics.monthly_purchases', 1000));
     }
 
-    public function test_purchase_uses_factory_value_and_actual_inventory_and_rejects_mismatch_and_duplicate(): void
+    public function test_vat_partial_payment_and_cogs_post_to_distinct_system_accounts(): void
+    {
+        $context = $this->tenant('vat-partial');
+        $context['company']->forceFill(['settings' => ['purchase_inventory_basis' => 'factory_weight', 'vat_enabled' => true, 'vat_rate' => 14]])->save();
+        Sanctum::actingAs($context['user']);
+
+        $purchaseId = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'VAT-P'))->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/purchase-bills/{$purchaseId}/approve")->assertOk();
+        $purchase = PurchaseBill::query()->findOrFail($purchaseId);
+        $this->assertSame(140.0, (float) $purchase->vat_amount);
+        $this->assertSame(1140.0, (float) $purchase->total);
+
+        $sales = $this->salesPayload($context, 'VAT-S');
+        $sales['payment_method'] = 'partial';
+        $sales['paid_amount'] = 200;
+        $sales['due_date'] = now()->addMonth()->toDateString();
+        $saleId = $this->postJson('/api/v1/sales-bills', $sales)->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/sales-bills/{$saleId}/approve")->assertOk();
+
+        $sale = DB::table('sales_bills')->where('id', $saleId)->first();
+        $entryId = (int) $sale->journal_entry_id;
+        $cashAccount = (int) $context['cashbox']->account_id;
+        $outputVat = (int) Account::query()->where('company_id', $context['company']->id)->where('system_key', 'output_vat')->value('id');
+        $cogs = (int) Account::query()->where('company_id', $context['company']->id)->where('system_key', 'cost_of_goods_sold')->value('id');
+        $inventory = (int) Account::query()->where('company_id', $context['company']->id)->where('system_key', 'inventory_asset')->value('id');
+
+        $this->assertSame(200.0, (float) DB::table('journal_lines')->where('journal_entry_id', $entryId)->where('account_id', $cashAccount)->sum('debit'));
+        $this->assertSame(484.0, (float) DB::table('journal_lines')->where('journal_entry_id', $entryId)->where('account_id', $context['customer']->account_id)->sum('debit'));
+        $this->assertSame(84.0, (float) DB::table('journal_lines')->where('journal_entry_id', $entryId)->where('account_id', $outputVat)->sum('credit'));
+        $this->assertSame(400.0, (float) DB::table('journal_lines')->where('journal_entry_id', $entryId)->where('account_id', $cogs)->sum('debit'));
+        $this->assertSame(400.0, (float) DB::table('journal_lines')->where('journal_entry_id', $entryId)->where('account_id', $inventory)->sum('credit'));
+        $this->assertDatabaseHas('bill_payment_allocations', ['company_id' => $context['company']->id, 'bill_type' => 'sales', 'bill_id' => $saleId, 'amount' => 200, 'status' => 'posted']);
+        $this->assertSame(
+            (float) DB::table('journal_lines')->where('journal_entry_id', $entryId)->sum('debit'),
+            (float) DB::table('journal_lines')->where('journal_entry_id', $entryId)->sum('credit'),
+        );
+    }
+
+    public function test_default_purchase_policy_uses_factory_weight_for_value_and_inventory(): void
     {
         $context = $this->tenant('weights');
         Sanctum::actingAs($context['user']);
@@ -109,6 +153,24 @@ class PhaseThreeOperationsTest extends TestCase
         $this->postJson("/api/v1/purchase-bills/{$bill}/approve")->assertOk();
         $this->assertSame(1000.0, (float) PurchaseBill::query()->findOrFail($bill)->subtotal);
         $this->assertSame(10.0, (float) $context['product']->fresh()->stockBalances()->sum('quantity'));
+    }
+
+    public function test_owner_can_choose_actual_purchase_weight_until_first_approval(): void
+    {
+        $context = $this->tenant('actual-policy');
+        Role::query()->where('company_id', $context['company']->id)->firstOrFail()->forceFill(['name' => 'Company Owner'])->save();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
+        $context['company']->forceFill(['settings' => ['purchase_inventory_basis' => 'actual_weight']])->save();
+        Sanctum::actingAs($context['user']);
+        $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'ACTUAL-1'))->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/purchase-bills/{$bill}/approve")->assertOk();
+        $this->assertSame(9.0, (float) $context['product']->fresh()->stockBalances()->sum('quantity'));
+        $this->assertSame(1000.0, (float) PurchaseBill::query()->findOrFail($bill)->subtotal);
+        $this->assertDatabaseHas('purchase_bill_lines', ['purchase_bill_id' => $bill, 'actual_weight' => 9]);
+
+        $this->putJson('/api/v1/accounting-settings', ['purchase_inventory_basis' => 'factory_weight', 'vat_enabled' => false, 'vat_rate' => 0])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('purchase_inventory_basis');
     }
 
     public function test_type_diameter_purchase_line_uses_factory_weight_and_actual_header_is_review_only(): void

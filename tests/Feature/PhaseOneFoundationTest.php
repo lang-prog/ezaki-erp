@@ -61,6 +61,22 @@ class PhaseOneFoundationTest extends TestCase
             ->assertSee('dir="rtl"', false);
     }
 
+    public function test_authenticated_users_are_redirected_from_home_to_their_workspace(): void
+    {
+        $company = Company::query()->create(['name' => 'Redirect Company', 'status' => 'active']);
+        $owner = User::query()->create([
+            'name' => 'Company Owner', 'email' => 'redirect-owner@example.test', 'password' => 'password',
+            'company_id' => $company->id, 'account_type' => 'company', 'status' => 'active',
+        ]);
+        $admin = User::query()->create([
+            'name' => 'Platform Admin', 'email' => 'redirect-admin@example.test', 'password' => 'password',
+            'account_type' => 'super_admin', 'status' => 'active',
+        ]);
+
+        $this->actingAs($owner)->get('/')->assertRedirect(route('company.dashboard'));
+        $this->actingAs($admin)->get('/')->assertRedirect(route('super-admin.dashboard'));
+    }
+
     public function test_self_registration_is_not_approvable_until_signed_email_verification(): void
     {
         Notification::fake();

@@ -6,21 +6,26 @@ use App\Http\Controllers\Web\CompanyProfileController;
 use App\Http\Controllers\Web\CoreErpPageController;
 use App\Http\Controllers\Web\LocaleController;
 use App\Http\Controllers\Web\RegistrationController;
+use App\Http\Controllers\Web\SuperAdminLicenseController;
 use App\Http\Controllers\Web\SuperAdminPlatformController;
 use App\Services\SubscriptionLifecycle;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
-Route::get('/', function () {
+Route::get('/', function (Request $request) {
+    if ($request->user()) {
+        return redirect()->route($request->user()->account_type === 'super_admin' ? 'super-admin.dashboard' : 'company.dashboard');
+    }
+
     return Inertia::render('Welcome');
 })->name('home');
 
 Route::middleware('guest')->group(function (): void {
     Route::get('/login', [AuthenticationController::class, 'show'])->defaults('type', 'company')->name('login');
-    Route::post('/login', [AuthenticationController::class, 'login'])->defaults('type', 'company')->middleware('throttle:6,1');
+    Route::post('/login', [AuthenticationController::class, 'login'])->defaults('type', 'company')->middleware('throttle:login');
     Route::get('/super-admin/login', [AuthenticationController::class, 'show'])->defaults('type', 'super_admin')->name('super-admin.login');
-    Route::post('/super-admin/login', [AuthenticationController::class, 'login'])->defaults('type', 'super_admin')->middleware('throttle:6,1');
+    Route::post('/super-admin/login', [AuthenticationController::class, 'login'])->defaults('type', 'super_admin')->middleware('throttle:login');
     Route::get('/register', [RegistrationController::class, 'show'])->name('registration.create');
     Route::post('/register', [RegistrationController::class, 'store'])->middleware('throttle:3,1')->name('registration.store');
 });
@@ -31,7 +36,7 @@ Route::get('/register/verify/{registration}', [RegistrationController::class, 'v
 Route::post('/locale/{locale}', [LocaleController::class, 'update'])->name('locale.update');
 Route::post('/logout', [AuthenticationController::class, 'logout'])->middleware('auth')->name('logout');
 
-Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'local.license'])->group(function (): void {
+Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'local.license', 'session.version'])->group(function (): void {
     Route::get('/dashboard', [CoreErpPageController::class, 'dashboard'])->middleware('can:dashboard.view')->name('company.dashboard');
     Route::get('/settings/access', [CompanyAccessController::class, 'manage'])->middleware('can:users.view')->name('company.access');
     Route::get('/settings/users/{user}', [CompanyAccessController::class, 'profile'])->name('company.users.profile');
@@ -52,6 +57,7 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/suppliers', [CoreErpPageController::class, 'suppliers'])->middleware('can:parties.view')->name('company.suppliers');
     Route::get('/suppliers/{party}', [CoreErpPageController::class, 'supplierProfile'])->middleware('can:parties.view')->name('company.supplier.profile');
     Route::get('/accounting', [CoreErpPageController::class, 'accounting'])->middleware('can:accounting.view')->name('company.accounting');
+    Route::get('/settings/accounting', [CoreErpPageController::class, 'accountingSettings'])->name('company.accounting-settings');
     Route::get('/reports/{report}', [CoreErpPageController::class, 'report'])->middleware('can:reports.view')->whereIn('report', ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors'])->name('company.accounting.report');
     Route::get('/operations/purchase/create', [CoreErpPageController::class, 'billForm'])->defaults('type', 'purchase')->middleware('can:purchases.create')->name('company.purchase.create');
     Route::get('/operations/sales/create', [CoreErpPageController::class, 'billForm'])->defaults('type', 'sales')->middleware('can:sales.create')->name('company.sales.create');
@@ -67,7 +73,7 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/fleet/reports/{report}', [CoreErpPageController::class, 'fleetReport'])->middleware('can:fleet.view')->whereIn('report', ['vehicle-pl', 'trip-cost', 'fuel', 'driver-performance', 'expenses-by-category', 'maintenance-period', 'inactive-vehicles', 'branch-performance'])->name('company.fleet.report');
 });
 
-Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account.type:super_admin'])->group(function (): void {
+Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account.type:super_admin', 'session.version'])->group(function (): void {
     Route::get('/', [SuperAdminPlatformController::class, 'index'])->name('dashboard');
     Route::post('/registration-setting', [SuperAdminPlatformController::class, 'updateRegistration'])->name('registration-setting');
     Route::post('/plans', [SuperAdminPlatformController::class, 'storePlan'])->name('plans.store');
@@ -83,4 +89,8 @@ Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account
     Route::post('/companies/{company}/plan', [SuperAdminPlatformController::class, 'changeCompanyPlan'])->name('companies.plan');
     Route::post('/companies/{company}/renew', [SuperAdminPlatformController::class, 'renewCompany'])->name('companies.renew');
     Route::put('/companies/{company}/limit-addons', [SuperAdminPlatformController::class, 'updateCompanyLimitAddons'])->name('companies.limit-addons');
+    Route::post('/licenses/{license}/enable', [SuperAdminLicenseController::class, 'enable'])->name('licenses.enable');
+    Route::post('/licenses/{license}/disable', [SuperAdminLicenseController::class, 'disable'])->name('licenses.disable');
+    Route::post('/licenses/{license}/revoke', [SuperAdminLicenseController::class, 'revoke'])->name('licenses.revoke');
+    Route::post('/licenses/{license}/transfer', [SuperAdminLicenseController::class, 'transfer'])->name('licenses.transfer');
 });

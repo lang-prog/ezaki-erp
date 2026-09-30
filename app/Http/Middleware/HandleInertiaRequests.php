@@ -26,6 +26,7 @@ class HandleInertiaRequests extends Middleware
                 $capabilities = $user->isCompanyOwner()
                     ? Permission::query()->pluck('name')->flip()->map(fn () => true)->all()
                     : $user->getAllPermissions()->pluck('name')->flip()->map(fn () => true)->all();
+                $capabilities['company.owner'] = $user->isCompanyOwner();
             } finally {
                 $registrar->setPermissionsTeamId($previousTeamId);
             }
@@ -34,6 +35,7 @@ class HandleInertiaRequests extends Middleware
         return array_merge(parent::share($request), [
             'locale' => app()->getLocale(),
             'auth' => ['user' => $user],
+            'isCompanyOwner' => $user?->isCompanyOwner() ?? false,
             'capabilities' => $capabilities,
             'subscriptionStatus' => fn () => $request->attributes->get('subscription_status'),
             'subscriptionWarning' => fn () => $request->attributes->get('subscription_warning', false),

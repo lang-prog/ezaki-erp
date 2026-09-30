@@ -38,6 +38,7 @@ class CompanyProvisioningService
     {
         return DB::transaction(function () use ($registration, $approver, $plan): Company {
             abort_unless($registration->status === 'pending' && $registration->verified_at, 409);
+            abort_unless($plan->is_active, 409, 'The selected plan is no longer active.');
             $coupon = $registration->coupon_id ? Coupon::query()->lockForUpdate()->find($registration->coupon_id) : null;
             abort_if($registration->coupon_id && (! $coupon || ! $coupon->isAvailableFor($plan)), 409, 'The selected coupon is no longer available.');
             abort_if($plan->duration === 'trial' && ! $plan->duration_days, 409, 'Trial duration must be configured.');
@@ -71,6 +72,8 @@ class CompanyProvisioningService
     {
         return DB::transaction(function () use ($data, $approver, $plan, $coupon): Company {
             abort_if(User::query()->where('email', $data['owner_email'])->exists(), 422, 'The owner email is already in use.');
+            abort_unless($plan->is_active, 422, 'The selected plan is no longer active.');
+            $coupon = $coupon ? Coupon::query()->lockForUpdate()->findOrFail($coupon->id) : null;
             abort_if($coupon && ! $coupon->isAvailableFor($plan), 422, 'The selected coupon is not available.');
             abort_if($plan->duration === 'trial' && ! $plan->duration_days, 422, 'Trial duration must be configured.');
 
@@ -91,6 +94,7 @@ class CompanyProvisioningService
 
     private function provision(array $data, User $approver, Plan $plan, ?Coupon $coupon): Company
     {
+        abort_unless($plan->is_active, 409, 'The selected plan is no longer active.');
         $company = Company::query()->create([
             'name' => $data['name'],
             'trade_name' => $data['trade_name'] ?? null,
@@ -101,8 +105,14 @@ class CompanyProvisioningService
             'address' => $data['address'] ?? null,
             'notes' => $data['notes'] ?? null,
             'status' => 'active',
+            'settings' => [
+                'purchase_inventory_basis' => CompanyAccountingPolicyService::ACTUAL_WEIGHT,
+                'vat_enabled' => false,
+                'vat_rate' => 0,
+            ],
             'approved_at' => now(),
         ]);
+        abort_if($coupon && ! $coupon->isAvailableFor($plan, $company), 422, 'The selected coupon is not available for this company.');
 
         $owner = User::query()->create([
             'name' => $data['owner_name'],
@@ -153,7 +163,7 @@ class CompanyProvisioningService
             ? $basePrice * min(100, (float) $coupon->discount_value) / 100
             : min($basePrice, (float) $coupon->discount_value)) : 0.0;
 
-        Subscription::query()->create([
+        $subscription = Subscription::query()->create([
             'company_id' => $company->id,
             'plan_id' => $plan->id,
             'status' => 'active',
@@ -169,6 +179,15 @@ class CompanyProvisioningService
 
         if ($coupon) {
             $coupon->increment('redemptions_count');
+            DB::table('coupon_redemptions')->insert([
+                'coupon_id' => $coupon->id,
+                'company_id' => $company->id,
+                'subscription_id' => $subscription->id,
+                'registration_id' => $data['registration_id'] ?? null,
+                'redeemed_by' => $approver->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
         }
 
         app(AuditRecorder::class)->record('company.provisioned', $company, $company->id, $approver->id, [

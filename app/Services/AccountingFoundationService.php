@@ -26,6 +26,13 @@ class AccountingFoundationService
         '5' => [['1', 'Operating revenue'], ['2', 'Other revenue']],
     ];
 
+    private const SYSTEM_POSTING_ACCOUNTS = [
+        ['inventory_asset', '1', '1.INV', 'Inventory'],
+        ['input_vat', '1', '1.VAT-IN', 'Recoverable input VAT'],
+        ['output_vat', '2', '2.VAT-OUT', 'Output VAT payable'],
+        ['cost_of_goods_sold', '4', '4.COGS', 'Cost of goods sold'],
+    ];
+
     public function seedCompany(Company $company, ?User $actor = null): void
     {
         DB::transaction(function () use ($company): void {
@@ -47,12 +54,34 @@ class AccountingFoundationService
                 }
             }
 
+            foreach (self::SYSTEM_POSTING_ACCOUNTS as [$key, $parentCode, $code, $name]) {
+                $parent = Account::query()->where('company_id', $company->id)->where('code', $parentCode)->firstOrFail();
+                Account::query()->firstOrCreate(
+                    ['company_id' => $company->id, 'system_key' => $key],
+                    [
+                        'parent_id' => $parent->id,
+                        'code' => $code,
+                        'name' => $name,
+                        'account_type' => $parent->account_type,
+                        'is_system' => true,
+                        'is_active' => true,
+                    ],
+                );
+            }
+
             $year = now()->year;
             FiscalPeriod::query()->firstOrCreate(
                 ['company_id' => $company->id, 'name' => (string) $year],
                 ['starts_on' => "$year-01-01", 'ends_on' => "$year-12-31", 'status' => 'open'],
             );
         });
+    }
+
+    public function systemAccount(Company $company, string $key): Account
+    {
+        $this->seedCompany($company);
+
+        return Account::query()->where('company_id', $company->id)->where('system_key', $key)->firstOrFail();
     }
 
     public function nextChildCode(Company $company, Account $parent): string
@@ -63,7 +92,9 @@ class AccountingFoundationService
             ->where('parent_id', $parent->id)
             ->lockForUpdate()
             ->get(['code'])
-            ->map(fn (Account $account): int => (int) substr($account->code, strlen($parent->code) + 1))
+            ->map(fn (Account $account): string => substr($account->code, strlen($parent->code) + 1))
+            ->filter(fn (string $suffix): bool => ctype_digit($suffix))
+            ->map(fn (string $suffix): int => (int) $suffix)
             ->max() ?? 0;
 
         return $parent->code.'.'.($lastSuffix + 1);
