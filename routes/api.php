@@ -26,6 +26,8 @@ Route::prefix('v1')->group(function (): void {
                 'ends_at' => $subscription?->ends_at,
             ]);
         })->middleware('throttle:api.read')->name('api.v1.subscription');
+        Route::post('/subscription/contact', fn () => response()->json(['status' => 'contact_requested']))->middleware('throttle:api.write')->name('api.v1.subscription.contact');
+        Route::post('/subscription/renew', fn () => response()->json(['status' => 'renewal_requested']))->middleware('throttle:api.write')->name('api.v1.subscription.renew');
         Route::put('/password', [CompanyProfileController::class, 'updatePassword'])->middleware('throttle:api.write')->name('api.v1.password.update');
         Route::put('/profile', [CompanyProfileController::class, 'update'])->middleware('throttle:api.write')->name('api.v1.profile.update');
         Route::get('/accounting-settings', [AccountingSettingsController::class, 'show'])->middleware('throttle:api.read')->name('api.v1.accounting-settings.show');

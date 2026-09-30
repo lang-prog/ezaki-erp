@@ -15,7 +15,7 @@ class SetTenantContext
     {
         $user = $request->user();
         abort_unless($user && $user->account_type === 'company' && $user->company_id, 403);
-        abort_unless($user->company && in_array($user->company->status, ['active', 'suspended'], true), 403);
+        abort_unless($user->company && in_array($user->company->status, ['active', 'suspended', 'archived'], true), 403);
 
         $registrar = app(PermissionRegistrar::class);
         $registrar->setPermissionsTeamId((int) $user->company_id);

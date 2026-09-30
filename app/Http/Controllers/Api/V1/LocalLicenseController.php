@@ -18,8 +18,9 @@ class LocalLicenseController extends Controller
             'license_key' => ['required', 'string', 'max:4096'],
             'installation_id' => ['required', 'string', 'max:255'],
             'customer_binding' => ['required', 'string', 'max:255'],
+            'company_id' => ['nullable', 'integer', 'exists:companies,id'],
         ]);
-        $license = $licenses->activate($data['license_key'], $data['installation_id'], $data['customer_binding']);
+        $license = $licenses->activate($data['license_key'], $data['installation_id'], $data['customer_binding'], isset($data['company_id']) ? (int) $data['company_id'] : null);
 
         return response()->json(['activated' => true, 'activated_at' => $license->activated_at]);
     }

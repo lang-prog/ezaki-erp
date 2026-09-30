@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('subscriptions:send-expiry-warnings')->dailyAt('08:00')->withoutOverlapping();
+Schedule::command('companies:archive-expired')->dailyAt('02:00')->withoutOverlapping();

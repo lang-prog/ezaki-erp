@@ -14,6 +14,7 @@ use App\Notifications\RegistrationVerificationNotification;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\URL;
 use Inertia\Inertia;
@@ -47,21 +48,33 @@ class RegistrationController extends Controller
             'terms_accepted' => ['accepted'],
         ]);
 
-        $coupon = isset($data['coupon_code']) ? Coupon::query()->where('code', $data['coupon_code'])->first() : null;
-        abort_if($coupon && ! $coupon->isAvailableFor(isset($data['plan_id']) ? Plan::query()->find($data['plan_id']) : null), 422, 'The selected coupon is not available.');
+        $planId = (int) $data['plan_id'];
+        $couponCode = $data['coupon_code'] ?? null;
         unset($data['coupon_code']);
 
         try {
-            if (! User::query()->where('email', $data['email'])->exists()
-                && ! CompanyRegistrationRequest::query()->where('email', $data['email'])->exists()) {
-                $registration = CompanyRegistrationRequest::query()->create([
+            $registration = DB::transaction(function () use ($data, $planId, $couponCode): ?CompanyRegistrationRequest {
+                $plan = Plan::query()->lockForUpdate()->findOrFail($planId);
+                abort_unless($plan->is_active, 422, 'The selected plan is no longer active.');
+                $coupon = $couponCode ? Coupon::query()->where('code', $couponCode)->lockForUpdate()->first() : null;
+                abort_if($couponCode && ! $coupon, 422, 'The selected coupon is not available.');
+                abort_if($coupon && ! $coupon->isAvailableFor($plan), 422, 'The selected coupon is not available.');
+
+                if (User::query()->where('email', $data['email'])->exists()
+                    || CompanyRegistrationRequest::query()->where('email', $data['email'])->exists()) {
+                    return null;
+                }
+
+                return CompanyRegistrationRequest::query()->create([
                     ...$data,
+                    'plan_id' => $plan->id,
                     'coupon_id' => $coupon?->id,
                     'terms_accepted' => true,
                     'status' => 'unverified',
                     'verification_expires_at' => now()->addHour(),
                 ]);
-
+            });
+            if ($registration) {
                 $url = URL::temporarySignedRoute('registration.verify', now()->addHour(), ['registration' => $registration->id]);
                 Notification::route('mail', $registration->email)->notify(new RegistrationVerificationNotification($url));
             }

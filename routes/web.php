@@ -47,6 +47,8 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
 
         return Inertia::render('Company/Subscription', ['subscription' => $subscription, 'status' => $request->attributes->get('subscription_status')]);
     })->middleware('can:subscriptions.view')->name('company.subscription');
+    Route::post('/subscription/contact', fn () => back()->with('status', 'Your renewal request has been sent to the platform team.'))->name('company.subscription.contact');
+    Route::post('/subscription/renew', fn () => back()->with('status', 'Your renewal request has been sent to the platform team.'))->name('company.subscription.renew');
     Route::post('/password', [CompanyProfileController::class, 'updatePassword'])->name('company.password.update');
     Route::get('/branches', [CoreErpPageController::class, 'branches'])->middleware('can:branches.view')->name('company.branches');
     Route::get('/inventory', [CoreErpPageController::class, 'inventory'])->middleware('can:inventory.view')->name('company.inventory');

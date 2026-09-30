@@ -34,7 +34,11 @@ class CheckSubscriptionStatus
         }
 
         if ($status === 'suspended' || $status === 'archived') {
-            $allowed = str_starts_with($request->path(), 'subscription') || $request->is('api/v1/subscription') || $request->is('logout') || $request->is('api/v1/logout');
+            $allowed = $request->routeIs(
+                'company.subscription', 'company.subscription.contact', 'company.subscription.renew',
+                'api.v1.subscription', 'api.v1.subscription.contact', 'api.v1.subscription.renew',
+                'logout', 'api.v1.logout',
+            );
             abort_unless($allowed, 403, 'This company subscription is suspended.');
         }
 

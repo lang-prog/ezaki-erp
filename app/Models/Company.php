@@ -28,4 +28,9 @@ class Company extends Model
     {
         return $this->hasMany(Subscription::class);
     }
+
+    public function localLicenses(): HasMany
+    {
+        return $this->hasMany(LocalLicense::class);
+    }
 }
