@@ -403,4 +403,32 @@ class PhaseTwoCoreTest extends TestCase
         $this->getJson('/api/v1/reports/debtors?from_date='.today()->toDateString().'&to_date='.today()->toDateString())->assertOk()->assertJsonFragment(['name' => 'Moving customer']);
         $this->getJson('/api/v1/reports/debtors?from_date='.today()->addDay()->toDateString().'&to_date='.today()->addDays(2)->toDateString())->assertOk()->assertJsonMissing(['name' => 'Moving customer']);
     }
+
+    public function test_inventory_identity_is_company_scoped_and_opening_is_idempotent_per_warehouse(): void
+    {
+        ['company' => $companyA, 'user' => $userA] = $this->tenant('inventory-hardening-a');
+        ['company' => $companyB, 'user' => $userB] = $this->tenant('inventory-hardening-b');
+        [, $warehouseA1] = $this->createBranch($userA, 'A1');
+        [, $warehouseA2] = $this->createBranch($userA, 'A2');
+        [, $warehouseB1] = $this->createBranch($userB, 'B1');
+        Sanctum::actingAs($userA);
+        $typeA = $this->postJson('/api/v1/product-types', ['name' => 'Shared type'])->assertCreated()->json('data.id');
+        $diameterA = $this->postJson('/api/v1/diameters', ['millimeters' => 20])->assertCreated()->json('data.id');
+        $payload = ['warehouse_id' => $warehouseA1->id, 'product_type_id' => $typeA, 'diameter_id' => $diameterA, 'opening_balance' => 6, 'minimum_stock' => 2];
+        $productId = $this->postJson('/api/v1/inventory/type-diameter-profile', $payload)->assertCreated()->json('data.id');
+        $this->postJson('/api/v1/inventory/type-diameter-profile', $payload)->assertCreated();
+        $second = $this->postJson('/api/v1/inventory/type-diameter-profile', array_merge($payload, ['warehouse_id' => $warehouseA2->id, 'opening_balance' => 4, 'minimum_stock' => 5]))->assertCreated()->json('data.id');
+
+        $this->assertSame($productId, $second);
+        $this->assertSame(1, Product::query()->where('company_id', $companyA->id)->where('product_type_id', $typeA)->where('diameter_id', $diameterA)->count());
+        $this->assertSame('TYPE-'.$typeA.'-DIA-'.$diameterA, Product::query()->findOrFail($productId)->sku);
+        $this->assertDatabaseHas('stock_balances', ['warehouse_id' => $warehouseA1->id, 'product_id' => $productId, 'quantity' => 6, 'minimum_stock' => 2]);
+        $this->assertDatabaseHas('stock_balances', ['warehouse_id' => $warehouseA2->id, 'product_id' => $productId, 'quantity' => 4, 'minimum_stock' => 5]);
+        $this->assertSame(1, DB::table('stock_movements')->where('company_id', $companyA->id)->where('source_type', 'inventory_opening')->where('source_key', 'warehouse:'.$warehouseA1->id.':product:'.$productId)->count());
+
+        Sanctum::actingAs($userB);
+        $this->postJson('/api/v1/inventory/type-diameter-profile', ['warehouse_id' => $warehouseA1->id, 'product_type_id' => $typeA, 'diameter_id' => $diameterA, 'opening_balance' => 1])->assertNotFound();
+        $this->assertSame(0, Product::query()->where('company_id', $companyB->id)->count());
+        $this->assertDatabaseMissing('stock_balances', ['warehouse_id' => $warehouseB1->id, 'product_id' => $productId]);
+    }
 }

@@ -30,6 +30,7 @@ class OperationsService
         private readonly CompanyAccountingPolicyService $policies,
         private readonly InventoryValuationService $valuation,
         private readonly AuditRecorder $audit,
+        private readonly InventoryProductResolver $productResolver,
     ) {}
 
     public function savePurchase(Company $company, User $actor, array $data, bool $approve = false): PurchaseBill
@@ -493,7 +494,7 @@ class OperationsService
     {
         $balance = StockBalance::query()->where('company_id', $company->id)->where('warehouse_id', $this->ownedId('warehouses', $company, $warehouseId))->where('product_id', $productId)->lockForUpdate()->first();
         if (! $balance) {
-            $balance = StockBalance::query()->create(['company_id' => $company->id, 'warehouse_id' => $warehouseId, 'product_id' => $productId, 'quantity' => 0]);
+            $balance = StockBalance::query()->create(['company_id' => $company->id, 'warehouse_id' => $warehouseId, 'product_id' => $productId, 'quantity' => 0, 'minimum_stock' => Product::query()->whereKey($productId)->value('minimum_stock') ?? 0]);
         } throw_if((float) $balance->quantity + $delta < 0, ValidationException::withMessages(['lines' => 'Insufficient stock for sale.']));
         $balance->increment('quantity', $delta);
         StockMovement::query()->create(['company_id' => $company->id, 'warehouse_id' => $warehouseId, 'product_id' => $productId, 'user_id' => $actor->id, 'movement_type' => $type, 'quantity_delta' => $delta, 'source_type' => $source, 'source_id' => $sourceId]);
@@ -640,7 +641,13 @@ class OperationsService
 
     private function assertWarehouseBelongsToBranch(Company $company, int $branchId, int $warehouseId): void
     {
-        $valid = DB::table('warehouses')->where('company_id', $company->id)->where('branch_id', $branchId)->where('id', $warehouseId)->whereNull('archived_at')->exists();
+        $valid = DB::table('warehouses')
+            ->where('warehouses.company_id', $company->id)
+            ->where('warehouses.branch_id', $branchId)
+            ->where('warehouses.id', $warehouseId)
+            ->whereNull('warehouses.archived_at')
+            ->whereExists(fn ($query) => $query->selectRaw('1')->from('branches')->whereColumn('branches.id', 'warehouses.branch_id')->where('branches.company_id', $company->id)->whereNull('branches.archived_at'))
+            ->exists();
         abort_unless($valid, 422, 'The selected warehouse does not belong to the selected branch.');
     }
 
@@ -657,20 +664,7 @@ class OperationsService
 
     private function lineProduct(Company $company, array $line): Product
     {
-        if (! empty($line['product_id'])) {
-            return Product::query()->where('company_id', $company->id)->whereNull('archived_at')->findOrFail($line['product_id']);
-        }
-
-        $typeId = (int) ($line['product_type_id'] ?? 0);
-        $diameterId = (int) ($line['diameter_id'] ?? 0);
-        $type = DB::table('product_types')->where('company_id', $company->id)->where('id', $typeId)->first();
-        $diameter = DB::table('diameters')->where('company_id', $company->id)->where('id', $diameterId)->first();
-        abort_unless($type && $diameter, 422, 'Type and diameter are required for steel lines.');
-
-        return Product::query()->firstOrCreate(
-            ['company_id' => $company->id, 'product_type_id' => $typeId, 'diameter_id' => $diameterId, 'name' => $type->name.' '.$diameter->millimeters.'mm'],
-            ['sku' => 'INTERNAL-'.$typeId.'-'.$diameterId, 'unit' => 'ton', 'minimum_stock' => 0, 'status' => 'active'],
-        );
+        return $this->productResolver->resolve($company, $line);
     }
 
     private function ownedId(string $table, Company $company, int $id): int

@@ -8,10 +8,10 @@ use Illuminate\Database\Eloquent\Model;
 
 class StockBalance extends Model
 {
-    protected $fillable = ['company_id', 'warehouse_id', 'product_id', 'quantity', 'inventory_value'];
+    protected $fillable = ['company_id', 'warehouse_id', 'product_id', 'quantity', 'inventory_value', 'minimum_stock'];
 
     protected function casts(): array
     {
-        return ['quantity' => 'decimal:3', 'inventory_value' => 'decimal:2'];
+        return ['quantity' => 'decimal:3', 'inventory_value' => 'decimal:2', 'minimum_stock' => 'decimal:3'];
     }
 }

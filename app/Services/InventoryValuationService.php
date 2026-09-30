@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Company;
+use App\Models\Product;
 use App\Models\StockBalance;
 use App\Models\StockMovement;
 use App\Models\User;
@@ -54,7 +55,8 @@ final class InventoryValuationService
     {
         $balance = StockBalance::query()->where('company_id', $company->id)->where('warehouse_id', $warehouseId)->where('product_id', $productId)->lockForUpdate()->first();
         if (! $balance) {
-            $balance = StockBalance::query()->create(['company_id' => $company->id, 'warehouse_id' => $warehouseId, 'product_id' => $productId, 'quantity' => 0, 'inventory_value' => 0]);
+            $minimumStock = (float) (Product::query()->where('company_id', $company->id)->whereKey($productId)->value('minimum_stock') ?? 0);
+            $balance = StockBalance::query()->create(['company_id' => $company->id, 'warehouse_id' => $warehouseId, 'product_id' => $productId, 'quantity' => 0, 'inventory_value' => 0, 'minimum_stock' => $minimumStock]);
             $balance = StockBalance::query()->whereKey($balance->id)->lockForUpdate()->firstOrFail();
         }
 
