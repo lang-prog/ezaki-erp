@@ -3,6 +3,7 @@
 use App\Http\Middleware\CheckAccountType;
 use App\Http\Middleware\CheckSubscriptionStatus;
 use App\Http\Middleware\EnsureLocalLicense;
+use App\Http\Middleware\EnsureSessionVersion;
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\SetLocale;
@@ -27,6 +28,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant' => SetTenantContext::class,
             'subscription' => CheckSubscriptionStatus::class,
             'local.license' => EnsureLocalLicense::class,
+            'session.version' => EnsureSessionVersion::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

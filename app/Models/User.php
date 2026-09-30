@@ -37,6 +37,8 @@ class User extends Authenticatable
         'last_login_at',
         'login_count',
         'failed_login_attempts',
+        'login_locked_until',
+        'session_version',
     ];
 
     /**
@@ -62,6 +64,8 @@ class User extends Authenticatable
             'last_login_at' => 'datetime',
             'login_count' => 'integer',
             'failed_login_attempts' => 'integer',
+            'login_locked_until' => 'datetime',
+            'session_version' => 'integer',
             'password' => 'hashed',
         ];
     }

@@ -36,6 +36,7 @@ class AuthenticationController extends Controller
 
         Auth::login($user, $request->boolean('remember'));
         $request->session()->regenerate();
+        $request->session()->put('session_version', (int) $user->session_version);
 
         return redirect()->intended($type === 'super_admin' ? route('super-admin.dashboard') : route('company.dashboard'));
     }

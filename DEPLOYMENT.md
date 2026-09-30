@@ -30,6 +30,8 @@ Set the site's document root to the project's `public` directory. If the host fi
 
 Set `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL` to the HTTPS site URL, a secure generated `APP_KEY`, a MySQL connection, secure session cookies, and a production mail transport. Then run migrations and `npm run build` as part of deployment. Use `php artisan config:cache`, `php artisan route:cache`, and `php artisan view:cache` after deployment configuration is final.
 
+For production, set `SESSION_SECURE_COOKIE=true`, keep `SESSION_HTTP_ONLY=true` and `SESSION_SAME_SITE=lax` (use `none` only for a deliberately cross-site HTTPS client), and set `CORS_ALLOWED_ORIGINS` to a comma-separated, explicit HTTPS origin allowlist. Never use `*` with credentials. HSTS is emitted on HTTPS responses by default; if TLS terminates at a reverse proxy, forward the original HTTPS scheme and verify `TrustProxies` before enabling preload-style policies.
+
 ## Local lifetime edition
 
 Set `APP_EDITION=local` and configure the installation's public verification key in `LOCAL_LICENSE_PUBLIC_KEY`. The matching private signing key belongs only in the offline issuer's protected environment and must never be deployed with the application. Activation is verified locally; no heartbeat or online check is performed after activation. Back up the local database and the application's private storage as one installation unit.

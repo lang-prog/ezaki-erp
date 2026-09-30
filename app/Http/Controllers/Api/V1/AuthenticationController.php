@@ -20,7 +20,7 @@ class AuthenticationController extends Controller
         );
 
         if (! $user || ! $user->company) {
-            return response()->json(['message' => 'The supplied sign-in details are invalid.'], 422);
+            return response()->json(['message' => 'The supplied sign-in details are invalid.'], 401);
         }
 
         return response()->json([

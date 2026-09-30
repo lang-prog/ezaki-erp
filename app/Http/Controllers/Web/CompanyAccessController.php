@@ -10,6 +10,7 @@ use App\Models\LoginLog;
 use App\Models\User;
 use App\Services\AuditRecorder;
 use App\Services\CompanyLimitService;
+use App\Services\SessionRevocationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -236,7 +237,7 @@ class CompanyAccessController extends Controller
         return response()->json(['message' => 'Permissions updated.']);
     }
 
-    public function setStatus(Request $request, User $user, AuditRecorder $audit, CompanyLimitService $limits): JsonResponse
+    public function setStatus(Request $request, User $user, AuditRecorder $audit, CompanyLimitService $limits, SessionRevocationService $sessions): JsonResponse
     {
         abort_unless((int) $user->company_id === (int) $request->user()->company_id, 404);
         abort_if($user->hasRole('Company Owner') || $user->is($request->user()), 403);
@@ -254,7 +255,7 @@ class CompanyAccessController extends Controller
 
             if (! $data['active']) {
                 $user->tokens()->delete();
-                DB::table('sessions')->where('user_id', $user->id)->delete();
+                $sessions->revoke($user);
             }
         });
         $audit->record('users.status_changed', $user, $user->company_id, $request->user()->id, ['status' => $user->status], $request);
@@ -262,14 +263,14 @@ class CompanyAccessController extends Controller
         return response()->json(['message' => 'User status updated.']);
     }
 
-    public function resetPassword(Request $request, User $user, AuditRecorder $audit): JsonResponse
+    public function resetPassword(Request $request, User $user, AuditRecorder $audit, SessionRevocationService $sessions): JsonResponse
     {
         abort_unless((int) $user->company_id === (int) $request->user()->company_id, 404);
         abort_if($user->hasRole('Company Owner'), 403);
         $data = $request->validate(['password' => ['required', 'confirmed', 'string', 'min:8']]);
         $user->forceFill(['password' => Hash::make($data['password'])])->save();
         $user->tokens()->delete();
-        DB::table('sessions')->where('user_id', $user->id)->delete();
+        $sessions->revoke($user);
         $audit->record('users.password_reset', $user, $user->company_id, $request->user()->id, [], $request);
 
         return response()->json(['message' => 'Password changed.']);

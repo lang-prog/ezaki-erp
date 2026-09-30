@@ -19,8 +19,10 @@ final class SecurityHeaders
         $response->headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
         $response->headers->set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
-        if ($request->isSecure()) {
-            $response->headers->set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        if (config('security.hsts.enabled', true) && $request->isSecure()) {
+            $maxAge = (int) config('security.hsts.max_age', 31536000);
+            $subdomains = config('security.hsts.include_subdomains', true) ? '; includeSubDomains' : '';
+            $response->headers->set('Strict-Transport-Security', 'max-age='.$maxAge.$subdomains);
         }
 
         return $response;

@@ -58,19 +58,19 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/suppliers/{party}', [CoreErpPageController::class, 'supplierProfile'])->middleware('can:parties.view')->name('company.supplier.profile');
     Route::get('/accounting', [CoreErpPageController::class, 'accounting'])->middleware('can:accounting.view')->name('company.accounting');
     Route::get('/settings/accounting', [CoreErpPageController::class, 'accountingSettings'])->name('company.accounting-settings');
-    Route::get('/reports/{report}', [CoreErpPageController::class, 'report'])->middleware('can:reports.view')->whereIn('report', ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors'])->name('company.accounting.report');
+    Route::get('/reports/{report}', [CoreErpPageController::class, 'report'])->middleware(['can:reports.view', 'throttle:api.reports'])->whereIn('report', ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors'])->name('company.accounting.report');
     Route::get('/operations/purchase/create', [CoreErpPageController::class, 'billForm'])->defaults('type', 'purchase')->middleware('can:purchases.create')->name('company.purchase.create');
     Route::get('/operations/sales/create', [CoreErpPageController::class, 'billForm'])->defaults('type', 'sales')->middleware('can:sales.create')->name('company.sales.create');
     Route::get('/operations/purchase/{bill}/edit', [CoreErpPageController::class, 'billForm'])->defaults('type', 'purchase')->name('company.purchase.edit');
     Route::get('/operations/sales/{bill}/edit', [CoreErpPageController::class, 'billForm'])->defaults('type', 'sales')->name('company.sales.edit');
     Route::get('/operations/purchase/{bill}/print', [CoreErpPageController::class, 'printBill'])->defaults('type', 'purchase')->middleware('can:purchases.print')->name('company.purchase.print');
     Route::get('/operations/sales/{bill}/print', [CoreErpPageController::class, 'printBill'])->defaults('type', 'sales')->middleware('can:sales.print')->name('company.sales.print');
-    Route::get('/operations/purchase/{bill}/export', [CoreErpPageController::class, 'exportBill'])->defaults('type', 'purchase')->middleware('can:purchases.export')->name('company.purchase.export');
-    Route::get('/operations/sales/{bill}/export', [CoreErpPageController::class, 'exportBill'])->defaults('type', 'sales')->middleware('can:sales.export')->name('company.sales.export');
+    Route::get('/operations/purchase/{bill}/export', [CoreErpPageController::class, 'exportBill'])->defaults('type', 'purchase')->middleware(['can:purchases.export', 'throttle:api.exports'])->name('company.purchase.export');
+    Route::get('/operations/sales/{bill}/export', [CoreErpPageController::class, 'exportBill'])->defaults('type', 'sales')->middleware(['can:sales.export', 'throttle:api.exports'])->name('company.sales.export');
     Route::get('/operations', [CoreErpPageController::class, 'operations'])->name('company.operations');
     Route::get('/fleet', [CoreErpPageController::class, 'fleet'])->middleware('can:fleet.view')->name('company.fleet');
-    Route::get('/fleet/reports/{report}/export', [CoreErpPageController::class, 'exportFleetReport'])->middleware('can:fleet.export')->whereIn('report', ['vehicle-pl', 'trip-cost', 'fuel', 'driver-performance', 'expenses-by-category', 'maintenance-period', 'inactive-vehicles', 'branch-performance'])->name('company.fleet.report.export');
-    Route::get('/fleet/reports/{report}', [CoreErpPageController::class, 'fleetReport'])->middleware('can:fleet.view')->whereIn('report', ['vehicle-pl', 'trip-cost', 'fuel', 'driver-performance', 'expenses-by-category', 'maintenance-period', 'inactive-vehicles', 'branch-performance'])->name('company.fleet.report');
+    Route::get('/fleet/reports/{report}/export', [CoreErpPageController::class, 'exportFleetReport'])->middleware(['can:fleet.export', 'throttle:api.exports'])->whereIn('report', ['vehicle-pl', 'trip-cost', 'fuel', 'driver-performance', 'expenses-by-category', 'maintenance-period', 'inactive-vehicles', 'branch-performance'])->name('company.fleet.report.export');
+    Route::get('/fleet/reports/{report}', [CoreErpPageController::class, 'fleetReport'])->middleware(['can:fleet.view', 'throttle:api.reports'])->whereIn('report', ['vehicle-pl', 'trip-cost', 'fuel', 'driver-performance', 'expenses-by-category', 'maintenance-period', 'inactive-vehicles', 'branch-performance'])->name('company.fleet.report');
 });
 
 Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account.type:super_admin', 'session.version'])->group(function (): void {

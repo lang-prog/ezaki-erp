@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Services\SessionRevocationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -12,7 +13,7 @@ use Illuminate\Support\Facades\Validator;
 
 class CompanyProfileController extends Controller
 {
-    public function update(Request $request): JsonResponse
+    public function update(Request $request, SessionRevocationService $sessions): JsonResponse
     {
         $data = Validator::make($request->all(), [
             'first_name' => ['required', 'string', 'max:120'],
@@ -35,12 +36,13 @@ class CompanyProfileController extends Controller
         ])->save();
         if (! empty($data['password'])) {
             $user->tokens()->delete();
+            $sessions->revoke($user);
         }
 
         return response()->json(['data' => $user->only(['id', 'name', 'first_name', 'second_name', 'email'])]);
     }
 
-    public function updatePassword(Request $request): JsonResponse
+    public function updatePassword(Request $request, SessionRevocationService $sessions): JsonResponse
     {
         $data = Validator::make($request->all(), [
             'current_password' => ['required', 'string'],
@@ -53,6 +55,7 @@ class CompanyProfileController extends Controller
 
         $request->user()->forceFill(['password' => Hash::make($data['password'])])->save();
         $request->user()->tokens()->delete();
+        $sessions->revoke($request->user());
 
         return response()->json(['message' => 'Password updated.']);
     }
