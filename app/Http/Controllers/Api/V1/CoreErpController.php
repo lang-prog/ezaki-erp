@@ -427,6 +427,9 @@ class CoreErpController extends Controller
             'income-statement' => $reports->incomeStatement($company, $from, $to),
             'balance-sheet' => $reports->balanceSheet($company, $to),
             'debtors' => $reports->debtors($company, 50, $from, $to),
+            'receivables' => $reports->receivables($company, 0, $from, $to),
+            'payables' => $reports->payables($company, 0, $from, $to),
+            'creditors' => $reports->payables($company, 0, $from, $to),
             default => abort(404),
         });
     }

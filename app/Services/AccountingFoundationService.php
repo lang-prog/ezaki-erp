@@ -31,6 +31,7 @@ class AccountingFoundationService
         ['input_vat', '1', '1.VAT-IN', 'Recoverable input VAT'],
         ['output_vat', '2', '2.VAT-OUT', 'Output VAT payable'],
         ['cost_of_goods_sold', '4', '4.COGS', 'Cost of goods sold'],
+        ['opening_balance_equity', '3', '3.OPENING', 'Opening balance equity'],
     ];
 
     public function seedCompany(Company $company, ?User $actor = null): void

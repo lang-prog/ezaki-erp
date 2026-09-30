@@ -184,7 +184,7 @@ class CoreErpPageController extends Controller
         $range = $request->validate(['from_date' => ['nullable', 'date'], 'to_date' => ['nullable', 'date'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date']]);
         $from = $range['from_date'] ?? $range['from'] ?? null;
         $to = $range['to_date'] ?? $range['to'] ?? null;
-        abort_unless(in_array($report, ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors'], true), 404);
+        abort_unless(in_array($report, ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'], true), 404);
         $payload = match ($report) {
             'journal' => $reports->journal($company, $from, $to),
             'account-statement' => $reports->accountStatement($company, Account::query()->where('company_id', $company->id)->findOrFail($request->integer('account_id')), $from, $to),
@@ -193,6 +193,9 @@ class CoreErpPageController extends Controller
             'income-statement' => $reports->incomeStatement($company, $from, $to),
             'balance-sheet' => $reports->balanceSheet($company, $to),
             'debtors' => $reports->debtors($company, 50, $from, $to),
+            'receivables' => $reports->receivables($company, 0, $from, $to),
+            'payables' => $reports->payables($company, 0, $from, $to),
+            'creditors' => $reports->payables($company, 0, $from, $to),
         };
 
         return Inertia::render('Company/AccountingReport', [

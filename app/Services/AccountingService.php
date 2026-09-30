@@ -10,9 +10,13 @@ use App\Models\Cashbox;
 use App\Models\Company;
 use App\Models\CustomerSupplier;
 use App\Models\FiscalPeriod;
+use App\Models\FleetExpense;
 use App\Models\JournalEntry;
+use App\Models\MaintenanceRecord;
 use App\Models\PaymentVoucher;
+use App\Models\PurchaseBill;
 use App\Models\Receipt;
+use App\Models\SalesBill;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -38,9 +42,12 @@ class AccountingService
                 'is_customer' => $data['is_customer'],
                 'is_supplier' => $data['is_supplier'],
                 'opening_balance' => $data['opening_balance'] ?? 0,
+                'opening_balance_direction' => $data['opening_balance_direction'] ?? ($data['is_supplier'] && ! $data['is_customer'] ? 'credit' : 'debit'),
+                'opening_balance_date' => $data['opening_balance_date'] ?? now()->startOfYear()->toDateString(),
                 'credit_limit' => $data['credit_limit'] ?? null,
                 'status' => 'active',
             ]);
+            $this->postOpeningBalance($company, $actor, $party);
             app(AuditRecorder::class)->record('parties.created', $party, $company->id, $actor->id, ['account_code' => $account->code]);
 
             return $party->load('account');
@@ -57,6 +64,15 @@ class AccountingService
             if ((int) $account->parent_id !== (int) $parent->id) {
                 $this->foundation->moveAccount($company, $account, $parent);
             }
+            $newAmount = round((float) ($data['opening_balance'] ?? 0), 2);
+            $newDirection = $data['opening_balance_direction'] ?? ($data['is_supplier'] && ! $data['is_customer'] ? 'credit' : 'debit');
+            if ($party->opening_balance_journal_entry_id && (round((float) $party->opening_balance, 2) !== $newAmount || $party->opening_balance_direction !== $newDirection)) {
+                $oldEntry = JournalEntry::query()->where('company_id', $company->id)->find($party->opening_balance_journal_entry_id);
+                if ($oldEntry?->status === 'posted') {
+                    $this->reverseJournal($company, $actor, $oldEntry, now()->toDateString());
+                }
+                $party->forceFill(['opening_balance_journal_entry_id' => null]);
+            }
             $party->forceFill([
                 'parent_account_id' => $parent->id,
                 'name' => $data['name'],
@@ -67,11 +83,45 @@ class AccountingService
                 'is_customer' => $data['is_customer'],
                 'is_supplier' => $data['is_supplier'],
                 'opening_balance' => $data['opening_balance'] ?? 0,
+                'opening_balance_direction' => $newDirection,
+                'opening_balance_date' => $data['opening_balance_date'] ?? $party->opening_balance_date?->toDateString() ?? now()->startOfYear()->toDateString(),
                 'credit_limit' => $data['credit_limit'] ?? null,
             ])->save();
+            $this->postOpeningBalance($company, $actor, $party->fresh());
             app(AuditRecorder::class)->record('parties.updated', $party, $company->id, $actor->id, ['account_code' => $account->code]);
 
             return $party->fresh('account');
+        });
+    }
+
+    public function postOpeningBalance(Company $company, User $actor, CustomerSupplier $party): ?JournalEntry
+    {
+        abort_unless((int) $party->company_id === (int) $company->id, 404);
+        $amount = round((float) $party->opening_balance, 2);
+        if ($amount <= 0) {
+            return null;
+        }
+
+        return DB::transaction(function () use ($company, $actor, $party, $amount): JournalEntry {
+            $party = CustomerSupplier::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($party->id);
+            if ($party->opening_balance_journal_entry_id) {
+                $existing = JournalEntry::query()->where('company_id', $company->id)->find($party->opening_balance_journal_entry_id);
+                if ($existing?->status === 'posted') {
+                    return $existing->load('lines');
+                }
+            }
+            $date = $party->opening_balance_date?->toDateString() ?? now()->startOfYear()->toDateString();
+            $period = $this->foundation->openPeriodFor($company, $date);
+            $equity = $this->foundation->systemAccount($company, 'opening_balance_equity');
+            $debitParty = $party->opening_balance_direction !== 'credit';
+            $entry = $this->postJournal($company, $actor, $period, $date, 'Opening balance - '.$party->name, CustomerSupplier::class, $party->id, [
+                ['account_id' => $party->account_id, 'party_id' => $party->id, 'debit' => $debitParty ? $amount : 0, 'credit' => $debitParty ? 0 : $amount, 'description' => 'Party opening balance'],
+                ['account_id' => $equity->id, 'debit' => $debitParty ? 0 : $amount, 'credit' => $debitParty ? $amount : 0, 'description' => 'Opening balance equity'],
+            ]);
+            $party->forceFill(['opening_balance_journal_entry_id' => $entry->id])->save();
+            app(AuditRecorder::class)->record('parties.opening_balance_posted', $party, $company->id, $actor->id, ['journal_entry_id' => $entry->id, 'direction' => $party->opening_balance_direction]);
+
+            return $entry;
         });
     }
 
@@ -220,7 +270,7 @@ class AccountingService
     {
         return DB::transaction(function () use ($company, $actor, $entry, $date, $fromSourceWorkflow): JournalEntry {
             $entry = JournalEntry::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($entry->id);
-            if (! $fromSourceWorkflow && in_array($entry->source_type, [\App\Models\PurchaseBill::class, \App\Models\SalesBill::class, \App\Models\FleetExpense::class, \App\Models\MaintenanceRecord::class], true)) {
+            if (! $fromSourceWorkflow && in_array($entry->source_type, [PurchaseBill::class, SalesBill::class, FleetExpense::class, MaintenanceRecord::class], true)) {
                 abort(409, 'Reverse the source document from its own workflow.');
             }
             abort_unless($entry->status === 'posted' && $entry->reversed_by_id === null, 409, 'Only an unreversed posted journal can be reversed.');

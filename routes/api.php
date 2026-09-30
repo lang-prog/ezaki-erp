@@ -77,7 +77,7 @@ Route::prefix('v1')->group(function (): void {
         Route::middleware('can:accounting.view')->get('/payment-vouchers', [CoreErpController::class, 'vouchers'])->middleware('throttle:api.read');
         Route::middleware('can:accounting.post')->post('/payment-vouchers', [CoreErpController::class, 'createVoucher'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.view')->get('/journals', [CoreErpController::class, 'report'])->defaults('report', 'journal')->middleware('throttle:api.read');
-        Route::middleware('can:accounting.view')->get('/reports/{report}', [CoreErpController::class, 'report'])->whereIn('report', ['account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors'])->middleware('throttle:api.reports');
+        Route::middleware('can:accounting.view')->get('/reports/{report}', [CoreErpController::class, 'report'])->whereIn('report', ['account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'])->middleware('throttle:api.reports');
         Route::middleware('can:accounting.reverse')->post('/journals/{entry}/reverse', [CoreErpController::class, 'reverseJournal'])->middleware('throttle:api.write');
         Route::middleware('can:purchases.view')->get('/purchase-bills', [OperationsController::class, 'purchases'])->middleware('throttle:api.read');
         Route::middleware('can:purchases.create')->post('/purchase-bills', [OperationsController::class, 'storePurchase'])->middleware('throttle:api.write');
