@@ -37,5 +37,91 @@ For production, set `SESSION_SECURE_COOKIE=true`, keep `SESSION_HTTP_ONLY=true` 
 Set `APP_EDITION=local` and configure the installation's public verification key in `LOCAL_LICENSE_PUBLIC_KEY`. The matching private signing key belongs only in the offline issuer's protected environment and must never be deployed with the application. Activation is verified locally; no heartbeat or online check is performed after activation. Back up the local database and the application's private storage as one installation unit.
 
 ## `php artisan serve`
-
 For development, `php artisan serve` uses the Laravel public entrypoint and can be used alongside the Vite dev server. Run `npm run dev` in a second terminal. The API health route is `/api/v1/health`.
+
+## Release hardening runbook (v1)
+
+### Release gates and local verification
+
+Run from the repository root before exposing traffic:
+
+```bash
+php scripts/lint-openapi.php
+php artisan release:preflight --production
+php artisan test
+vendor/bin/pint --test
+BASE_URL=https://ezaki-erp.example ./scripts/smoke.sh
+```
+
+`release:preflight --production` fails closed for a non-production environment, debug mode, missing/non-rotated key, non-HTTPS `APP_URL`, insecure session cookies, ephemeral session/cache/queue drivers, development mailers, a non-MySQL production driver, unwritable runtime directories, an unreachable database, or pending migrations. The command intentionally omits passwords, keys, DSNs, and database exception text from its output. Run it after the final `.env` is loaded and after `config:cache` only if the cached values are the intended release values.
+
+The smoke script always checks `/api/v1/health` and `/api/v1/version`. It checks login and `/api/v1/dashboard` only when an explicitly provisioned test account is supplied through `SMOKE_EMAIL` and `SMOKE_PASSWORD`; it never prints that password. A 401/403 from the optional authenticated probe is a test failure, not a reason to weaken authorization.
+
+### Versioned API contract
+
+The v1 contract is `docs/openapi/v1/openapi.json` (OpenAPI 3.1.0, base `/api/v1`). It covers health/version, session auth, dashboard, subscription, profile, accounting settings, branches, warehouses, and the local license activation boundary. Run `php scripts/lint-openapi.php` in CI and before a release. This is a dependency-free structural/route sanity check; a full external OpenAPI validator and live contract/drift test remain recommended in CI where a validator and a running application are available.
+
+### XAMPP / Apache
+
+1. Start MySQL and Apache in the XAMPP Control Panel. Create an empty `utf8mb4` database and a dedicated local application user with privileges only on that database. Never use MySQL `root` in `.env`.
+2. Point the Apache vhost `DocumentRoot` only at `<repo>/public`, enable `mod_rewrite`, and grant `AllowOverride All` for that directory. Never map the repository root, `.env`, `vendor`, or `storage` as a document root.
+3. Keep `.env` outside source control and outside any public directory. Set `APP_ENV=production`, `APP_DEBUG=false`, a unique `APP_KEY`, an HTTPS `APP_URL`, `SESSION_SECURE_COOKIE=true`, and the real MySQL/mail/queue/cache values. Do not copy secrets into `.env.example`.
+4. Install/build and migrate forward only:
+
+```text
+composer install --no-dev --optimize-autoloader
+npm ci && npm run build
+php artisan migrate --force
+php artisan optimize
+```
+
+Do not run `migrate:fresh`, `migrate:refresh`, or drop/recreate commands against an existing installation. Take a verified backup before migrations.
+
+### Queue, cache, and session drivers
+
+Production must use persistent, operator-managed services. The release gate rejects `QUEUE_CONNECTION=sync`, `CACHE_STORE=array`, and `SESSION_DRIVER=array`/`cookie` in production. The default `.env.example` uses database-backed queue/cache/session and therefore requires the corresponding Laravel tables and a worker. For Redis, configure the extension/service and use a persistent Redis namespace; do not put Redis passwords in command arguments or logs.
+
+For database queue:
+
+```text
+php artisan queue:work database --sleep=3 --tries=3 --timeout=120 --backoff=10,30,90
+php artisan queue:failed
+php artisan queue:retry all
+```
+
+Run the worker under a process supervisor (Windows Task Scheduler/NSSM for XAMPP, or systemd/Supervisor on Linux), with the project directory as working directory. Restart workers after deployment so they load the new code. Do not delete failed jobs until the failure is understood. Use `php artisan queue:restart` during a graceful rollout.
+
+Run Laravel's scheduler every minute. On XAMPP use Task Scheduler with `php.exe artisan schedule:run` and the project as start-in directory; on Linux use `* * * * * php /path/to/artisan schedule:run`. The scheduler must not be the only queue worker.
+
+### Backup and restore procedure
+
+Backups are created by `php artisan backup:database` or `scripts/backup.sh`. The command supports MySQL (`mysqldump --single-transaction ... | gzip`) and file-based SQLite development databases. It writes a per-artifact SHA-256 plus a JSON manifest (`ezaki-backup-v1`) containing driver, sizes, timestamps, and retention metadata; credentials are read from Laravel configuration through `MYSQL_PWD` and never appear in command-line arguments, manifests, or output. `--include-storage` adds a separate archive of `storage/app` so the local edition can preserve its database and private files as one installation set.
+
+Examples:
+
+```bash
+php artisan backup:database --dry-run
+php artisan backup:database --retention=14 --include-storage
+php artisan backup:restore storage/app/backups/ezaki-YYYYmmdd-HHMMSS-mysql.json --dry-run
+php artisan backup:restore storage/app/backups/ezaki-YYYYmmdd-HHMMSS-mysql.json --yes
+```
+
+The backup directory defaults to `storage/app/backups` and is ignored by Git. Retention deletes only old `ezaki-*` artifacts; `--retention=0` disables deletion. Operator-controlled `BACKUP_PRE_HOOK`, `BACKUP_POST_HOOK`, and `BACKUP_RETENTION_HOOK` may be used for local/offsite transfer or monitoring. Hooks are not a substitute for encryption, access control, or restore drills; they run with output suppressed and must never echo environment variables.
+
+Restore is deliberately destructive and requires an interactive confirmation or explicit `--yes`. It validates the manifest, confines artifacts to its directory, and verifies SHA-256. SQLite receives a timestamped `.pre-restore-*` safety copy before replacement. MySQL restore streams the verified dump to `mysql` without putting the password in arguments. After restore, run `php artisan migrate:status`, `php artisan release:preflight --production`, and `scripts/smoke.sh`. Do not claim a MySQL restore succeeded until it has been run against a real MySQL instance; the sandbox release checks only syntax, contract structure, and SQLite-capable code paths.
+
+Recommended policy for a single-site deployment: daily database plus private-storage backup, at least 14 retained local copies, and an encrypted/offsite copy with an operator-controlled hook. Target **RPO: 24 hours** for daily backups (or the documented schedule chosen by the operator) and target **RTO: 4 hours** for a tested local restore. These are targets, not proof: measure them during a restore drill and record actual dump, transfer, restore, migration, and smoke-test durations.
+
+### Rollback
+
+1. Put the site in maintenance mode or stop traffic and stop/restart queue workers so old jobs do not mutate the restored state.
+2. Preserve logs and the current backup; never overwrite the only backup.
+3. Roll back code to the last known-good commit/artifact, then restore the last verified database/storage manifest only when the failure requires data rollback. Code-only rollback is safer for additive migrations.
+4. For irreversible/schema changes, use a forward fix or a tested down/compatibility migration; do not improvise `migrate:rollback` on production.
+5. Run `migrate:status`, `release:preflight --production`, queue checks, and the smoke script. Confirm login, dashboard, a read-only core list, mail transport, and worker health before removing maintenance mode.
+6. Record the incident, manifest checksum, commit, actual RPO/RTO, and any failed jobs.
+
+### External verification still required
+
+This repository-only pass cannot provide XAMPP/Apache, SMTP, Redis, a persistent queue worker, production HTTPS, load/P95, or a real MySQL migration/backup/restore proof. Run those integration checks in the deployment environment/CI (including foreign keys, `EXPLAIN`, queue retry/failure behavior, and a restore drill) before release acceptance.
+
