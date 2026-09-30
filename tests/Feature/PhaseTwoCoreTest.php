@@ -401,7 +401,10 @@ class PhaseTwoCoreTest extends TestCase
         Sanctum::actingAs($user);
         $this->getJson('/api/v1/reports/debtors')->assertOk()->assertJsonFragment(['name' => 'At threshold'])->assertJsonFragment(['name' => 'Moving customer'])->assertJsonMissing(['name' => 'Below threshold']);
         $this->getJson('/api/v1/reports/debtors?from_date='.today()->toDateString().'&to_date='.today()->toDateString())->assertOk()->assertJsonFragment(['name' => 'Moving customer']);
-        $this->getJson('/api/v1/reports/debtors?from_date='.today()->addDay()->toDateString().'&to_date='.today()->addDays(2)->toDateString())->assertOk()->assertJsonMissing(['name' => 'Moving customer']);
+        $this->getJson('/api/v1/reports/debtors?from_date='.today()->addDay()->toDateString().'&to_date='.today()->addDays(2)->toDateString())
+            ->assertOk()
+            ->assertJsonFragment(['name' => 'Moving customer'])
+            ->assertJsonPath('total_outstanding', 174.99);
     }
 
     public function test_inventory_identity_is_company_scoped_and_opening_is_idempotent_per_warehouse(): void

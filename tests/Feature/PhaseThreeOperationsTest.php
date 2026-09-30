@@ -377,7 +377,11 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $context = $this->tenant('browser');
         $this->actingAs($context['user']);
-        $this->get('/operations/purchase/create')->assertOk()->assertInertia(fn ($page) => $page->component('Company/BillForm')->where('type', 'purchase'));
+        $this->get('/operations/purchase/create')->assertOk()->assertInertia(fn ($page) => $page
+            ->component('Company/BillForm')
+            ->where('type', 'purchase')
+            ->where('navigationCapabilities', fn ($capabilities): bool => (bool) $capabilities->get('inventory.view')
+                && (bool) $capabilities->get('accounting.view')));
         $this->get('/operations/sales/create')->assertOk()->assertInertia(fn ($page) => $page->component('Company/BillForm')->where('type', 'sales'));
         $this->get('/fleet')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Fleet')->has('vehicles')->has('maintenance'));
         $this->get('/fleet/reports/maintenance-period')->assertOk()->assertInertia(fn ($page) => $page->component('Company/FleetReport')->where('report', 'maintenance-period'));

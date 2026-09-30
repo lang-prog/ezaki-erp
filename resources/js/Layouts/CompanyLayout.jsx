@@ -12,7 +12,7 @@ const groups = [
 
 export default function CompanyLayout({ title, children }) {
     const page = usePage();
-    const { auth, locale, subscriptionWarning, capabilities = {}, isCompanyOwner = false } = page.props;
+    const { auth, locale, subscriptionWarning, navigationCapabilities = {}, isCompanyOwner = false } = page.props;
     const { url } = page;
     const isArabic = locale === 'ar';
     const user = auth?.user;
@@ -29,7 +29,7 @@ export default function CompanyLayout({ title, children }) {
             onClose={() => setSidebarOpen(false)}
             groups={groups}
             locale={locale}
-            capabilities={{ ...capabilities, 'company.owner': isCompanyOwner }}
+            capabilities={{ ...navigationCapabilities, 'company.owner': isCompanyOwner }}
             user={user}
             workspaceLabel={user?.company?.name || translate(locale, 'companyNameDefault')}
             workspaceHint={translate(locale, 'companyWorkspace')}

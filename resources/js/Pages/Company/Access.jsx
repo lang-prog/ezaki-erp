@@ -32,7 +32,7 @@ export default function Access({ roles, users, permissions, canViewActivity }) {
             body: body ? JSON.stringify(body) : undefined,
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.message ?? 'Request failed.');
+        if (!response.ok) throw new Error(data.message ?? t('requestFailed'));
         window.location.reload();
     }
 
@@ -61,14 +61,14 @@ export default function Access({ roles, users, permissions, canViewActivity }) {
     }
 
     return (
-        <CompanyLayout title="Users and access">
+        <CompanyLayout title={t('usersAccess')}>
             <h1 className="text-2xl font-semibold">{t('usersAccess')}</h1>
             {notice && <p role="alert" className="mt-4 border-l-4 border-red-700 bg-white p-3 text-sm">{notice}</p>}
             <section className="mt-8 border-y border-[#d7ddd5] py-5">
                 <h2 className="font-semibold">{t('users')}</h2>
                 <div className="mt-3 overflow-x-auto">
                     <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
-                        <thead><tr className="border-y border-[#d7ddd5] text-xs text-[#637067]"><th className="py-3 pr-4">Name / email</th><th className="py-3 pr-4">Registered</th><th className="py-3 pr-4">Last login</th><th className="py-3 pr-4">Successful logins</th><th className="py-3 pr-4">Failed attempts</th><th className="py-3 pr-4">Roles / status</th><th className="py-3">Actions</th></tr></thead>
+                        <thead><tr className="border-y border-[#d7ddd5] text-xs text-[#637067]"><th className="py-3 pr-4">{t('nameEmail')}</th><th className="py-3 pr-4">{t('registered')}</th><th className="py-3 pr-4">{t('lastLogin')}</th><th className="py-3 pr-4">{t('successfulLogins')}</th><th className="py-3 pr-4">{t('failedAttempts')}</th><th className="py-3 pr-4">{t('roles')} / {t('status')}</th><th className="py-3">{t('actions')}</th></tr></thead>
                         <tbody>{users.data.map((item) => <tr key={item.id} className="border-b border-[#d7ddd5] align-top">
                             <td className="py-3 pr-4"><span className="font-medium">{item.name}</span><br /><span className="text-xs text-[#637067]">{item.email}</span></td>
                             <td className="py-3 pr-4">{item.created_at ? new Date(item.created_at).toLocaleDateString() : '-'}</td>
@@ -77,16 +77,16 @@ export default function Access({ roles, users, permissions, canViewActivity }) {
                             <td className="py-3 pr-4">{item.failed_login_attempts}</td>
                             <td className="py-3 pr-4">{item.roles.join(', ')}<br /><span className="text-xs text-[#637067]">{item.status}</span></td>
                             <td className="py-3"><div className="flex flex-wrap gap-2">
-                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => setEditing({ ...item, roles: item.role_ids, permissions: item.direct_permissions })} className="underline">Edit</button>}
-                                <Link href={`/settings/users/${item.id}`} className="underline">Profile</Link>
-                                {canViewActivity && <Link href={`/settings/users/${item.id}/activity`} className="underline">Activity</Link>}
-                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => changeStatus(item)} className="underline">{item.status === 'active' ? 'Deactivate' : 'Activate'}</button>}
-                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => { setResetting(item); setResetPassword(''); }} className="underline">Reset password</button>}
+                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => setEditing({ ...item, roles: item.role_ids, permissions: item.direct_permissions })} className="underline">{t('edit')}</button>}
+                                <Link href={`/settings/users/${item.id}`} className="underline">{t('profile')}</Link>
+                                {canViewActivity && <Link href={`/settings/users/${item.id}/activity`} className="underline">{t('activity')}</Link>}
+                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => changeStatus(item)} className="underline">{item.status === 'active' ? t('deactivate') : t('activate')}</button>}
+                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => { setResetting(item); setResetPassword(''); }} className="underline">{t('resetPassword')}</button>}
                             </div></td>
                         </tr>)}</tbody>
                     </table>
                 </div>
-                <nav aria-label="User list pages" className="mt-3 flex gap-2 text-sm">{users.links.map((link, index) => {
+                <nav aria-label={t('userListPages')} className="mt-3 flex gap-2 text-sm">{users.links.map((link, index) => {
                     const label = link.label.replace(/<[^>]*>/g, '').replace(/&laquo;|&raquo;/g, '').trim();
                     return link.url ? <Link key={index} href={link.url} className="border border-[#c9d0c8] px-2 py-1">{label}</Link> : <span key={index} className="px-2 py-1 text-[#8a928b]">{label}</span>;
                 })}</nav>
@@ -102,19 +102,19 @@ export default function Access({ roles, users, permissions, canViewActivity }) {
                 </form>
             </section>
             {editing && <section className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4"><form onSubmit={updateUser} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto bg-white p-6 shadow-xl">
-                <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">Edit {editing.name}</h2><button type="button" onClick={() => setEditing(null)} aria-label="Close edit form">×</button></div>
-                <div className="mt-5 grid gap-3 sm:grid-cols-2"><input aria-label="First name" value={editing.first_name ?? ''} onChange={(event) => setEditing({ ...editing, first_name: event.target.value })} placeholder="First name" className="border border-[#c9d0c8] px-3 py-2" /><input aria-label="Second name" value={editing.second_name ?? ''} onChange={(event) => setEditing({ ...editing, second_name: event.target.value })} placeholder="Second name" className="border border-[#c9d0c8] px-3 py-2" /><input aria-label="Email" type="email" value={editing.email} onChange={(event) => setEditing({ ...editing, email: event.target.value })} className="border border-[#c9d0c8] px-3 py-2 sm:col-span-2" /></div>
-                <label className="mt-5 block text-sm font-medium">Roles<select multiple value={editing.roles} onChange={(event) => setEditing({ ...editing, roles: Array.from(event.target.selectedOptions, (option) => Number(option.value)) })} className="mt-2 min-h-24 w-full border border-[#c9d0c8] bg-white px-3 py-2">{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+                <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">{t('editUser')} · {editing.name}</h2><button type="button" onClick={() => setEditing(null)} aria-label={t('close')}>×</button></div>
+                <div className="mt-5 grid gap-3 sm:grid-cols-2"><input aria-label={t('firstName')} value={editing.first_name ?? ''} onChange={(event) => setEditing({ ...editing, first_name: event.target.value })} placeholder={t('firstName')} className="border border-[#c9d0c8] px-3 py-2" /><input aria-label={t('secondName')} value={editing.second_name ?? ''} onChange={(event) => setEditing({ ...editing, second_name: event.target.value })} placeholder={t('secondName')} className="border border-[#c9d0c8] px-3 py-2" /><input aria-label={t('email')} type="email" value={editing.email} onChange={(event) => setEditing({ ...editing, email: event.target.value })} className="border border-[#c9d0c8] px-3 py-2 sm:col-span-2" /></div>
+                <label className="mt-5 block text-sm font-medium">{t('roles')}<select multiple value={editing.roles} onChange={(event) => setEditing({ ...editing, roles: Array.from(event.target.selectedOptions, (option) => Number(option.value)) })} className="mt-2 min-h-24 w-full border border-[#c9d0c8] bg-white px-3 py-2">{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
                 <div className="mt-4 grid gap-4">{Object.entries(permissionGroups).map(([module, items]) => <fieldset key={module}><legend className="mb-2 text-xs font-semibold uppercase text-[#637067]">{module}</legend><div className="grid gap-2 sm:grid-cols-2">{items.map(({ name }) => <label key={name} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={(editing.permissions ?? []).includes(name)} onChange={(event) => setEditing({ ...editing, permissions: event.target.checked ? [...(editing.permissions ?? []), name] : editing.permissions.filter((permission) => permission !== name) })} />{name}</label>)}</div></fieldset>)}</div>
-                <button className="mt-5 bg-[#34795c] px-4 py-2 text-white">Save user</button>
+                <button className="mt-5 bg-[#34795c] px-4 py-2 text-white">{t('saveUser')}</button>
             </form></section>}
-            {resetting && <section className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4"><form onSubmit={submitReset} className="w-full max-w-md bg-white p-6 shadow-xl"><div className="flex items-center justify-between"><h2 className="font-semibold">Reset password for {resetting.name}</h2><button type="button" onClick={() => setResetting(null)} aria-label="Close password form">×</button></div><input autoComplete="new-password" aria-label="New password" type="password" minLength="8" required value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} className="mt-5 w-full border border-[#c9d0c8] px-3 py-2" /><button className="mt-4 bg-[#34795c] px-4 py-2 text-white">Update password</button></form></section>}
+            {resetting && <section className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4"><form onSubmit={submitReset} className="w-full max-w-md bg-white p-6 shadow-xl"><div className="flex items-center justify-between"><h2 className="font-semibold">{t('resetPasswordFor')} {resetting.name}</h2><button type="button" onClick={() => setResetting(null)} aria-label={t('close')}>×</button></div><input autoComplete="new-password" aria-label={t('newPassword')} type="password" minLength="8" required value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} className="mt-5 w-full border border-[#c9d0c8] px-3 py-2" /><button className="mt-4 bg-[#34795c] px-4 py-2 text-white">{t('updatePassword')}</button></form></section>}
             <section className="mt-8 border-b border-[#d7ddd5] pb-6">
                 <h2 className="font-semibold">{t('customRole')}</h2>
                 <form onSubmit={createRole} className="mt-4">
                     <input aria-label={t('roleName')} placeholder={t('roleName')} value={roleName} onChange={(event) => setRoleName(event.target.value)} className="w-full max-w-sm border border-[#c9d0c8] bg-white px-3 py-2" />
                     <div className="mt-4 grid gap-4">{Object.entries(permissionGroups).map(([module, items]) => <fieldset key={module}><legend className="mb-2 text-xs font-semibold uppercase text-[#637067]">{module}</legend><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{items.map(({ name }) => <label key={name} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selectedPermissions.includes(name)} onChange={(event) => setSelectedPermissions(event.target.checked ? [...selectedPermissions, name] : selectedPermissions.filter((item) => item !== name))} />{name}</label>)}</div></fieldset>)}</div>
-                    <button className="mt-4 border border-[#34795c] px-4 py-2 text-sm">Create role</button>
+                    <button className="mt-4 border border-[#34795c] px-4 py-2 text-sm">{t('createRole')}</button>
                 </form>
             </section>
         </CompanyLayout>

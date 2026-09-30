@@ -1,7 +1,7 @@
 <?php
 
-use App\Http\Controllers\Api\V1\AuthenticationController;
 use App\Http\Controllers\Api\V1\AccountingSettingsController;
+use App\Http\Controllers\Api\V1\AuthenticationController;
 use App\Http\Controllers\Api\V1\CompanyProfileController;
 use App\Http\Controllers\Api\V1\CoreErpController;
 use App\Http\Controllers\Api\V1\LocalLicenseController;

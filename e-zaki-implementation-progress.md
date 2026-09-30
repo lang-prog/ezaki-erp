@@ -504,3 +504,24 @@ External acceptance boundary:
 
 - `F2` remains intentionally `DEFERRED`: the pure type+diameter schema cutover requires historical-data mapping and is not necessary for the current compatibility model.
 - Per the binding backlog rule, items that require operator-visible MySQL/XAMPP/browser evidence remain `IN_PROGRESS` in `editandnew.md` until the operator runs the additive migrations and completes the supplied acceptance checklist. No `.env` was read and no destructive migration/reset command was run.
+
+
+### Senior accounting, security, platform and UI/UX remediation — 2026-09-30
+
+A multi-discipline review was completed against the master prompt, SRS, implementation log, and `editandnew.md`. The implementation now includes owner-selectable purchase inventory weight policy with a post-first-approval lock; atomic approve/revise/reverse document lifecycle; weighted-average inventory valuation and COGS; VAT input/output and cash/credit/partial settlement posting; carry-forward receivable/payable reporting; hardened inventory identity and tenant-owned foreign keys; complete fleet trip/expense/maintenance lifecycle and profitability reporting; login lockout, session revocation and API throttles; transactional coupon redemption; auditable local-license lifecycle; automatic subscription archiving; OpenAPI/preflight/backup/restore release tooling; and an accessible responsive RTL/LTR visual shell.
+
+The final visual pass also fixed a navigation architecture defect: page-specific action capabilities had been overwriting global navigation capabilities, which made sidebar items disappear on bill and other forms. `navigationCapabilities` is now shared independently and has both a regression test and browser evidence. Missing localization keys and remaining high-visibility English actions in company access, profile, branches, parties, login and billing screens were corrected.
+
+Final verification evidence:
+
+- `vendor/bin/phpunit` — **87 tests, 1061 assertions, 0 failures**.
+- `vendor/bin/pint --test` — **151 files passed**.
+- `composer validate --no-check-publish` — valid.
+- `npm run build` — Vite 6.4.3 production build passed with **804 modules**.
+- `npm audit --omit=optional` — **0 vulnerabilities**.
+- `php scripts/lint-openapi.php` — **12 paths, 14 operations, OpenAPI 1.0.0 contract passed**.
+- Fresh SQLite migration — every migration passed.
+- Backup/restore — checksummed SQLite backup, dry-run verification, actual restore, and migration status passed.
+- Browser QA — dashboard, accounting policy, purchase form, operations, inventory, accounting, and fleet returned HTTP 200 at 1440px; 390px mobile drawer passed; no horizontal overflow, console errors, or failed responses.
+
+Code-level implementation is complete for this remediation cycle. Production acceptance remains environment-specific: run additive migrations and the full test suite on a staging copy of the operator's MySQL database, configure production mail/HTTPS/CORS/cron/public license key, run `php artisan release:preflight --production`, and perform the documented owner/restricted-user/super-admin walkthrough before traffic cutover. Full details are in `SENIOR-REVIEW-COMPLETION.md`.

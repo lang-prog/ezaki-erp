@@ -37,6 +37,7 @@ class HandleInertiaRequests extends Middleware
             'auth' => ['user' => $user],
             'isCompanyOwner' => $user?->isCompanyOwner() ?? false,
             'capabilities' => $capabilities,
+            'navigationCapabilities' => $capabilities,
             'subscriptionStatus' => fn () => $request->attributes->get('subscription_status'),
             'subscriptionWarning' => fn () => $request->attributes->get('subscription_warning', false),
             'registrationOpen' => fn () => PlatformSetting::boolean('self_registration_open', config('registration.open')),
