@@ -105,6 +105,9 @@ Route::prefix('v1')->group(function (): void {
         Route::middleware('can:fleet.view')->get('/fleet/trips', [OperationsController::class, 'trips'])->middleware('throttle:api.read');
         Route::middleware('can:fleet.create')->post('/fleet/trips', [OperationsController::class, 'storeTrip'])->middleware('throttle:api.write');
         Route::middleware('can:fleet.update')->put('/fleet/trips/{trip}', [OperationsController::class, 'updateTrip'])->middleware('throttle:api.write');
+        Route::middleware('can:fleet.approve')->post('/fleet/trips/{trip}/approve', [OperationsController::class, 'approveTrip'])->middleware('throttle:api.write');
+        Route::middleware('can:fleet.approve')->post('/fleet/trips/{trip}/reverse', [OperationsController::class, 'reverseTrip'])->middleware('throttle:api.write');
+        Route::middleware('can:fleet.approve')->post('/fleet/trips/{trip}/cancel', [OperationsController::class, 'cancelTrip'])->middleware('throttle:api.write');
         Route::middleware('can:fleet.expenses')->get('/fleet/expenses', [OperationsController::class, 'expenses'])->middleware('throttle:api.read');
         Route::middleware('can:fleet.expenses')->post('/fleet/expenses', [OperationsController::class, 'storeExpense'])->middleware('throttle:api.write');
         Route::middleware('can:fleet.expenses')->put('/fleet/expenses/{expense}', [OperationsController::class, 'updateExpense'])->middleware('throttle:api.write');

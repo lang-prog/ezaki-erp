@@ -6,7 +6,9 @@ namespace Tests\Feature;
 
 use App\Models\Account;
 use App\Models\Company;
+use App\Models\Driver;
 use App\Models\FiscalPeriod;
+use App\Models\FleetExpense;
 use App\Models\JournalEntry;
 use App\Models\Plan;
 use App\Models\PurchaseBill;
@@ -581,5 +583,45 @@ class PhaseThreeOperationsTest extends TestCase
         $this->get('/inventory/export')->assertForbidden();
         $this->get('/fleet/reports/vehicle-pl')->assertOk();
         $this->get('/fleet/reports/vehicle-pl/export')->assertForbidden();
+    }
+
+    public function test_manual_trip_lifecycle_is_tenant_scoped_and_audited(): void
+    {
+        $context = $this->tenant('manual-trip-lifecycle');
+        $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'MAN-1', 'ownership' => 'company', 'status' => 'active']);
+        $driver = Driver::query()->create(['company_id' => $context['company']->id, 'name' => 'Driver One', 'status' => 'active']);
+        Sanctum::actingAs($context['user']);
+        $trip = $this->postJson('/api/v1/fleet/trips', ['vehicle_id' => $vehicle->id, 'driver_id' => $driver->id, 'branch_id' => $context['branch']->id, 'trip_type' => 'delivery', 'origin' => 'Cairo', 'destination' => 'Giza', 'trip_at' => now()->toDateTimeString(), 'distance' => 25, 'odometer_in' => 100, 'odometer_out' => 125, 'fuel_cost' => 40, 'road_fees' => 10, 'loading_fees' => 5, 'revenue' => 200])->assertCreated()->json('data.id');
+        $this->assertDatabaseHas('trips', ['id' => $trip, 'status' => 'draft', 'driver_id' => $driver->id]);
+        $this->postJson("/api/v1/fleet/trips/{$trip}/approve")->assertOk()->assertJsonPath('data.status', 'approved');
+        $this->postJson("/api/v1/fleet/trips/{$trip}/reverse")->assertOk()->assertJsonPath('data.status', 'reversed');
+        $this->assertDatabaseHas('audit_logs', ['company_id' => $context['company']->id, 'event' => 'trips.reversed']);
+        $cancelled = $this->postJson('/api/v1/fleet/trips', ['vehicle_id' => $vehicle->id, 'branch_id' => $context['branch']->id, 'trip_type' => 'return', 'trip_at' => now()->toDateTimeString()])->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/fleet/trips/{$cancelled}/cancel")->assertOk()->assertJsonPath('data.status', 'cancelled');
+    }
+
+    public function test_invoice_trip_fields_reverse_with_invoice_and_expense_uses_selected_account(): void
+    {
+        $context = $this->tenant('invoice-trip-expense');
+        $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'INV-1', 'ownership' => 'company', 'status' => 'active']);
+        $driver = Driver::query()->create(['company_id' => $context['company']->id, 'name' => 'Driver Two', 'status' => 'active']);
+        Sanctum::actingAs($context['user']);
+        $payload = $this->purchasePayload($context, 'TRIP-COMPLETE');
+        $payload += ['vehicle_id' => $vehicle->id, 'driver_id' => $driver->id, 'origin' => 'Port', 'destination' => 'Depot', 'distance' => 70, 'odometer_in' => 1000, 'odometer_out' => 1070, 'fuel_cost' => 60, 'road_fees' => 15, 'loading_fees' => 8];
+        $bill = $this->postJson('/api/v1/purchase-bills', $payload)->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/purchase-bills/{$bill}/approve")->assertOk();
+        $trip = DB::table('trips')->where('bill_type', 'purchase')->where('bill_id', $bill)->first();
+        $this->assertSame($driver->id, (int) $trip->driver_id);
+        $this->assertSame(70.0, (float) $trip->distance);
+        $this->assertSame(60.0, (float) $trip->fuel_cost);
+        $this->postJson("/api/v1/purchase-bills/{$bill}/reverse", ['date' => now()->toDateString()])->assertOk();
+        $this->assertDatabaseHas('trips', ['id' => $trip->id, 'status' => 'reversed']);
+        $this->getJson('/api/v1/fleet/reports/trip-cost')->assertOk()->assertJsonPath('data.rows', []);
+        $selectedAccount = Account::query()->where('company_id', $context['company']->id)->where('code', '1.2')->firstOrFail();
+        $expense = $this->postJson('/api/v1/fleet/expenses', ['vehicle_id' => $vehicle->id, 'expense_date' => now()->toDateString(), 'category' => 'fuel', 'amount' => 60, 'account_id' => $selectedAccount->id, 'document' => 'FUEL-1'])->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/fleet/expenses/{$expense}/approve")->assertOk();
+        $entryId = FleetExpense::query()->findOrFail($expense)->journal_entry_id;
+        $this->assertNotNull($entryId);
+        $this->assertDatabaseHas('journal_lines', ['journal_entry_id' => $entryId, 'account_id' => $selectedAccount->id, 'credit' => 60]);
     }
 }

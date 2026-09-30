@@ -178,6 +178,27 @@ class OperationsController
         return response()->json(['data' => $this->operations->updateTrip($this->company($request), $request->user(), $trip, $data)]);
     }
 
+    public function approveTrip(Request $request, Trip $trip): JsonResponse
+    {
+        $this->owned($trip, $request);
+
+        return response()->json(['data' => $this->operations->approveTrip($this->company($request), $request->user(), $trip)]);
+    }
+
+    public function reverseTrip(Request $request, Trip $trip): JsonResponse
+    {
+        $this->owned($trip, $request);
+
+        return response()->json(['data' => $this->operations->reverseTrip($this->company($request), $request->user(), $trip)]);
+    }
+
+    public function cancelTrip(Request $request, Trip $trip): JsonResponse
+    {
+        $this->owned($trip, $request);
+
+        return response()->json(['data' => $this->operations->cancelTrip($this->company($request), $request->user(), $trip)]);
+    }
+
     public function expenses(Request $request): JsonResponse
     {
         return response()->json(['data' => FleetExpense::query()->where('company_id', $this->company($request)->id)->latest()->paginate(25)]);
@@ -185,7 +206,7 @@ class OperationsController
 
     public function storeExpense(Request $request): JsonResponse
     {
-        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'trip_id' => ['nullable', 'integer'], 'expense_date' => ['required', 'date'], 'category' => ['required', 'in:fuel,maintenance,parts,oil,tires,tolls,loading,driver_wages,insurance,licensing,fines,other'], 'amount' => ['required', 'numeric', 'gt:0'], 'notes' => ['nullable', 'string']]);
+        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'trip_id' => ['nullable', 'integer'], 'expense_date' => ['required', 'date'], 'category' => ['required', 'in:fuel,maintenance,parts,oil,tires,tolls,loading,driver_wages,insurance,licensing,fines,other'], 'amount' => ['required', 'numeric', 'gt:0'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'account_id' => ['nullable', 'integer'], 'expense_account_id' => ['nullable', 'integer'], 'document' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string']]);
 
         return response()->json(['data' => $this->operations->createExpense($this->company($request), $request->user(), $data, false)], 201);
     }
@@ -235,7 +256,7 @@ class OperationsController
     public function updateExpense(Request $request, FleetExpense $expense): JsonResponse
     {
         $this->owned($expense, $request);
-        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'trip_id' => ['nullable', 'integer'], 'expense_date' => ['required', 'date'], 'category' => ['required', 'in:fuel,maintenance,parts,oil,tires,tolls,loading,driver_wages,insurance,licensing,fines,other'], 'amount' => ['required', 'numeric', 'gt:0'], 'notes' => ['nullable', 'string']]);
+        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'trip_id' => ['nullable', 'integer'], 'expense_date' => ['required', 'date'], 'category' => ['required', 'in:fuel,maintenance,parts,oil,tires,tolls,loading,driver_wages,insurance,licensing,fines,other'], 'amount' => ['required', 'numeric', 'gt:0'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'account_id' => ['nullable', 'integer'], 'expense_account_id' => ['nullable', 'integer'], 'document' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string']]);
 
         return response()->json(['data' => $this->operations->updateExpense($this->company($request), $request->user(), $expense, $data)]);
     }
@@ -282,11 +303,11 @@ class OperationsController
 
     private function purchaseData(Request $request): array
     {
-        return $request->validate(['branch_id' => ['required', 'integer'], 'warehouse_id' => ['required', 'integer'], 'supplier_id' => ['required', 'integer'], 'supplier_bill_number' => ['required', 'string', 'max:100'], 'supplier_bill_date' => ['required', 'date'], 'warehouse_entry_date' => ['nullable', 'date'], 'total_factory_weight' => ['required', 'numeric', 'gte:0'], 'total_actual_weight' => ['nullable', 'numeric', 'gte:0'], 'total_packages' => ['required', 'numeric', 'gte:0'], 'transport_cost' => ['nullable', 'numeric', 'gte:0'], 'loading_cost' => ['nullable', 'numeric', 'gte:0'], 'extra_cost' => ['nullable', 'numeric', 'gte:0'], 'discount' => ['nullable', 'numeric', 'gte:0'], 'vat_rate' => ['nullable', 'numeric', 'gte:0'], 'payment_method' => ['nullable', 'in:cash,credit,partial'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'paid_amount' => ['nullable', 'numeric', 'gte:0'], 'due_date' => ['nullable', 'date'], 'notes' => ['nullable', 'string'], 'vehicle_id' => ['nullable', 'integer'], 'external_vehicle_plate' => ['nullable', 'string'], 'external_driver_name' => ['nullable', 'string'], 'lines' => ['required', 'array', 'min:1'], 'lines.*.product_id' => ['nullable', 'integer'], 'lines.*.product_type_id' => ['nullable', 'integer'], 'lines.*.diameter_id' => ['nullable', 'integer'], 'lines.*.factory_weight' => ['required', 'numeric', 'gt:0'], 'lines.*.actual_weight' => ['nullable', 'numeric', 'gt:0'], 'lines.*.packages' => ['nullable', 'numeric', 'gte:0'], 'lines.*.unit_price' => ['required', 'numeric', 'gte:0']]);
+        return $request->validate(['branch_id' => ['required', 'integer'], 'warehouse_id' => ['required', 'integer'], 'supplier_id' => ['required', 'integer'], 'supplier_bill_number' => ['required', 'string', 'max:100'], 'supplier_bill_date' => ['required', 'date'], 'warehouse_entry_date' => ['nullable', 'date'], 'total_factory_weight' => ['required', 'numeric', 'gte:0'], 'total_actual_weight' => ['nullable', 'numeric', 'gte:0'], 'total_packages' => ['required', 'numeric', 'gte:0'], 'transport_cost' => ['nullable', 'numeric', 'gte:0'], 'loading_cost' => ['nullable', 'numeric', 'gte:0'], 'extra_cost' => ['nullable', 'numeric', 'gte:0'], 'discount' => ['nullable', 'numeric', 'gte:0'], 'vat_rate' => ['nullable', 'numeric', 'gte:0'], 'payment_method' => ['nullable', 'in:cash,credit,partial'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'paid_amount' => ['nullable', 'numeric', 'gte:0'], 'due_date' => ['nullable', 'date'], 'notes' => ['nullable', 'string'], 'vehicle_id' => ['nullable', 'integer'], 'driver_id' => ['nullable', 'integer'], 'origin' => ['nullable', 'string', 'max:255'], 'destination' => ['nullable', 'string', 'max:255'], 'distance' => ['nullable', 'numeric', 'gte:0'], 'odometer_in' => ['nullable', 'numeric', 'gte:0'], 'odometer_out' => ['nullable', 'numeric', 'gte:0'], 'fuel_cost' => ['nullable', 'numeric', 'gte:0'], 'road_fees' => ['nullable', 'numeric', 'gte:0'], 'loading_fees' => ['nullable', 'numeric', 'gte:0'], 'trip' => ['nullable', 'array'], 'trip.driver_id' => ['nullable', 'integer'], 'trip.origin' => ['nullable', 'string', 'max:255'], 'trip.destination' => ['nullable', 'string', 'max:255'], 'trip.distance' => ['nullable', 'numeric', 'gte:0'], 'trip.odometer_in' => ['nullable', 'numeric', 'gte:0'], 'trip.odometer_out' => ['nullable', 'numeric', 'gte:0'], 'trip.fuel_cost' => ['nullable', 'numeric', 'gte:0'], 'trip.road_fees' => ['nullable', 'numeric', 'gte:0'], 'trip.loading_fees' => ['nullable', 'numeric', 'gte:0'], 'external_vehicle_plate' => ['nullable', 'string'], 'external_driver_name' => ['nullable', 'string'], 'lines' => ['required', 'array', 'min:1'], 'lines.*.product_id' => ['nullable', 'integer'], 'lines.*.product_type_id' => ['nullable', 'integer'], 'lines.*.diameter_id' => ['nullable', 'integer'], 'lines.*.factory_weight' => ['required', 'numeric', 'gt:0'], 'lines.*.actual_weight' => ['nullable', 'numeric', 'gt:0'], 'lines.*.packages' => ['nullable', 'numeric', 'gte:0'], 'lines.*.unit_price' => ['required', 'numeric', 'gte:0']]);
     }
 
     private function salesData(Request $request): array
     {
-        return $request->validate(['branch_id' => ['required', 'integer'], 'warehouse_id' => ['required', 'integer'], 'customer_id' => ['required', 'integer'], 'customer_bill_number' => ['required', 'string', 'max:100'], 'bill_date' => ['required', 'date'], 'total_actual_weight' => ['required', 'numeric', 'gt:0'], 'transport_cost' => ['nullable', 'numeric', 'gte:0'], 'loading_cost' => ['nullable', 'numeric', 'gte:0'], 'extra_cost' => ['nullable', 'numeric', 'gte:0'], 'discount' => ['nullable', 'numeric', 'gte:0'], 'vat_rate' => ['nullable', 'numeric', 'gte:0'], 'payment_method' => ['required', 'in:cash,credit,partial'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'paid_amount' => ['nullable', 'numeric', 'gte:0'], 'due_date' => ['nullable', 'date'], 'notes' => ['nullable', 'string'], 'vehicle_id' => ['nullable', 'integer'], 'external_vehicle_plate' => ['nullable', 'string'], 'external_driver_name' => ['nullable', 'string'], 'lines' => ['required', 'array', 'min:1'], 'lines.*.product_id' => ['nullable', 'integer'], 'lines.*.product_type_id' => ['nullable', 'integer'], 'lines.*.diameter_id' => ['nullable', 'integer'], 'lines.*.actual_weight' => ['required', 'numeric', 'gt:0'], 'lines.*.packages' => ['nullable', 'numeric', 'gte:0'], 'lines.*.unit_price' => ['required', 'numeric', 'gte:0']]);
+        return $request->validate(['branch_id' => ['required', 'integer'], 'warehouse_id' => ['required', 'integer'], 'customer_id' => ['required', 'integer'], 'customer_bill_number' => ['required', 'string', 'max:100'], 'bill_date' => ['required', 'date'], 'total_actual_weight' => ['required', 'numeric', 'gt:0'], 'transport_cost' => ['nullable', 'numeric', 'gte:0'], 'loading_cost' => ['nullable', 'numeric', 'gte:0'], 'extra_cost' => ['nullable', 'numeric', 'gte:0'], 'discount' => ['nullable', 'numeric', 'gte:0'], 'vat_rate' => ['nullable', 'numeric', 'gte:0'], 'payment_method' => ['required', 'in:cash,credit,partial'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'paid_amount' => ['nullable', 'numeric', 'gte:0'], 'due_date' => ['nullable', 'date'], 'notes' => ['nullable', 'string'], 'vehicle_id' => ['nullable', 'integer'], 'driver_id' => ['nullable', 'integer'], 'origin' => ['nullable', 'string', 'max:255'], 'destination' => ['nullable', 'string', 'max:255'], 'distance' => ['nullable', 'numeric', 'gte:0'], 'odometer_in' => ['nullable', 'numeric', 'gte:0'], 'odometer_out' => ['nullable', 'numeric', 'gte:0'], 'fuel_cost' => ['nullable', 'numeric', 'gte:0'], 'road_fees' => ['nullable', 'numeric', 'gte:0'], 'loading_fees' => ['nullable', 'numeric', 'gte:0'], 'trip' => ['nullable', 'array'], 'trip.driver_id' => ['nullable', 'integer'], 'trip.origin' => ['nullable', 'string', 'max:255'], 'trip.destination' => ['nullable', 'string', 'max:255'], 'trip.distance' => ['nullable', 'numeric', 'gte:0'], 'trip.odometer_in' => ['nullable', 'numeric', 'gte:0'], 'trip.odometer_out' => ['nullable', 'numeric', 'gte:0'], 'trip.fuel_cost' => ['nullable', 'numeric', 'gte:0'], 'trip.road_fees' => ['nullable', 'numeric', 'gte:0'], 'trip.loading_fees' => ['nullable', 'numeric', 'gte:0'], 'external_vehicle_plate' => ['nullable', 'string'], 'external_driver_name' => ['nullable', 'string'], 'lines' => ['required', 'array', 'min:1'], 'lines.*.product_id' => ['nullable', 'integer'], 'lines.*.product_type_id' => ['nullable', 'integer'], 'lines.*.diameter_id' => ['nullable', 'integer'], 'lines.*.actual_weight' => ['required', 'numeric', 'gt:0'], 'lines.*.packages' => ['nullable', 'numeric', 'gte:0'], 'lines.*.unit_price' => ['required', 'numeric', 'gte:0']]);
     }
 }

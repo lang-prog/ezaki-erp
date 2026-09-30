@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Models\Account;
 use App\Models\BillRevision;
 use App\Models\Company;
 use App\Models\CustomerSupplier;
@@ -56,6 +57,7 @@ class OperationsService
                 'supplier_bill_date' => $data['supplier_bill_date'],
                 'warehouse_entry_date' => $data['warehouse_entry_date'] ?? null,
                 'vehicle_id' => $this->vehicleId($company, $data),
+                ...$this->billTripFields($company, $data),
                 'external_vehicle_plate' => $data['external_vehicle_plate'] ?? null,
                 'external_driver_name' => $data['external_driver_name'] ?? null,
                 'notes' => $data['notes'] ?? null,
@@ -98,6 +100,7 @@ class OperationsService
                 'customer_bill_number' => $data['customer_bill_number'],
                 'bill_date' => $data['bill_date'],
                 'vehicle_id' => $this->vehicleId($company, $data),
+                ...$this->billTripFields($company, $data),
                 'external_vehicle_plate' => $data['external_vehicle_plate'] ?? null,
                 'external_driver_name' => $data['external_driver_name'] ?? null,
                 'notes' => $data['notes'] ?? null,
@@ -233,6 +236,51 @@ class OperationsService
         return $trip;
     }
 
+    public function approveTrip(Company $company, User $actor, Trip $trip): Trip
+    {
+        return DB::transaction(function () use ($company, $actor, $trip): Trip {
+            $trip = Trip::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($trip->id);
+            if ($trip->status === 'approved') {
+                return $trip;
+            }
+            abort_if($trip->status !== 'draft', 409, 'Only draft trips can be approved.');
+            $trip->forceFill(['status' => 'approved', 'approved_by' => $actor->id, 'approved_at' => now()])->save();
+            $this->audit->record('trips.approved', $trip, $company->id, $actor->id);
+
+            return $trip->fresh();
+        });
+    }
+
+    public function reverseTrip(Company $company, User $actor, Trip $trip): Trip
+    {
+        return DB::transaction(function () use ($company, $actor, $trip): Trip {
+            $trip = Trip::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($trip->id);
+            if ($trip->status === 'reversed') {
+                return $trip;
+            }
+            abort_if($trip->status !== 'approved', 409, 'Only approved trips can be reversed.');
+            $trip->forceFill(['status' => 'reversed', 'reversed_by' => $actor->id, 'reversed_at' => now()])->save();
+            $this->audit->record('trips.reversed', $trip, $company->id, $actor->id);
+
+            return $trip->fresh();
+        });
+    }
+
+    public function cancelTrip(Company $company, User $actor, Trip $trip): Trip
+    {
+        return DB::transaction(function () use ($company, $actor, $trip): Trip {
+            $trip = Trip::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($trip->id);
+            if ($trip->status === 'cancelled') {
+                return $trip;
+            }
+            abort_if($trip->status !== 'draft', 409, 'Only draft trips can be cancelled.');
+            $trip->forceFill(['status' => 'cancelled', 'cancelled_by' => $actor->id, 'cancelled_at' => now()])->save();
+            $this->audit->record('trips.cancelled', $trip, $company->id, $actor->id);
+
+            return $trip->fresh();
+        });
+    }
+
     public function updateTrip(Company $company, User $actor, Trip $trip, array $data): Trip
     {
         abort_unless((int) $trip->company_id === (int) $company->id, 404);
@@ -328,7 +376,7 @@ class OperationsService
     public function createExpense(Company $company, User $actor, array $data, bool $approve = false): FleetExpense
     {
         $data = $this->expenseRelations($company, $data);
-        $expense = FleetExpense::query()->create(['company_id' => $company->id, ...$data, 'status' => 'draft']);
+        $expense = FleetExpense::query()->create(['company_id' => $company->id, 'created_by' => $actor->id, ...$data, 'status' => 'draft']);
         if ($approve) {
             return $this->approveExpense($company, $actor, $expense);
         }
@@ -344,7 +392,15 @@ class OperationsService
                 return $expense;
             }
             abort_if($expense->status !== 'draft', 409);
-            $entry = $this->accounting->postOperationalJournal($company, $actor, $expense->expense_date->toDateString(), 'Fleet expense '.$expense->category, FleetExpense::class, $expense->id, [['account_id' => $this->accountId($company, '4.2'), 'debit' => $expense->amount, 'credit' => 0, 'description' => $expense->category], ['account_id' => $this->accountId($company, '1.2'), 'debit' => 0, 'credit' => $expense->amount, 'description' => 'Fleet expense payment']]);
+            $debitAccount = $expense->expense_account_id
+                ? Account::query()->where('company_id', $company->id)->findOrFail($expense->expense_account_id)
+                : Account::query()->where('company_id', $company->id)->where('code', '4.2')->firstOrFail();
+            $creditAccount = $expense->account_id
+                ? Account::query()->where('company_id', $company->id)->findOrFail($expense->account_id)
+                : ($expense->cashbox_id || $expense->bank_id
+                    ? $this->accounting->paymentSourceAccount($company, $expense->toArray())
+                    : Account::query()->where('company_id', $company->id)->where('code', '1.2')->firstOrFail());
+            $entry = $this->accounting->postOperationalJournal($company, $actor, $expense->expense_date->toDateString(), 'Fleet expense '.$expense->category, FleetExpense::class, $expense->id, [['account_id' => $debitAccount->id, 'debit' => $expense->amount, 'credit' => 0, 'description' => $expense->category], ['account_id' => $creditAccount->id, 'debit' => 0, 'credit' => $expense->amount, 'description' => 'Fleet expense payment']]);
             $expense->forceFill(['status' => 'approved', 'journal_entry_id' => $entry->id])->save();
             $this->audit->record('fleet_expenses.approved', $expense, $company->id, $actor->id, ['journal_entry_id' => $entry->id]);
 
@@ -530,7 +586,10 @@ class OperationsService
         }
         $reversal = $this->accounting->reverseJournal($company, $actor, JournalEntry::query()->where('company_id', $company->id)->findOrFail($bill->journal_entry_id), $date, true);
         DB::table('bill_payment_allocations')->where('company_id', $company->id)->where('bill_type', $purchase ? 'purchase' : 'sales')->where('bill_id', $bill->id)->where('status', 'posted')->update(['status' => 'reversed', 'updated_at' => now()]);
-        Trip::query()->where('company_id', $company->id)->where('bill_type', $purchase ? 'purchase' : 'sales')->where('bill_id', $bill->id)->where('status', 'approved')->update(['status' => 'reversed', 'updated_at' => now()]);
+        Trip::query()->where('company_id', $company->id)->where('bill_type', $purchase ? 'purchase' : 'sales')->where('bill_id', $bill->id)->where('status', 'approved')->get()->each(function (Trip $trip) use ($company, $actor): void {
+            $trip->forceFill(['status' => 'reversed', 'reversed_by' => $actor->id, 'reversed_at' => now()])->save();
+            $this->audit->record('trips.reversed_from_bill', $trip, $company->id, $actor->id);
+        });
 
         return $reversal;
     }
@@ -686,6 +745,24 @@ class OperationsService
         return $data;
     }
 
+    private function billTripFields(Company $company, array $data): array
+    {
+        $trip = is_array($data['trip'] ?? null) ? $data['trip'] : [];
+        $value = static fn (string $key): mixed => array_key_exists($key, $data) ? $data[$key] : ($trip[$key] ?? null);
+
+        return [
+            'trip_driver_id' => $this->fleetRelationId('drivers', $company, $value('driver_id'), true),
+            'trip_origin' => $value('origin'),
+            'trip_destination' => $value('destination'),
+            'trip_distance' => $value('distance'),
+            'trip_odometer_in' => $value('odometer_in'),
+            'trip_odometer_out' => $value('odometer_out'),
+            'trip_fuel_cost' => (float) ($value('fuel_cost') ?? 0),
+            'trip_road_fees' => (float) ($value('road_fees') ?? 0),
+            'trip_loading_fees' => (float) ($value('loading_fees') ?? 0),
+        ];
+    }
+
     private function expenseRelations(Company $company, array $data): array
     {
         $data['vehicle_id'] = $this->fleetRelationId('vehicles', $company, $data['vehicle_id']);
@@ -694,6 +771,17 @@ class OperationsService
             $tripVehicle = (int) DB::table('trips')->where('id', $data['trip_id'])->value('vehicle_id');
             abort_unless($tripVehicle === (int) $data['vehicle_id'], 422, 'The selected trip does not belong to the selected vehicle.');
         }
+        foreach (['cashbox_id' => 'cashboxes', 'bank_id' => 'banks', 'account_id' => 'accounts', 'expense_account_id' => 'accounts'] as $field => $table) {
+            if (($data[$field] ?? null) !== null && ($data[$field] ?? '') !== '') {
+                $query = DB::table($table)->where('company_id', $company->id)->where('id', (int) $data[$field]);
+                if (in_array($field, ['cashbox_id', 'bank_id'], true)) {
+                    $query->where('is_active', true);
+                }
+                abort_unless($query->exists(), 404);
+            }
+        }
+        abort_if(! empty($data['account_id']) && (! empty($data['cashbox_id']) || ! empty($data['bank_id'])), 422, 'Choose one payment account, cashbox, or bank.');
+        abort_if(! empty($data['cashbox_id']) && ! empty($data['bank_id']), 422, 'Choose exactly one cashbox or bank.');
 
         return $data;
     }
@@ -716,7 +804,30 @@ class OperationsService
     {
         if (! $bill->vehicle_id) {
             return;
-        } $trip = Trip::query()->create(['company_id' => $company->id, 'vehicle_id' => $bill->vehicle_id, 'branch_id' => $bill->branch_id, 'trip_type' => $type, 'trip_at' => now(), 'bill_type' => $type, 'bill_id' => $bill->id, 'revenue' => $type === 'sales' ? $bill->total : 0, 'status' => 'approved']);
+        }
+        $date = $type === 'sales' ? $bill->bill_date : $bill->supplier_bill_date;
+        $trip = Trip::query()->create([
+            'company_id' => $company->id,
+            'vehicle_id' => $bill->vehicle_id,
+            'driver_id' => $bill->trip_driver_id,
+            'branch_id' => $bill->branch_id,
+            'trip_type' => $type,
+            'origin' => $bill->trip_origin,
+            'destination' => $bill->trip_destination,
+            'trip_at' => $date,
+            'bill_type' => $type,
+            'bill_id' => $bill->id,
+            'distance' => $bill->trip_distance,
+            'odometer_in' => $bill->trip_odometer_in,
+            'odometer_out' => $bill->trip_odometer_out,
+            'fuel_cost' => $bill->trip_fuel_cost,
+            'road_fees' => $bill->trip_road_fees,
+            'loading_fees' => $bill->trip_loading_fees,
+            'revenue' => $type === 'sales' ? $bill->total : 0,
+            'status' => 'approved',
+            'approved_by' => $actor->id,
+            'approved_at' => now(),
+        ]);
         $this->audit->record('trips.created_from_bill', $trip, $company->id, $actor->id);
     }
 
