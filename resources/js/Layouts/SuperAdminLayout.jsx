@@ -1,8 +1,44 @@
 import { Head, Link, usePage } from '@inertiajs/react';
+import { useEffect, useState } from 'react';
 import { translate } from '../i18n';
+import SidebarNav from '../Components/SidebarNav';
+
+const groups = [{ labelKey: 'platformManagement', items: [['platform.view', 'overview', '/super-admin', '▦'], ['platform.view', 'companies', '/super-admin#companies', '▣'], ['platform.view', 'plans', '/super-admin#plans', '◈'], ['platform.view', 'registrationRequests', '/super-admin#registrations', '▤'], ['platform.view', 'coupons', '/super-admin#coupons', '◎']] }];
 
 export default function SuperAdminLayout({ title, children }) {
     const { auth, locale } = usePage().props;
+    const { url } = usePage();
     const isArabic = locale === 'ar';
-    return <div className="app-shell laravel-shell super-laravel"><Head title={title} /><aside className="sidebar" style={{ background: '#251e3b' }}><div className="brand"><div className="brand-mark" style={{ background: '#a17bdd' }}>◆</div><div><strong>E‑Zaki</strong><span>PLATFORM CONTROL</span></div></div><div className="workspace" style={{ background: '#352b50' }}><div className="workspace-logo" style={{ background: '#e8defc', color: '#7653a8' }}>SA</div><div><strong>{locale === 'ar' ? 'إدارة المنصة' : 'Platform admin'}</strong><small>Super Admin</small></div></div><nav><div className="nav-group"><div className="nav-label">{locale === 'ar' ? 'إدارة المنصة' : 'Platform management'}</div><Link href="/super-admin" className="nav-item active"><b>▦</b><span>{translate(locale, 'overview')}</span></Link><Link href="/super-admin#companies" className="nav-item"><b>▣</b><span>{translate(locale, 'companies')}</span></Link><Link href="/super-admin#plans" className="nav-item"><b>◈</b><span>{translate(locale, 'plans')}</span></Link><Link href="/super-admin#registrations" className="nav-item"><b>▤</b><span>{translate(locale, 'registrationRequests')}</span></Link><Link href="/super-admin#coupons" className="nav-item"><b>◎</b><span>{translate(locale, 'coupons')}</span></Link></div></nav><div className="sidebar-footer"><div className="profile-mini"><div className="avatar avatar-purple">SA</div><div><strong>{auth?.user?.name}</strong><span>Super Admin</span></div></div></div></aside><main className="main-content"><header className="topbar"><div className="crumbs"><span>{translate(locale, 'platformAdmin')}</span><span>‹</span><strong>{title}</strong></div><div className="top-actions"><Link className="icon-button" href={`/locale/${isArabic ? 'en' : 'ar'}`} method="post" as="button"><span>{isArabic ? 'EN' : 'ع'}</span></Link><div className="top-user"><div className="avatar avatar-purple">SA</div><div><strong>{auth?.user?.name}</strong><span>Super Admin</span></div></div><Link className="icon-button" href="/logout" method="post" as="button">↪</Link></div></header><div className="page-body">{children}</div></main></div>;
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const user = auth?.user;
+
+    useEffect(() => setSidebarOpen(false), [url]);
+
+    return <div className="app-shell laravel-shell super-laravel">
+        <Head title={title} />
+        <SidebarNav
+            id="platform-sidebar"
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+            groups={groups}
+            locale={locale}
+            capabilities={{ 'platform.view': true }}
+            platform
+            user={user}
+            workspaceLabel={translate(locale, 'platformAdmin')}
+            workspaceHint="Super Admin"
+        />
+        <main className="main-content" id="main-content">
+            <header className="topbar">
+                <button type="button" className="menu-toggle" onClick={() => setSidebarOpen(true)} aria-expanded={sidebarOpen} aria-controls="platform-sidebar" aria-label={translate(locale, 'openMenu')}>☰</button>
+                <div className="crumbs"><span>{translate(locale, 'platformAdmin')}</span><span aria-hidden="true">‹</span><strong>{title}</strong></div>
+                <div className="top-actions">
+                    <Link className="icon-button language-switch" href={`/locale/${isArabic ? 'en' : 'ar'}`} method="post" as="button" aria-label={translate(locale, 'switchLanguage')}><span>{isArabic ? 'EN' : 'ع'}</span></Link>
+                    <div className="top-user"><div className="avatar avatar-purple">SA</div><div><strong>{user?.name}</strong><span>Super Admin</span></div></div>
+                    <Link className="icon-button signout-button" href="/logout" method="post" as="button" title={translate(locale, 'signOut')} aria-label={translate(locale, 'signOut')}>↪</Link>
+                </div>
+            </header>
+            <div className="page-body">{children}</div>
+        </main>
+    </div>;
 }

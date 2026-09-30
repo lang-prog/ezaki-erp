@@ -1,6 +1,7 @@
 const strings = {
     en: {
-        companyWorkspace: 'Company workspace', platformAdmin: 'Platform administration',
+        companyWorkspace: 'Company workspace', companyNameDefault: 'Company workspace', companyAccount: 'Company account', companyUser: 'Company user', platformAdminShort: 'Platform admin', platformManagement: 'Platform management',
+        navOverview: 'Overview', navCompany: 'Company', navOperations: 'Operations', navReports: 'Reports', home: 'Home', openMenu: 'Open navigation', closeMenu: 'Close navigation', primaryNavigation: 'Primary navigation', switchLanguage: 'Switch language', needHelp: 'Need help?', contactSupport: 'Contact support',
         companySignIn: 'Company sign in', platformSignIn: 'Platform sign in',
         companySignInCopy: 'Sign in to your company account.', platformSignInCopy: 'Manage platform access and company onboarding.',
         signIn: 'Sign in', email: 'Email', password: 'Password', rememberMe: 'Remember me',
@@ -45,7 +46,8 @@ const strings = {
         cancel: 'Cancel', roles: 'Roles', permissions: 'Permissions', activity: 'Activity', activate: 'Activate', deactivate: 'Deactivate', resetPassword: 'Reset password', saveUser: 'Save user', close: 'Close', firstName: 'First name', secondName: 'Second name',
     },
     ar: {
-        companyWorkspace: 'مساحة عمل الشركة', platformAdmin: 'إدارة المنصة',
+        companyWorkspace: 'مساحة عمل الشركة', companyNameDefault: 'مساحة عمل الشركة', companyAccount: 'حساب الشركة', companyUser: 'مستخدم الشركة', platformAdminShort: 'مدير المنصة', platformManagement: 'إدارة المنصة',
+        navOverview: 'نظرة عامة', navCompany: 'الشركة', navOperations: 'العمليات', navReports: 'التقارير', home: 'الرئيسية', openMenu: 'فتح القائمة', closeMenu: 'إغلاق القائمة', primaryNavigation: 'التنقل الرئيسي', switchLanguage: 'تغيير اللغة', needHelp: 'هل تحتاج مساعدة؟', contactSupport: 'تواصل مع الدعم',
         companySignIn: 'دخول الشركة', platformSignIn: 'دخول المنصة',
         companySignInCopy: 'سجّل الدخول إلى حساب شركتك.', platformSignInCopy: 'إدارة المنصة وطلبات انضمام الشركات.',
         signIn: 'تسجيل الدخول', email: 'البريد الإلكتروني', password: 'كلمة المرور', rememberMe: 'تذكرني',

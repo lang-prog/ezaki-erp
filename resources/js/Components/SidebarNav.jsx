@@ -1,5 +1,5 @@
 import { Link, usePage } from '@inertiajs/react';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { translate } from '../i18n';
 
 function isActiveUrl(href, currentUrl) {
@@ -13,11 +13,32 @@ function isActiveUrl(href, currentUrl) {
 export default function SidebarNav({ id, open, onClose, groups, locale, capabilities = {}, platform = false, user, workspaceLabel, workspaceHint }) {
     const { url } = usePage();
     const currentUrl = typeof window !== 'undefined' ? `${url || window.location.pathname}${window.location.hash}` : url;
+    const sidebarRef = useRef(null);
+    const lastFocusedRef = useRef(null);
 
     useEffect(() => {
         if (!open) return undefined;
+        lastFocusedRef.current = document.activeElement;
+        const firstControl = sidebarRef.current?.querySelector('button, a, [tabindex="0"]');
+        firstControl?.focus();
         const handleKeyDown = (event) => {
-            if (event.key === 'Escape') onClose();
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                onClose();
+                return;
+            }
+            if (event.key !== 'Tab' || !sidebarRef.current) return;
+            const controls = [...sidebarRef.current.querySelectorAll('button, a, [tabindex="0"]')].filter((element) => !element.hasAttribute('disabled'));
+            if (!controls.length) return;
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
         };
         document.addEventListener('keydown', handleKeyDown);
         const previousOverflow = document.body.style.overflow;
@@ -25,6 +46,7 @@ export default function SidebarNav({ id, open, onClose, groups, locale, capabili
         return () => {
             document.removeEventListener('keydown', handleKeyDown);
             document.body.style.overflow = previousOverflow;
+            lastFocusedRef.current?.focus?.();
         };
     }, [open, onClose]);
 
@@ -32,7 +54,7 @@ export default function SidebarNav({ id, open, onClose, groups, locale, capabili
 
     return <>
         <div className={`sidebar-backdrop ${open ? 'is-visible' : ''}`} onClick={onClose} aria-hidden="true" />
-        <aside id={id} className={`sidebar ${platform ? 'sidebar--platform' : ''} ${open ? 'open' : ''}`} aria-label={workspaceLabel}>
+        <aside ref={sidebarRef} id={id} className={`sidebar ${platform ? 'sidebar--platform' : ''} ${open ? 'open' : ''}`} aria-label={workspaceLabel} aria-hidden={!open ? undefined : false}>
             <div className="brand">
                 <div className="brand-mark" aria-hidden="true">◆</div>
                 <div><strong>E‑Zaki</strong><span>{platform ? 'PLATFORM CONTROL' : 'ERP / BUSINESS OS'}</span></div>
