@@ -62,6 +62,7 @@ Route::prefix('v1')->group(function (): void {
         Route::middleware('can:parties.create')->post('/parties', [CoreErpController::class, 'createParty'])->middleware('throttle:api.write');
         Route::middleware('can:parties.update')->put('/parties/{party}', [CoreErpController::class, 'updateParty'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.view')->get('/accounts', [CoreErpController::class, 'accounts'])->middleware('throttle:api.read');
+        Route::middleware('can:accounting.create')->post('/accounts/initialize', [CoreErpController::class, 'initializeAccounts'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.view')->get('/accounts/{account}/statement', [CoreErpController::class, 'accountStatement'])->middleware('throttle:api.read');
         Route::middleware('can:accounting.create')->post('/accounts', [CoreErpController::class, 'createAccount'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.create')->put('/accounts/{account}', [CoreErpController::class, 'updateAccount'])->middleware('throttle:api.write');

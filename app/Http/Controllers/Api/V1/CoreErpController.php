@@ -261,7 +261,7 @@ class CoreErpController extends Controller
         return response()->json(['data' => DB::table('customer_suppliers')->where('company_id', $this->company($request)->id)->where('status', 'active')->when($request->filled('q'), fn ($query) => $query->where('name', 'like', '%'.$request->string('q')->toString().'%'))->orderBy('name')->paginate(25)]);
     }
 
-    public function createParty(Request $request, AccountingService $accounting, AccountingFoundationService $foundation): JsonResponse
+    public function createParty(Request $request, AccountingService $accounting): JsonResponse
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'], 'parent_account_id' => ['required', 'integer'],
@@ -271,7 +271,6 @@ class CoreErpController extends Controller
             'opening_balance' => ['nullable', 'numeric'], 'credit_limit' => ['nullable', 'numeric', 'min:0'],
         ]);
         abort_unless($data['is_customer'] || $data['is_supplier'], 422, 'Select customer, supplier, or both.');
-        $foundation->seedCompany($this->company($request));
 
         return response()->json(['data' => $accounting->createParty($this->company($request), $request->user(), $data)], 201);
     }
@@ -294,7 +293,16 @@ class CoreErpController extends Controller
     public function accounts(Request $request): JsonResponse
     {
         $company = $this->company($request);
-        app(AccountingFoundationService::class)->seedCompany($company);
+
+        return response()->json(['data' => Account::query()->where('company_id', $company->id)->with('parent:id,code,name')->orderBy('code')->get()]);
+    }
+
+    public function initializeAccounts(Request $request, AccountingFoundationService $foundation, AuditRecorder $audit): JsonResponse
+    {
+        $company = $this->company($request);
+        abort_unless($request->user()->can('accounting.create'), 403);
+        $foundation->seedCompany($company, $request->user());
+        $audit->record('accounts.initialized', $company, $company->id, $request->user()->id, [], $request);
 
         return response()->json(['data' => Account::query()->where('company_id', $company->id)->with('parent:id,code,name')->orderBy('code')->get()]);
     }
@@ -329,10 +337,9 @@ class CoreErpController extends Controller
         return response()->json(['data' => Cashbox::query()->where('company_id', $this->company($request)->id)->where('is_active', true)->with('account:id,code')->get()]);
     }
 
-    public function createCashbox(Request $request, AccountingService $accounting, AccountingFoundationService $foundation): JsonResponse
+    public function createCashbox(Request $request, AccountingService $accounting): JsonResponse
     {
         $data = $request->validate(['name' => ['required', 'string', 'max:255']]);
-        $foundation->seedCompany($this->company($request));
 
         return response()->json(['data' => $accounting->createCashbox($this->company($request), $request->user(), $data['name'])], 201);
     }
@@ -342,10 +349,9 @@ class CoreErpController extends Controller
         return response()->json(['data' => Bank::query()->where('company_id', $this->company($request)->id)->where('is_active', true)->with('account:id,code')->get()]);
     }
 
-    public function createBank(Request $request, AccountingService $accounting, AccountingFoundationService $foundation): JsonResponse
+    public function createBank(Request $request, AccountingService $accounting): JsonResponse
     {
         $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'account_number' => ['nullable', 'string', 'max:100']]);
-        $foundation->seedCompany($this->company($request));
 
         return response()->json(['data' => $accounting->createBank($this->company($request), $request->user(), $data['name'], $data['account_number'] ?? null)], 201);
     }

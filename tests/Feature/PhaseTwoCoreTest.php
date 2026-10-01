@@ -237,7 +237,7 @@ class PhaseTwoCoreTest extends TestCase
         $this->assertTrue($party->is_supplier);
     }
 
-    public function test_super_admin_company_provisioning_seeds_chart_without_diameters(): void
+    public function test_super_admin_company_provisioning_starts_with_empty_chart_until_owner_initializes_it(): void
     {
         $admin = User::query()->create(['name' => 'Setup Admin', 'email' => 'phase2-setup-admin@example.test', 'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'status' => 'active']);
         $plan = Plan::query()->create(['code' => 'setup-plan', 'name' => 'Setup Plan', 'duration' => 'yearly', 'price' => 10, 'is_active' => true]);
@@ -246,6 +246,11 @@ class PhaseTwoCoreTest extends TestCase
             'owner_password' => 'correct-horse-battery', 'notes' => null,
         ], $admin, $plan, null);
 
+        $this->assertDatabaseMissing('accounts', ['company_id' => $company->id]);
+        $this->assertDatabaseMissing('fiscal_periods', ['company_id' => $company->id]);
+        $owner = User::query()->where('company_id', $company->id)->where('account_type', 'company')->firstOrFail();
+        Sanctum::actingAs($owner);
+        $this->postJson('/api/v1/accounts/initialize')->assertOk();
         $this->assertDatabaseHas('accounts', ['company_id' => $company->id, 'code' => '1', 'name' => 'Assets']);
         $this->assertDatabaseHas('accounts', ['company_id' => $company->id, 'code' => '1.1', 'name' => 'Fixed assets']);
         $this->assertDatabaseHas('accounts', ['company_id' => $company->id, 'code' => '5.2', 'name' => 'Other revenue']);

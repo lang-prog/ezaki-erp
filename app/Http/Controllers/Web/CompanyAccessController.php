@@ -10,6 +10,7 @@ use App\Models\LoginLog;
 use App\Models\User;
 use App\Services\AuditRecorder;
 use App\Services\CompanyLimitService;
+use App\Services\CompanyProvisioningService;
 use App\Services\SessionRevocationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,9 +24,13 @@ use Spatie\Permission\Models\Role;
 
 class CompanyAccessController extends Controller
 {
-    public function manage(Request $request): Response
+    public function manage(Request $request, CompanyProvisioningService $provisioning): Response
     {
         $companyId = (int) $request->user()->company_id;
+        $provisioning->ensurePermissionCatalog();
+        if ($request->user()->isCompanyOwner()) {
+            $provisioning->syncCompanyOwnerPermissions($companyId);
+        }
 
         return Inertia::render('Company/Access', [
             'roles' => Role::query()->where('company_id', $companyId)->with('permissions')->get(),
@@ -43,11 +48,12 @@ class CompanyAccessController extends Controller
                 'roles' => $user->roles->pluck('name'),
                 'role_ids' => $user->roles->pluck('id'),
                 'direct_permissions' => $user->getDirectPermissions()->pluck('name'),
+                'effective_permissions' => $user->getAllPermissions()->pluck('name'),
                 'is_company_owner' => $user->roles->contains('name', 'Company Owner'),
                 'is_current_user' => $user->is($request->user()),
             ]),
             'canViewActivity' => $request->user()->can('users.view_activity'),
-            'permissions' => Permission::query()->orderBy('name')->get(['name']),
+            'permissions' => Permission::query()->where('guard_name', 'web')->orderBy('name')->get(['name']),
         ]);
     }
 
@@ -196,7 +202,8 @@ class CompanyAccessController extends Controller
     public function updateUser(Request $request, User $user, AuditRecorder $audit): JsonResponse
     {
         abort_unless((int) $user->company_id === (int) $request->user()->company_id, 404);
-        abort_if($user->hasRole('Company Owner') || $user->is($request->user()), 403);
+        abort_if($user->hasRole('Company Owner') && ! $user->is($request->user()), 403);
+        abort_if($user->is($request->user()) && ! $request->user()->isCompanyOwner(), 403);
         $companyId = (int) $request->user()->company_id;
         $data = $request->validate([
             'first_name' => ['required', 'string', 'max:120'],

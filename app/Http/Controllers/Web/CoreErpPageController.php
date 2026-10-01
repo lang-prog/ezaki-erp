@@ -141,7 +141,6 @@ class CoreErpPageController extends Controller
     private function partyPage(Request $request, AccountingFoundationService $foundation, ?string $kind): Response
     {
         $company = $request->attributes->get('company');
-        $foundation->seedCompany($company);
         $companyId = (int) $company->id;
 
         return Inertia::render('Company/Parties', [
@@ -155,7 +154,6 @@ class CoreErpPageController extends Controller
     public function accounting(Request $request, AccountingFoundationService $foundation): Response
     {
         $company = $request->attributes->get('company');
-        $foundation->seedCompany($company);
         $companyId = (int) $company->id;
 
         return Inertia::render('Company/Accounting', [

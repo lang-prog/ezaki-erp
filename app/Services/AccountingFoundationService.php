@@ -80,9 +80,10 @@ class AccountingFoundationService
 
     public function systemAccount(Company $company, string $key): Account
     {
-        $this->seedCompany($company);
+        $account = Account::query()->where('company_id', $company->id)->where('system_key', $key)->first();
+        abort_if(! $account, 422, 'Initialize the chart of accounts before posting transactions.');
 
-        return Account::query()->where('company_id', $company->id)->where('system_key', $key)->firstOrFail();
+        return $account;
     }
 
     public function nextChildCode(Company $company, Account $parent): string

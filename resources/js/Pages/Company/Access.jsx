@@ -2,21 +2,36 @@ import { useState } from 'react';
 import { Link, usePage } from '@inertiajs/react';
 import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
+import { permissionDescription, permissionLabel, permissionModule } from '../../permissions';
 
-function groupPermissions(permissions) {
+function groupPermissions(permissions, locale) {
     return permissions.reduce((groups, permission) => {
-        const [module] = permission.name.split('.', 1);
+        const module = permissionModule(locale, permission.name);
         groups[module] ??= [];
         groups[module].push(permission);
         return groups;
     }, {});
 }
 
+function PermissionGrid({ permissions, selected, onChange, locale, compact = false }) {
+    const groups = groupPermissions(permissions, locale);
+    const toggle = (name, checked) => onChange(checked ? [...new Set([...selected, name])] : selected.filter((permission) => permission !== name));
+    return <div className={`permission-grid ${compact ? 'permission-grid--compact' : ''}`}>
+        {Object.entries(groups).map(([module, items]) => <fieldset className="permission-group" key={module}><legend>{module}<span>{items.length}</span></legend><div className="permission-options">{items.map(({ name }) => {
+            const description = permissionDescription(locale, name);
+            return <label className="permission-option" key={name} title={description}><input type="checkbox" checked={selected.includes(name)} onChange={(event) => toggle(name, event.target.checked)} /><span className="permission-option__copy"><strong>{permissionLabel(locale, name)}</strong><small>{name}</small><em>{description}</em></span></label>;
+        })}</div></fieldset>)}
+    </div>;
+}
+
+function selectedIds(event) {
+    return Array.from(event.target.selectedOptions, (option) => Number(option.value));
+}
+
 export default function Access({ roles, users, permissions, canViewActivity }) {
     const { locale } = usePage().props;
     const t = (key) => translate(locale, key);
-    const permissionGroups = groupPermissions(permissions);
-    const [notice, setNotice] = useState('');
+    const [notice, setNotice] = useState({ type: '', message: '' });
     const [roleName, setRoleName] = useState('');
     const [selectedPermissions, setSelectedPermissions] = useState([]);
     const [user, setUser] = useState({ first_name: '', second_name: '', email: '', password: '', password_confirmation: '', roles: [], permissions: [] });
@@ -25,98 +40,28 @@ export default function Access({ roles, users, permissions, canViewActivity }) {
     const [resetPassword, setResetPassword] = useState('');
 
     async function request(path, method, body) {
-        const response = await fetch(`/api/v1/${path}`, {
-            method,
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content },
-            body: body ? JSON.stringify(body) : undefined,
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message ?? t('requestFailed'));
-        window.location.reload();
+        try {
+            const response = await fetch(`/api/v1/${path}`, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content ?? '' }, body: body ? JSON.stringify(body) : undefined });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.errors ? Object.values(data.errors).flat().join(' ') : data.message ?? t('requestFailed'));
+            window.location.reload();
+        } catch (error) { setNotice({ type: 'error', message: error.message }); }
     }
 
-    async function createRole(event) {
-        event.preventDefault();
-        try { await request('roles', 'POST', { name: roleName, permissions: selectedPermissions }); } catch (error) { setNotice(error.message); }
-    }
+    const beginEdit = (item) => setEditing({ ...item, roles: item.role_ids, permissions: item.effective_permissions ?? item.direct_permissions ?? [] });
+    const ownerCanEditSelf = (item) => item.is_current_user && item.is_company_owner;
 
-    async function createUser(event) {
-        event.preventDefault();
-        try { await request('users', 'POST', user); } catch (error) { setNotice(error.message); }
-    }
+    return <CompanyLayout title={t('usersAccess')}>
+        <div className="erp-page-header"><div><span className="erp-eyebrow">{t('navCompany')} / {t('usersAccess')}</span><h1>{t('usersAccess')}</h1><p>{t('accessPageIntro')}</p></div><div className="access-summary"><strong>{users.total ?? users.data.length}</strong><span>{t('users')}</span></div></div>
+        {notice.message && <div role="alert" className={`notice-card ${notice.type}`}>{notice.message}</div>}
 
-    async function updateUser(event) {
-        event.preventDefault();
-        try { await request(`users/${editing.id}`, 'PUT', editing); } catch (error) { setNotice(error.message); }
-    }
+        <section className="erp-section access-users-section"><div className="erp-section__header"><div><h2>{t('users')}</h2><p>{t('usersTableHint')}</p></div><span className="section-count">{users.data.length}</span></div><div className="erp-table-wrap"><table className="erp-table users-table"><thead><tr><th>{t('nameEmail')}</th><th>{t('roles')}</th><th>{t('registered')}</th><th>{t('lastLogin')}</th><th>{t('status')}</th><th>{t('actions')}</th></tr></thead><tbody>{users.data.map((item) => <tr key={item.id}><td><div className="user-table-cell"><span className="user-table-avatar">{item.name?.split(' ').map((part) => part[0]).join('').slice(0, 2)}</span><span><strong>{item.name}</strong><small>{item.email}</small></span></div></td><td><div className="role-pills">{item.roles.map((role) => <span key={role} className="role-pill">{role}</span>)}</div><small className="table-subtext">{item.effective_permissions?.length ?? 0} {t('permissions')}</small></td><td>{item.created_at ? new Date(item.created_at).toLocaleDateString(locale) : '—'}</td><td>{item.last_login_at ? new Date(item.last_login_at).toLocaleString(locale) : '—'}</td><td><span className={`status-pill ${item.status === 'active' ? 'success' : 'muted-pill'}`}><i />{item.status === 'active' ? t('active') : t('disabled')}</span></td><td><div className="row-actions">{(item.is_current_user || !item.is_company_owner) && <button className="erp-link-button" type="button" onClick={() => beginEdit(item)}>{item.is_current_user ? t('manageMyPermissions') : t('edit')}</button>}<Link className="erp-link" href={`/settings/users/${item.id}`}>{t('profile')}</Link>{canViewActivity && <Link className="erp-link" href={`/settings/users/${item.id}/activity`}>{t('activity')}</Link>}{!item.is_company_owner && !item.is_current_user && <><button className="erp-link-button" type="button" onClick={() => request(`users/${item.id}/status`, 'PATCH', { active: item.status !== 'active' })}>{item.status === 'active' ? t('deactivate') : t('activate')}</button><button className="erp-link-button" type="button" onClick={() => { setResetting(item); setResetPassword(''); }}>{t('resetPassword')}</button></>}</div></td></tr>)}</tbody></table></div><nav className="pagination" aria-label={t('userListPages')}>{users.links.map((link, index) => { const label = link.label.replace(/<[^>]*>/g, '').replace(/&laquo;|&raquo;/g, '').trim(); return link.url ? <Link key={index} href={link.url} className="erp-button erp-button--secondary">{label}</Link> : <span key={index} className="erp-button erp-button--secondary" aria-disabled="true">{label}</span>; })}</nav></section>
 
-    async function changeStatus(item) {
-        try { await request(`users/${item.id}/status`, 'PATCH', { active: item.status !== 'active' }); } catch (error) { setNotice(error.message); }
-    }
+        <div className="access-forms-grid"><section className="erp-section access-form-section"><div className="erp-section__header"><div><h2>{t('createUser')}</h2><p>{t('createUserHint')}</p></div></div><form className="admin-form access-form" onSubmit={(event) => { event.preventDefault(); request('users', 'POST', user); }}><div className="form-grid"><label className="field"><span>{t('firstName')}</span><input required value={user.first_name} onChange={(event) => setUser({ ...user, first_name: event.target.value })} /></label><label className="field"><span>{t('secondName')}</span><input required value={user.second_name} onChange={(event) => setUser({ ...user, second_name: event.target.value })} /></label><label className="field field--wide"><span>{t('email')}</span><input required type="email" value={user.email} onChange={(event) => setUser({ ...user, email: event.target.value })} /></label><label className="field"><span>{t('initialPassword')}</span><input required minLength="8" type="password" value={user.password} onChange={(event) => setUser({ ...user, password: event.target.value })} /></label><label className="field"><span>{t('confirmPassword')}</span><input required minLength="8" type="password" value={user.password_confirmation} onChange={(event) => setUser({ ...user, password_confirmation: event.target.value })} /></label><label className="field field--wide"><span>{t('assignRole')}</span><select required multiple value={user.roles} onChange={(event) => setUser({ ...user, roles: selectedIds(event) })}>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select><small>{t('multiSelectHint')}</small></label></div><div className="permission-editor"><h3>{t('directPermissions')}</h3><p>{t('directPermissionsHint')}</p><PermissionGrid permissions={permissions} selected={user.permissions} onChange={(value) => setUser({ ...user, permissions: value })} locale={locale} compact /></div><button className="erp-button erp-button--primary">{t('createUser')}</button></form></section>
 
-    async function submitReset(event) {
-        event.preventDefault();
-        try { await request(`users/${resetting.id}/password`, 'PUT', { password: resetPassword, password_confirmation: resetPassword }); } catch (error) { setNotice(error.message); }
-    }
+        <section className="erp-section access-form-section"><div className="erp-section__header"><div><h2>{t('customRole')}</h2><p>{t('customRoleHint')}</p></div></div><form className="admin-form access-form" onSubmit={(event) => { event.preventDefault(); request('roles', 'POST', { name: roleName, permissions: selectedPermissions }); }}><label className="field"><span>{t('roleName')}</span><input required value={roleName} onChange={(event) => setRoleName(event.target.value)} /></label><div className="permission-editor"><div className="permission-editor__heading"><div><h3>{t('permissions')}</h3><p>{t('permissionHelp')}</p></div><span className="permission-count">{selectedPermissions.length}</span></div><PermissionGrid permissions={permissions} selected={selectedPermissions} onChange={setSelectedPermissions} locale={locale} /></div><button className="erp-button erp-button--primary">{t('createRole')}</button></form></section></div>
 
-    return (
-        <CompanyLayout title={t('usersAccess')}>
-            <h1 className="text-2xl font-semibold">{t('usersAccess')}</h1>
-            {notice && <p role="alert" className="mt-4 border-l-4 border-red-700 bg-white p-3 text-sm">{notice}</p>}
-            <section className="mt-8 border-y border-[#d7ddd5] py-5">
-                <h2 className="font-semibold">{t('users')}</h2>
-                <div className="mt-3 overflow-x-auto">
-                    <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
-                        <thead><tr className="border-y border-[#d7ddd5] text-xs text-[#637067]"><th className="py-3 pr-4">{t('nameEmail')}</th><th className="py-3 pr-4">{t('registered')}</th><th className="py-3 pr-4">{t('lastLogin')}</th><th className="py-3 pr-4">{t('successfulLogins')}</th><th className="py-3 pr-4">{t('failedAttempts')}</th><th className="py-3 pr-4">{t('roles')} / {t('status')}</th><th className="py-3">{t('actions')}</th></tr></thead>
-                        <tbody>{users.data.map((item) => <tr key={item.id} className="border-b border-[#d7ddd5] align-top">
-                            <td className="py-3 pr-4"><span className="font-medium">{item.name}</span><br /><span className="text-xs text-[#637067]">{item.email}</span></td>
-                            <td className="py-3 pr-4">{item.created_at ? new Date(item.created_at).toLocaleDateString() : '-'}</td>
-                            <td className="py-3 pr-4">{item.last_login_at ? new Date(item.last_login_at).toLocaleString() : '-'}</td>
-                            <td className="py-3 pr-4">{canViewActivity ? <Link className="underline" href={`/settings/users/${item.id}/logins`}>{item.login_count}</Link> : item.login_count}</td>
-                            <td className="py-3 pr-4">{item.failed_login_attempts}</td>
-                            <td className="py-3 pr-4">{item.roles.join(', ')}<br /><span className="text-xs text-[#637067]">{item.status}</span></td>
-                            <td className="py-3"><div className="flex flex-wrap gap-2">
-                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => setEditing({ ...item, roles: item.role_ids, permissions: item.direct_permissions })} className="underline">{t('edit')}</button>}
-                                <Link href={`/settings/users/${item.id}`} className="underline">{t('profile')}</Link>
-                                {canViewActivity && <Link href={`/settings/users/${item.id}/activity`} className="underline">{t('activity')}</Link>}
-                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => changeStatus(item)} className="underline">{item.status === 'active' ? t('deactivate') : t('activate')}</button>}
-                                {!item.is_company_owner && !item.is_current_user && <button type="button" onClick={() => { setResetting(item); setResetPassword(''); }} className="underline">{t('resetPassword')}</button>}
-                            </div></td>
-                        </tr>)}</tbody>
-                    </table>
-                </div>
-                <nav aria-label={t('userListPages')} className="mt-3 flex gap-2 text-sm">{users.links.map((link, index) => {
-                    const label = link.label.replace(/<[^>]*>/g, '').replace(/&laquo;|&raquo;/g, '').trim();
-                    return link.url ? <Link key={index} href={link.url} className="border border-[#c9d0c8] px-2 py-1">{label}</Link> : <span key={index} className="px-2 py-1 text-[#8a928b]">{label}</span>;
-                })}</nav>
-                <form onSubmit={createUser} className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <input aria-label={locale === 'ar' ? 'الاسم الأول' : 'First name'} placeholder={locale === 'ar' ? 'الاسم الأول' : 'First name'} value={user.first_name} onChange={(event) => setUser({ ...user, first_name: event.target.value })} className="border border-[#c9d0c8] bg-white px-3 py-2" />
-                    <input aria-label={locale === 'ar' ? 'الاسم الثاني' : 'Second name'} placeholder={locale === 'ar' ? 'الاسم الثاني' : 'Second name'} value={user.second_name} onChange={(event) => setUser({ ...user, second_name: event.target.value })} className="border border-[#c9d0c8] bg-white px-3 py-2" />
-                    <input aria-label={t('email')} type="email" placeholder={t('email')} value={user.email} onChange={(event) => setUser({ ...user, email: event.target.value })} className="border border-[#c9d0c8] bg-white px-3 py-2" />
-                    <input aria-label={t('initialPassword')} type="password" placeholder={t('initialPassword')} value={user.password} onChange={(event) => setUser({ ...user, password: event.target.value })} className="border border-[#c9d0c8] bg-white px-3 py-2" />
-                    <input aria-label={t('confirmPassword')} type="password" placeholder={t('confirmPassword')} value={user.password_confirmation} onChange={(event) => setUser({ ...user, password_confirmation: event.target.value })} className="border border-[#c9d0c8] bg-white px-3 py-2" />
-                    <select aria-label={t('assignRole')} multiple value={user.roles} onChange={(event) => setUser({ ...user, roles: Array.from(event.target.selectedOptions, (option) => Number(option.value)) })} className="min-h-20 border border-[#c9d0c8] bg-white px-3 py-2 sm:col-span-2">{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select>
-                    <div className="grid gap-4 sm:col-span-2">{Object.entries(permissionGroups).map(([module, items]) => <fieldset key={module}><legend className="mb-2 text-xs font-semibold uppercase text-[#637067]">{module}</legend><div className="grid gap-2 sm:grid-cols-2">{items.map(({ name }) => <label key={name} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={user.permissions.includes(name)} onChange={(event) => setUser({ ...user, permissions: event.target.checked ? [...user.permissions, name] : user.permissions.filter((permission) => permission !== name) })} />{name}</label>)}</div></fieldset>)}</div>
-                    <button className="bg-[#34795c] px-3 py-2 text-white lg:col-span-2">{t('createUser')}</button>
-                </form>
-            </section>
-            {editing && <section className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4"><form onSubmit={updateUser} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto bg-white p-6 shadow-xl">
-                <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">{t('editUser')} · {editing.name}</h2><button type="button" onClick={() => setEditing(null)} aria-label={t('close')}>×</button></div>
-                <div className="mt-5 grid gap-3 sm:grid-cols-2"><input aria-label={t('firstName')} value={editing.first_name ?? ''} onChange={(event) => setEditing({ ...editing, first_name: event.target.value })} placeholder={t('firstName')} className="border border-[#c9d0c8] px-3 py-2" /><input aria-label={t('secondName')} value={editing.second_name ?? ''} onChange={(event) => setEditing({ ...editing, second_name: event.target.value })} placeholder={t('secondName')} className="border border-[#c9d0c8] px-3 py-2" /><input aria-label={t('email')} type="email" value={editing.email} onChange={(event) => setEditing({ ...editing, email: event.target.value })} className="border border-[#c9d0c8] px-3 py-2 sm:col-span-2" /></div>
-                <label className="mt-5 block text-sm font-medium">{t('roles')}<select multiple value={editing.roles} onChange={(event) => setEditing({ ...editing, roles: Array.from(event.target.selectedOptions, (option) => Number(option.value)) })} className="mt-2 min-h-24 w-full border border-[#c9d0c8] bg-white px-3 py-2">{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
-                <div className="mt-4 grid gap-4">{Object.entries(permissionGroups).map(([module, items]) => <fieldset key={module}><legend className="mb-2 text-xs font-semibold uppercase text-[#637067]">{module}</legend><div className="grid gap-2 sm:grid-cols-2">{items.map(({ name }) => <label key={name} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={(editing.permissions ?? []).includes(name)} onChange={(event) => setEditing({ ...editing, permissions: event.target.checked ? [...(editing.permissions ?? []), name] : editing.permissions.filter((permission) => permission !== name) })} />{name}</label>)}</div></fieldset>)}</div>
-                <button className="mt-5 bg-[#34795c] px-4 py-2 text-white">{t('saveUser')}</button>
-            </form></section>}
-            {resetting && <section className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4"><form onSubmit={submitReset} className="w-full max-w-md bg-white p-6 shadow-xl"><div className="flex items-center justify-between"><h2 className="font-semibold">{t('resetPasswordFor')} {resetting.name}</h2><button type="button" onClick={() => setResetting(null)} aria-label={t('close')}>×</button></div><input autoComplete="new-password" aria-label={t('newPassword')} type="password" minLength="8" required value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} className="mt-5 w-full border border-[#c9d0c8] px-3 py-2" /><button className="mt-4 bg-[#34795c] px-4 py-2 text-white">{t('updatePassword')}</button></form></section>}
-            <section className="mt-8 border-b border-[#d7ddd5] pb-6">
-                <h2 className="font-semibold">{t('customRole')}</h2>
-                <form onSubmit={createRole} className="mt-4">
-                    <input aria-label={t('roleName')} placeholder={t('roleName')} value={roleName} onChange={(event) => setRoleName(event.target.value)} className="w-full max-w-sm border border-[#c9d0c8] bg-white px-3 py-2" />
-                    <div className="mt-4 grid gap-4">{Object.entries(permissionGroups).map(([module, items]) => <fieldset key={module}><legend className="mb-2 text-xs font-semibold uppercase text-[#637067]">{module}</legend><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{items.map(({ name }) => <label key={name} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selectedPermissions.includes(name)} onChange={(event) => setSelectedPermissions(event.target.checked ? [...selectedPermissions, name] : selectedPermissions.filter((item) => item !== name))} />{name}</label>)}</div></fieldset>)}</div>
-                    <button className="mt-4 border border-[#34795c] px-4 py-2 text-sm">{t('createRole')}</button>
-                </form>
-            </section>
-        </CompanyLayout>
-    );
+        {editing && <div className="modal-backdrop"><form className="modal modal--wide" onSubmit={(event) => { event.preventDefault(); request(`users/${editing.id}`, 'PUT', editing); }}><div className="modal-header"><div><span className="erp-eyebrow">{editing.is_current_user ? t('myProfile') : t('editUser')}</span><h2>{editing.name}</h2><p>{editing.is_company_owner ? t('ownerPermissionHint') : t('editUserHint')}</p></div><button type="button" onClick={() => setEditing(null)} aria-label={t('close')}>×</button></div><div className="modal-body"><div className="form-grid"><label className="field"><span>{t('firstName')}</span><input required value={editing.first_name ?? ''} onChange={(event) => setEditing({ ...editing, first_name: event.target.value })} /></label><label className="field"><span>{t('secondName')}</span><input required value={editing.second_name ?? ''} onChange={(event) => setEditing({ ...editing, second_name: event.target.value })} /></label><label className="field field--wide"><span>{t('email')}</span><input required type="email" value={editing.email} onChange={(event) => setEditing({ ...editing, email: event.target.value })} /></label><label className="field field--wide"><span>{t('roles')}</span><select required multiple value={editing.roles} onChange={(event) => setEditing({ ...editing, roles: selectedIds(event) })}>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label></div><div className="permission-editor"><div className="permission-editor__heading"><div><h3>{t('permissions')}</h3><p>{t('permissionHelp')}</p></div><span className="permission-count">{editing.permissions.length}</span></div><PermissionGrid permissions={permissions} selected={editing.permissions} onChange={(value) => setEditing({ ...editing, permissions: value })} locale={locale} /></div></div><div className="modal-footer"><button type="button" className="erp-button erp-button--secondary" onClick={() => setEditing(null)}>{t('cancel')}</button><button className="erp-button erp-button--primary">{t('saveUser')}</button></div></form></div>}
+        {resetting && <div className="modal-backdrop"><form className="modal" onSubmit={(event) => { event.preventDefault(); request(`users/${resetting.id}/password`, 'PUT', { password: resetPassword, password_confirmation: resetPassword }); }}><div className="modal-header"><div><h2>{t('resetPasswordFor')} {resetting.name}</h2></div><button type="button" onClick={() => setResetting(null)} aria-label={t('close')}>×</button></div><div className="modal-body"><label className="field"><span>{t('newPassword')}</span><input required minLength="8" autoComplete="new-password" type="password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} /></label></div><div className="modal-footer"><button type="button" className="erp-button erp-button--secondary" onClick={() => setResetting(null)}>{t('cancel')}</button><button className="erp-button erp-button--primary">{t('updatePassword')}</button></div></form></div>}
+    </CompanyLayout>;
 }

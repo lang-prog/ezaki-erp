@@ -617,4 +617,27 @@ class PhaseOneFoundationTest extends TestCase
             'customer_binding' => 'customer-456',
         ])->assertStatus(503)->assertJsonStructure(['message']);
     }
+
+    public function test_company_owner_permission_catalog_is_resynchronized_for_new_modules(): void
+    {
+        $company = Company::query()->create(['name' => 'Permission Catalog Co', 'status' => 'active']);
+        $owner = User::query()->create([
+            'name' => 'Catalog Owner', 'email' => 'catalog-owner@example.test', 'password' => 'correct-horse-battery',
+            'company_id' => $company->id, 'account_type' => 'company', 'status' => 'active',
+        ]);
+        $permission = Permission::query()->firstOrCreate(['name' => 'users.view', 'guard_name' => 'web']);
+        $registrar = app(PermissionRegistrar::class);
+        $registrar->setPermissionsTeamId((int) $company->id);
+        $role = Role::query()->create(['name' => 'Company Owner', 'guard_name' => 'web', 'company_id' => $company->id]);
+        $role->givePermissionTo($permission);
+        $owner->assignRole($role);
+        $registrar->setPermissionsTeamId(null);
+
+        app(CompanyProvisioningService::class)->syncCompanyOwnerPermissions($company->id);
+
+        $this->assertTrue($role->fresh()->hasPermissionTo('fleet.maintenance'));
+        $registrar->setPermissionsTeamId((int) $company->id);
+        $this->assertTrue($owner->fresh()->hasPermissionTo('accounting.close_period'));
+        $registrar->setPermissionsTeamId(null);
+    }
 }

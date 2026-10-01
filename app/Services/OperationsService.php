@@ -125,7 +125,6 @@ class OperationsService
                 return $bill->load('lines');
             }
             $this->assertBill($company, $bill, 'draft');
-            $this->foundation->seedCompany($company);
             $bill->load('lines', 'supplier');
             $inventoryTotal = round((float) $bill->total - (float) $bill->vat_amount, 2);
             $allocated = 0.0;
@@ -157,7 +156,6 @@ class OperationsService
                 return $bill->load('lines');
             }
             $this->assertBill($company, $bill, 'draft');
-            $this->foundation->seedCompany($company);
             $bill->load('lines', 'customer');
             $cost = 0.0;
             foreach ($bill->lines as $line) {

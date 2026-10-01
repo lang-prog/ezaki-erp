@@ -4,6 +4,7 @@ import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
 
 const number = (value) => Number(value || 0);
+const dateInput = (value) => value ? String(value).slice(0, 10) : '';
 
 export default function BillForm({ type, document, branches, warehouses, parties, products = [], productTypes = [], diameters = [], vehicles = [], cashboxes = [], banks = [], accountingPolicy = {}, capabilities = {} }) {
     const { locale } = usePage().props;
@@ -17,7 +18,19 @@ export default function BillForm({ type, document, branches, warehouses, parties
     const empty = purchase
         ? { branch_id: '', warehouse_id: '', supplier_id: '', supplier_bill_number: '', supplier_bill_date: '', warehouse_entry_date: '', total_actual_weight: '', transport_cost: '', loading_cost: '', extra_cost: '', discount: '', payment_method: 'credit', paid_amount: '', cashbox_id: '', bank_id: '', due_date: '', vehicle_id: '', external_vehicle_plate: '', external_driver_name: '', notes: '', lines: [{ ...emptyLine }] }
         : { branch_id: '', warehouse_id: '', customer_id: '', customer_bill_number: '', bill_date: '', transport_cost: '', loading_cost: '', extra_cost: '', discount: '', payment_method: 'cash', paid_amount: '', cashbox_id: '', bank_id: '', due_date: '', vehicle_id: '', external_vehicle_plate: '', external_driver_name: '', notes: '', lines: [{ ...emptyLine }] };
-    const [form, setForm] = useState(document ? { ...empty, ...document, lines: document.lines?.length ? document.lines : [{ ...emptyLine }] } : empty);
+    const [form, setForm] = useState(() => {
+        if (!document) return { ...empty, lines: [{ ...emptyLine }] };
+
+        return {
+            ...empty,
+            ...document,
+            supplier_bill_date: dateInput(document.supplier_bill_date),
+            bill_date: dateInput(document.bill_date),
+            warehouse_entry_date: dateInput(document.warehouse_entry_date),
+            due_date: dateInput(document.due_date),
+            lines: document.lines?.length ? document.lines : [{ ...emptyLine }],
+        };
+    });
     const [notice, setNotice] = useState({ type: '', message: '' });
     const [warning, setWarning] = useState([]);
     const [allocation, setAllocation] = useState(null);

@@ -17,7 +17,7 @@ use Spatie\Permission\PermissionRegistrar;
 
 class CompanyProvisioningService
 {
-    private const PERMISSIONS = [
+    public const PERMISSIONS = [
         'dashboard.view',
         'users.view', 'users.create', 'users.update', 'users.deactivate', 'users.reset_password',
         'users.view_activity', 'roles.view', 'roles.create', 'roles.update', 'roles.assign_permissions',
@@ -33,6 +33,27 @@ class CompanyProvisioningService
         'sales.view', 'sales.create', 'sales.update', 'sales.approve', 'sales.update_approved', 'sales.cancel', 'sales.reverse', 'sales.print', 'sales.export',
         'fleet.view', 'fleet.create', 'fleet.update', 'fleet.approve', 'fleet.expenses', 'fleet.maintenance', 'fleet.export',
     ];
+
+    public function ensurePermissionCatalog(): void
+    {
+        foreach (self::PERMISSIONS as $permissionName) {
+            Permission::query()->firstOrCreate(['name' => $permissionName, 'guard_name' => 'web']);
+        }
+    }
+
+    public function syncCompanyOwnerPermissions(int $companyId): void
+    {
+        $registrar = app(PermissionRegistrar::class);
+        $registrar->setPermissionsTeamId($companyId);
+
+        try {
+            $this->ensurePermissionCatalog();
+            $permissions = Permission::query()->where('guard_name', 'web')->get();
+            Role::query()->where('company_id', $companyId)->where('name', 'Company Owner')->each(fn (Role $role) => $role->syncPermissions($permissions));
+        } finally {
+            $registrar->setPermissionsTeamId(null);
+        }
+    }
 
     public function approve(RegistrationRequest $registration, User $approver, Plan $plan): Company
     {
@@ -131,9 +152,7 @@ class CompanyProvisioningService
         $registrar->setPermissionsTeamId((int) $company->id);
 
         try {
-            foreach (self::PERMISSIONS as $permissionName) {
-                Permission::query()->firstOrCreate(['name' => $permissionName, 'guard_name' => 'web']);
-            }
+            $this->ensurePermissionCatalog();
             $ownerRole = Role::query()->create([
                 'name' => 'Company Owner', 'guard_name' => 'web', 'company_id' => $company->id,
             ]);
@@ -159,7 +178,6 @@ class CompanyProvisioningService
             $registrar->setPermissionsTeamId(null);
         }
 
-        app(AccountingFoundationService::class)->seedCompany($company);
         $startsAt = now();
         $basePrice = (float) $plan->price;
         $discount = $coupon ? ($coupon->discount_type === 'percent'
