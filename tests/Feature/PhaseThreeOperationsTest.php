@@ -483,6 +483,11 @@ class PhaseThreeOperationsTest extends TestCase
         $this->actingAs($context['user'])->get("/operations/purchase/{$bill}")->assertOk()->assertInertia(fn ($page) => $page->component('Company/BillView')->where('document.id', $bill)->has('revisions'));
         $this->get("/operations/purchase/{$bill}/print?mode=invoice")->assertOk()->assertSee('سعر الوحدة');
         $this->get("/operations/purchase/{$bill}/print?mode=delivery")->assertOk()->assertSee('بوليصة استلام مشتريات')->assertDontSee('سعر الوحدة')->assertDontSee('الإجمالي النهائي');
+
+        $sale = $this->postJson('/api/v1/sales-bills', $this->salesPayload($context, 'VIEW-SALE'))->assertCreated()->json('data.id');
+        $this->get("/operations/sales/{$sale}")->assertOk()->assertInertia(fn ($page) => $page->component('Company/BillView')->where('document.id', $sale)->has('revisions'));
+        $this->get("/operations/sales/{$sale}/print?mode=invoice")->assertOk()->assertSee('سعر الوحدة');
+        $this->get("/operations/sales/{$sale}/print?mode=delivery")->assertOk()->assertSee('بوليصة تسليم مبيعات')->assertDontSee('سعر الوحدة')->assertDontSee('الإجمالي النهائي');
     }
 
     public function test_company_navigation_targets_are_inertia_pages_and_server_protected(): void
