@@ -525,3 +525,10 @@ Final verification evidence:
 - Browser QA — dashboard, accounting policy, purchase form, operations, inventory, accounting, and fleet returned HTTP 200 at 1440px; 390px mobile drawer passed; no horizontal overflow, console errors, or failed responses.
 
 Code-level implementation is complete for this remediation cycle. Production acceptance remains environment-specific: run additive migrations and the full test suite on a staging copy of the operator's MySQL database, configure production mail/HTTPS/CORS/cron/public license key, run `php artisan release:preflight --production`, and perform the documented owner/restricted-user/super-admin walkthrough before traffic cutover. Full details are in `SENIOR-REVIEW-COMPLETION.md`.
+
+### Navigation architecture rebuild — 2026-10-01
+
+- Replaced the company and platform sidebars from scratch with a shared `WorkspaceLayout`, accessible `SidebarNav`, isolated `navigation.css` and permission-aware route registry (`resources/js/navigation.js`). Company navigation now includes actual sales/purchases/inventory/party/accounting/fleet/report/management destinations; platform anchors were corrected to their real sections. No database schema change.
+- Added Arabic/English search, collapsible groups, reliable route/hash active state, mobile RTL/LTR drawer with focus management and independent scrolling. Fixed deep-link account statements to prompt for an account instead of returning 404.
+- Corrected default landing after login and at `/` to select the first authorized page; staff without `dashboard.view` no longer lands on a forbidden dashboard.
+- Verification on an isolated SQLite demo: all 34 owner destinations (35 before removing a duplicate profile link) returned 200; platform anchor targets resolved; viewer with only `purchases.view` saw operations/purchases plus their own profile; 320–1920px visual checks, mobile RTL and LTR, zero JS errors. `node --test tests/navigation.test.mjs`: 5 passing. PHPUnit: 90 tests/1132 assertions. Pint, Vite build and npm audit (0 vulnerabilities) passed. See `NAVIGATION-REBUILD.md` for details and Windows run steps.

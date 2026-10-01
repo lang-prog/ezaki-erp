@@ -26,9 +26,9 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
     }
 
     return (
-        <SuperAdminLayout title="Platform overview">
+        <SuperAdminLayout title={t('platformOverview')}>
             <h1 className="text-2xl font-semibold">{t('platformOverview')}</h1>
-            <section className="mt-8 border-y border-[#ded8cf] py-5">
+            <section id="registration-settings" className="mt-8 border-y border-[#ded8cf] py-5">
                 <h2 className="font-semibold">{t('selfRegistration')}</h2>
                 <form onSubmit={(event) => submit(event, registrationForm, '/super-admin/registration-setting')} className="mt-3 flex items-center gap-4">
                     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={registrationForm.data.enabled} onChange={(event) => registrationForm.setData('enabled', event.target.checked)} />{t('openRequests')}</label>
@@ -45,7 +45,7 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
                     {!registrations.some((request) => request.status === 'pending') && <p className="py-4 text-sm text-[#68645f]">{t('noPending')}</p>}
                 </div>
             </section>
-            <section id="companies" className="mt-8">
+            <section id="new-company" className="mt-8">
                 <h2 className="font-semibold">Create company manually</h2>
                 <form onSubmit={(event) => submit(event, companyForm, '/super-admin/companies')} className="mt-3 grid gap-3 border-y border-[#ded8cf] py-5 sm:grid-cols-2 lg:grid-cols-3">
                     {[
@@ -63,7 +63,7 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
                     {companyForm.errors.owner_email && <p className="text-sm text-red-700 lg:col-span-3">{companyForm.errors.owner_email}</p>}
                 </form>
             </section>
-            <section id="plans" className="mt-8">
+            <section id="companies" className="mt-8">
                 <h2 className="font-semibold">Companies</h2>
                 <div className="mt-3 divide-y divide-[#ded8cf] border-y border-[#ded8cf]">
                     {companies.data.map((company) => {
@@ -103,7 +103,7 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
                 </div>
                 <nav className="mt-3 flex gap-2 text-sm">{companies.links.map((link, index) => link.url ? <a key={index} href={link.url} className="border border-[#c8c0b7] px-2 py-1">{link.label.replace(/<[^>]*>/g, '').trim()}</a> : null)}</nav>
             </section>
-            <section id="coupons" className="mt-8">
+            <section id="plans" className="mt-8">
                 <h2 className="font-semibold">{t('plans')}</h2>
                 <div className="mt-3 divide-y divide-[#ded8cf] border-y border-[#ded8cf]">{plans.map((plan) => <p key={plan.id} className="py-3 text-sm">{plan.name} <span className="text-[#68645f]">· {plan.duration} · {plan.price} EGP</span></p>)}</div>
                 <form onSubmit={(event) => submit(event, planForm, '/super-admin/plans')} className="mt-4 grid gap-3 border-b border-[#ded8cf] pb-6 sm:grid-cols-2 lg:grid-cols-5">
@@ -118,7 +118,7 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
                     <button className="bg-[#a64b36] px-3 py-2 text-white sm:col-span-2 lg:col-span-5">{t('createPlan')}</button>
                 </form>
             </section>
-            <section className="mt-8">
+            <section id="coupons" className="mt-8">
                 <h2 className="font-semibold">{t('coupons')}</h2>
                 <form onSubmit={(event) => submit(event, couponForm, '/super-admin/coupons')} className="mt-3 grid gap-3 border-b border-[#ded8cf] pb-6 sm:grid-cols-2 lg:grid-cols-5">
                     <input aria-label="Coupon code" placeholder="Code" value={couponForm.data.code} onChange={(event) => couponForm.setData('code', event.target.value)} className="border border-[#c8c0b7] bg-white px-3 py-2" />
@@ -128,7 +128,7 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
                     <button className="bg-[#a64b36] px-3 py-2 text-white">{t('createCoupon')}</button>
                 </form>
             </section>
-            <section className="mt-8">
+            <section id="subscriptions" className="mt-8">
                 <h2 className="font-semibold">{t('subscriptionsPayments')}</h2>
                 <div className="mt-3 divide-y divide-[#ded8cf] border-y border-[#ded8cf]">{subscriptions.map((subscription) => <div key={subscription.id} className="flex flex-wrap items-center justify-between gap-4 py-4">
                     <div><p className="font-medium">{subscription.company?.name}</p><p className="text-sm text-[#68645f]">{subscription.plan?.name} · {subscription.status} · {subscription.ends_at ?? 'Lifetime'}</p></div>

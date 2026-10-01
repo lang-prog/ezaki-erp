@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Web;
 
 use App\Http\Controllers\Controller;
 use App\Services\AuthenticationService;
+use App\Services\CompanyLandingService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -21,7 +22,7 @@ class AuthenticationController extends Controller
         return Inertia::render('Auth/Login', ['accountType' => $type]);
     }
 
-    public function login(Request $request, AuthenticationService $authentication, string $type): RedirectResponse
+    public function login(Request $request, AuthenticationService $authentication, CompanyLandingService $landing, string $type): RedirectResponse
     {
         abort_unless(in_array($type, ['company', 'super_admin'], true), 404);
         $credentials = $request->validate(['email' => ['required', 'email'], 'password' => ['required', 'string']]);
@@ -38,7 +39,7 @@ class AuthenticationController extends Controller
         $request->session()->regenerate();
         $request->session()->put('session_version', (int) $user->session_version);
 
-        return redirect()->intended($type === 'super_admin' ? route('super-admin.dashboard') : route('company.dashboard'));
+        return redirect()->intended($landing->forUser($user));
     }
 
     public function logout(Request $request): RedirectResponse

@@ -8,14 +8,15 @@ use App\Http\Controllers\Web\LocaleController;
 use App\Http\Controllers\Web\RegistrationController;
 use App\Http\Controllers\Web\SuperAdminLicenseController;
 use App\Http\Controllers\Web\SuperAdminPlatformController;
+use App\Services\CompanyLandingService;
 use App\Services\SubscriptionLifecycle;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
-Route::get('/', function (Request $request) {
+Route::get('/', function (Request $request, CompanyLandingService $landing) {
     if ($request->user()) {
-        return redirect()->route($request->user()->account_type === 'super_admin' ? 'super-admin.dashboard' : 'company.dashboard');
+        return redirect($landing->forUser($request->user()));
     }
 
     return Inertia::render('Welcome');

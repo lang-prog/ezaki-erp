@@ -73,7 +73,7 @@ class PhaseOneFoundationTest extends TestCase
             'account_type' => 'super_admin', 'status' => 'active',
         ]);
 
-        $this->actingAs($owner)->get('/')->assertRedirect(route('company.dashboard'));
+        $this->actingAs($owner)->get('/')->assertRedirect(route('company.users.profile', ['user' => $owner->id]));
         $this->actingAs($admin)->get('/')->assertRedirect(route('super-admin.dashboard'));
     }
 
@@ -137,15 +137,38 @@ class PhaseOneFoundationTest extends TestCase
         $company = Company::query()->create(['name' => 'Company Login Co', 'status' => 'active']);
         $plan = Plan::query()->create(['code' => 'company-login', 'name' => 'Company Login', 'duration' => 'monthly', 'price' => 10, 'is_active' => true]);
         Subscription::query()->create(['company_id' => $company->id, 'plan_id' => $plan->id, 'status' => 'active', 'starts_at' => now(), 'ends_at' => now()->addMonth()]);
-        User::query()->create([
+        $user = User::query()->create([
             'name' => 'Company Owner', 'email' => 'company-login@example.test', 'password' => 'correct-horse-battery',
             'company_id' => $company->id, 'account_type' => 'company', 'status' => 'active',
         ]);
 
         $this->post('/login', ['email' => 'company-login@example.test', 'password' => 'correct-horse-battery'])
-            ->assertRedirect(route('company.dashboard'));
+            ->assertRedirect(route('company.users.profile', ['user' => $user->id]));
         $this->assertAuthenticatedAs(User::query()->where('email', 'company-login@example.test')->firstOrFail());
         $this->assertDatabaseHas('login_logs', ['email' => 'company-login@example.test', 'successful' => true]);
+    }
+
+    public function test_staff_without_dashboard_access_lands_on_a_permitted_page_after_login(): void
+    {
+        $company = Company::query()->create(['name' => 'Purchasing Only', 'status' => 'active']);
+        $plan = Plan::query()->create(['code' => 'purchasing-only', 'name' => 'Staff Plan', 'duration' => 'monthly', 'price' => 10, 'is_active' => true]);
+        Subscription::query()->create(['company_id' => $company->id, 'plan_id' => $plan->id, 'status' => 'active', 'starts_at' => now(), 'ends_at' => now()->addMonth()]);
+        $user = User::query()->create([
+            'name' => 'Purchasing Clerk', 'email' => 'purchasing-clerk@example.test', 'password' => 'correct-horse-battery',
+            'company_id' => $company->id, 'account_type' => 'company', 'status' => 'active',
+        ]);
+        $registrar = app(PermissionRegistrar::class);
+        $registrar->setPermissionsTeamId((int) $company->id);
+        $role = Role::query()->create(['name' => 'Purchasing Viewer', 'guard_name' => 'web', 'company_id' => $company->id]);
+        $role->syncPermissions([Permission::query()->firstOrCreate(['name' => 'purchases.view', 'guard_name' => 'web'])]);
+        $user->assignRole($role);
+        $registrar->setPermissionsTeamId(null);
+
+        $this->post('/login', ['email' => $user->email, 'password' => 'correct-horse-battery'])
+            ->assertRedirect(route('company.operations'));
+        $this->get('/')->assertRedirect(route('company.operations'));
+        $this->get('/dashboard')->assertForbidden();
+        $this->get('/operations')->assertOk();
     }
 
     public function test_super_admin_web_login_accepts_only_the_platform_account_type(): void

@@ -181,13 +181,16 @@ class CoreErpPageController extends Controller
     public function report(Request $request, AccountingReportService $reports, string $report): Response
     {
         $company = $request->attributes->get('company');
-        $range = $request->validate(['from_date' => ['nullable', 'date'], 'to_date' => ['nullable', 'date'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date']]);
+        $range = $request->validate(['from_date' => ['nullable', 'date'], 'to_date' => ['nullable', 'date'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'account_id' => ['nullable', 'integer', 'min:1']]);
         $from = $range['from_date'] ?? $range['from'] ?? null;
         $to = $range['to_date'] ?? $range['to'] ?? null;
         abort_unless(in_array($report, ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'], true), 404);
+        $statementAccount = $report === 'account-statement' && $request->filled('account_id')
+            ? Account::query()->where('company_id', $company->id)->findOrFail($request->integer('account_id'))
+            : null;
         $payload = match ($report) {
             'journal' => $reports->journal($company, $from, $to),
-            'account-statement' => $reports->accountStatement($company, Account::query()->where('company_id', $company->id)->findOrFail($request->integer('account_id')), $from, $to),
+            'account-statement' => $statementAccount ? $reports->accountStatement($company, $statementAccount, $from, $to) : ['account' => null, 'lines' => [], 'opening_balance' => 0],
             'ledger' => $reports->ledger($company, $from, $to),
             'trial-balance' => $reports->trialBalance($company, $to),
             'income-statement' => $reports->incomeStatement($company, $from, $to),
@@ -200,6 +203,7 @@ class CoreErpPageController extends Controller
 
         return Inertia::render('Company/AccountingReport', [
             'report' => $report,
+            'availableAccounts' => $report === 'account-statement' ? Account::query()->where('company_id', $company->id)->orderBy('code')->get(['id', 'code', 'name']) : [],
             'from' => $from,
             'to' => $to,
             ...$payload,
@@ -213,10 +217,10 @@ class CoreErpPageController extends Controller
         $companyId = (int) $request->user()->company_id;
 
         return Inertia::render('Company/Operations', [
-            'purchases' => PurchaseBill::query()->where('company_id', $companyId)->with('supplier:id,name')->orderByDesc('id')->paginate(15, ['*'], 'purchases_page'),
-            'sales' => SalesBill::query()->where('company_id', $companyId)->with('customer:id,name')->orderByDesc('id')->paginate(15, ['*'], 'sales_page'),
-            'vehicles' => Vehicle::query()->where('company_id', $companyId)->where('status', 'active')->orderBy('plate')->get(['id', 'plate', 'ownership']),
-            'trips' => Trip::query()->where('company_id', $companyId)->with('vehicle:id,plate')->latest('trip_at')->limit(15)->get(),
+            'purchases' => $request->user()->can('purchases.view') ? PurchaseBill::query()->where('company_id', $companyId)->with('supplier:id,name')->orderByDesc('id')->paginate(15, ['*'], 'purchases_page') : ['data' => []],
+            'sales' => $request->user()->can('sales.view') ? SalesBill::query()->where('company_id', $companyId)->with('customer:id,name')->orderByDesc('id')->paginate(15, ['*'], 'sales_page') : ['data' => []],
+            'vehicles' => $request->user()->can('fleet.view') ? Vehicle::query()->where('company_id', $companyId)->where('status', 'active')->orderBy('plate')->get(['id', 'plate', 'ownership']) : [],
+            'trips' => $request->user()->can('fleet.view') ? Trip::query()->where('company_id', $companyId)->with('vehicle:id,plate')->latest('trip_at')->limit(15)->get() : [],
             'capabilities' => $this->capabilities($request, ['purchases.view', 'purchases.create', 'purchases.update', 'purchases.approve', 'purchases.update_approved', 'purchases.reverse', 'purchases.print', 'sales.view', 'sales.create', 'sales.update', 'sales.approve', 'sales.update_approved', 'sales.reverse', 'sales.print', 'fleet.view', 'fleet.create', 'fleet.expenses', 'fleet.maintenance']),
         ]);
     }

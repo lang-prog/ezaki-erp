@@ -7,7 +7,7 @@ export default function Subscription({ subscription, status }) {
     const { locale } = usePage().props;
     const form = useForm({ current_password: '', password: '', password_confirmation: '' });
     return (
-        <CompanyLayout title="Subscription">
+        <CompanyLayout title={translate(locale, 'subscriptionStatus')}>
             <h1 className="text-2xl font-semibold">{locale === 'ar' ? 'الاشتراك' : 'Subscription'}</h1>
             <p className="mt-3">{translate(locale, 'subscriptionStatus')}: <strong>{status}</strong></p>
             {subscription && <p className="mt-2 text-sm text-[#637067]">{subscription.plan?.name} · {subscription.ends_at ?? 'Lifetime plan'}</p>}

@@ -398,8 +398,30 @@ class PhaseThreeOperationsTest extends TestCase
         $role->syncPermissions(Permission::query()->whereIn('name', ['purchases.view'])->get());
         $viewer->assignRole($role);
         $registrar->setPermissionsTeamId(null);
+        $this->actingAs($viewer)->get('/operations')->assertOk()->assertInertia(fn ($page) => $page
+            ->has('purchases.data', 1)
+            ->where('sales.data', [])
+            ->where('vehicles', [])
+            ->where('trips', []));
         $this->actingAs($viewer)->get("/operations/purchase/{$bill}/print")->assertForbidden();
         $this->actingAs($viewer)->get("/operations/purchase/{$bill}/export")->assertForbidden();
+    }
+
+    public function test_account_statement_navigation_prompts_for_an_account_instead_of_returning_404(): void
+    {
+        $context = $this->tenant('statement-navigation');
+        $this->actingAs($context['user']);
+
+        $this->get('/reports/account-statement')->assertOk()->assertInertia(fn ($page) => $page
+            ->component('Company/AccountingReport')
+            ->where('report', 'account-statement')
+            ->where('account', null)
+            ->has('availableAccounts'));
+
+        $account = Account::query()->where('company_id', $context['company']->id)->firstOrFail();
+        $this->get('/reports/account-statement?account_id='.$account->id)->assertOk()
+            ->assertInertia(fn ($page) => $page->where('account.id', $account->id));
+        $this->get('/reports/account-statement?account_id=0')->assertSessionHasErrors('account_id');
     }
 
     public function test_bill_list_and_edit_routes_allow_only_state_appropriate_edit_permission(): void

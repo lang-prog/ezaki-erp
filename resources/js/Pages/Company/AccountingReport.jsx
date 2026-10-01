@@ -3,9 +3,9 @@ import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
 import { useCoreApi } from '../../useCoreApi';
 
-const titles = { journal: 'journal', ledger: 'ledger', 'account-statement': 'accountStatement', 'trial-balance': 'trialBalance', 'income-statement': 'incomeStatement', 'balance-sheet': 'balanceSheet', debtors: 'debtors' };
+const titles = { journal: 'journal', ledger: 'ledger', 'account-statement': 'accountStatement', 'trial-balance': 'trialBalance', 'income-statement': 'incomeStatement', 'balance-sheet': 'balanceSheet', debtors: 'debtors', receivables: 'receivablesReport', payables: 'payablesReport', creditors: 'creditorsReport' };
 
-export default function AccountingReport({ report, rows = [], entries, lines, account, opening_balance: openingBalance, threshold, from = '', to = '', capabilities = {} }) {
+export default function AccountingReport({ report, rows = [], entries, lines, account, availableAccounts = [], opening_balance: openingBalance, threshold, from = '', to = '', capabilities = {} }) {
     const { locale } = usePage().props;
     const t = (key) => translate(locale, key);
     const { notice, send } = useCoreApi();
@@ -15,7 +15,7 @@ export default function AccountingReport({ report, rows = [], entries, lines, ac
         <Link href="/accounting" className="no-print text-sm underline">{t('accounting')}</Link>
         <h1 className="mt-3 text-2xl font-semibold">{t(titles[report] ?? 'reports')}</h1>
         <button type="button" onClick={() => window.print()} className="no-print mt-4 border border-[#34795c] px-3 py-2 text-sm">{t('print')}</button>
-        <form method="get" className="no-print mt-4 flex flex-wrap items-end gap-3 border-y border-[#d7ddd5] py-4"><input type="hidden" name="account_id" value={account?.id ?? ''} /><label className="grid gap-1 text-sm"><span>{t('fromDate')}</span><input type="date" name="from_date" defaultValue={from} className="border px-3 py-2" /></label><label className="grid gap-1 text-sm"><span>{t('toDate')}</span><input type="date" name="to_date" defaultValue={to} className="border px-3 py-2" /></label><button className="border border-[#34795c] px-3 py-2 text-sm">{t('apply')}</button></form>
+        <form method="get" className="no-print mt-4 flex flex-wrap items-end gap-3 border-y border-[#d7ddd5] py-4">{report === 'account-statement' && <label className="grid gap-1 text-sm"><span>{t('selectAccount')}</span><select name="account_id" required defaultValue={account?.id ?? ''} className="max-w-xs border px-3 py-2"><option value="">{t('selectAccount')}</option>{availableAccounts.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>}<label className="grid gap-1 text-sm"><span>{t('fromDate')}</span><input type="date" name="from_date" defaultValue={from} className="border px-3 py-2" /></label><label className="grid gap-1 text-sm"><span>{t('toDate')}</span><input type="date" name="to_date" defaultValue={to} className="border px-3 py-2" /></label><button className="border border-[#34795c] px-3 py-2 text-sm">{t('apply')}</button></form>
         {account && <p className="mt-2 text-sm">{account.code} · {account.name} · {t('openingAmount')}: {openingBalance}</p>}
         {threshold !== undefined && <p className="mt-2 text-sm text-[#637067]">{t('minimum')}: {threshold} EGP</p>}
         {notice.message && <p role="status" className="mt-4 border-l-4 border-red-700 bg-white p-3 text-sm">{notice.message}</p>}
