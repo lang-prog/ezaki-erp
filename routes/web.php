@@ -64,6 +64,8 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/reports/{report}', [CoreErpPageController::class, 'report'])->middleware(['can:reports.view', 'throttle:api.reports'])->whereIn('report', ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'])->name('company.accounting.report');
     Route::get('/operations/purchase/create', [CoreErpPageController::class, 'billForm'])->defaults('type', 'purchase')->middleware('can:purchases.create')->name('company.purchase.create');
     Route::get('/operations/sales/create', [CoreErpPageController::class, 'billForm'])->defaults('type', 'sales')->middleware('can:sales.create')->name('company.sales.create');
+    Route::get('/operations/purchase/{bill}', [CoreErpPageController::class, 'showBill'])->defaults('type', 'purchase')->middleware('can:purchases.view')->name('company.purchase.show');
+    Route::get('/operations/sales/{bill}', [CoreErpPageController::class, 'showBill'])->defaults('type', 'sales')->middleware('can:sales.view')->name('company.sales.show');
     Route::get('/operations/purchase/{bill}/edit', [CoreErpPageController::class, 'billForm'])->defaults('type', 'purchase')->name('company.purchase.edit');
     Route::get('/operations/sales/{bill}/edit', [CoreErpPageController::class, 'billForm'])->defaults('type', 'sales')->name('company.sales.edit');
     Route::get('/operations/purchase/{bill}/print', [CoreErpPageController::class, 'printBill'])->defaults('type', 'purchase')->middleware('can:purchases.print')->name('company.purchase.print');

@@ -532,3 +532,12 @@ Code-level implementation is complete for this remediation cycle. Production acc
 - Added Arabic/English search, collapsible groups, reliable route/hash active state, mobile RTL/LTR drawer with focus management and independent scrolling. Fixed deep-link account statements to prompt for an account instead of returning 404.
 - Corrected default landing after login and at `/` to select the first authorized page; staff without `dashboard.view` no longer lands on a forbidden dashboard.
 - Verification on an isolated SQLite demo: all 34 owner destinations (35 before removing a duplicate profile link) returned 200; platform anchor targets resolved; viewer with only `purchases.view` saw operations/purchases plus their own profile; 320–1920px visual checks, mobile RTL and LTR, zero JS errors. `node --test tests/navigation.test.mjs`: 5 passing. PHPUnit: 90 tests/1132 assertions. Pint, Vite build and npm audit (0 vulnerabilities) passed. See `NAVIGATION-REBUILD.md` for details and Windows run steps.
+
+
+### Period, bill view and dual-print release — 2026-10-01
+
+- Fixed fiscal-period creation when the UI retained an old year: an omitted period name now defaults to the start year, and duplicate names return a clear 409 response instead of a raw MySQL exception.
+- Added read-only bill detail routes for purchase and sales documents, including operational/accounting fields and revision history with reasons and changed fields.
+- Added two protected print modes for each bill: a financial invoice copy with prices/totals/costs and an operational copy without prices, totals or expenses.
+- Replaced the old minimal purchase/sales print views with a shared responsive RTL/LTR A4 template.
+- Acceptance evidence: PHPUnit 93 tests / 1163 assertions; Pint, Composer validation, OpenAPI lint, Vite build and npm audit all pass.

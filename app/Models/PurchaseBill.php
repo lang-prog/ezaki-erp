@@ -23,4 +23,34 @@ class PurchaseBill extends Model
     {
         return $this->belongsTo(CustomerSupplier::class, 'supplier_id');
     }
+
+    public function branch(): BelongsTo
+    {
+        return $this->belongsTo(Branch::class);
+    }
+
+    public function warehouse(): BelongsTo
+    {
+        return $this->belongsTo(Warehouse::class);
+    }
+
+    public function vehicle(): BelongsTo
+    {
+        return $this->belongsTo(Vehicle::class);
+    }
+
+    public function createdBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function approvedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    public function revisions(): HasMany
+    {
+        return $this->hasMany(BillRevision::class, 'document_id')->where('document_type', 'purchase');
+    }
 }

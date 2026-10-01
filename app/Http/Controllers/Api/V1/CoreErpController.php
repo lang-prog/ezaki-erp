@@ -398,12 +398,12 @@ class CoreErpController extends Controller
     public function createPeriod(Request $request, AccountingFoundationService $foundation): JsonResponse
     {
         $data = $request->validate([
-            'name' => ['required', 'string', 'max:100'],
+            'name' => ['nullable', 'string', 'max:100'],
             'starts_on' => ['required', 'date'],
             'ends_on' => ['required', 'date', 'after_or_equal:starts_on'],
         ]);
 
-        return response()->json(['data' => $foundation->createPeriod($this->company($request), $data['name'], $data['starts_on'], $data['ends_on'])], 201);
+        return response()->json(['data' => $foundation->createPeriod($this->company($request), $data['name'] ?? null, $data['starts_on'], $data['ends_on'])], 201);
     }
 
     public function closePeriod(Request $request, FiscalPeriod $period, AccountingService $accounting): JsonResponse

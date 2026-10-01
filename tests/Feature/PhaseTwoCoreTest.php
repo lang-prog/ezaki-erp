@@ -386,6 +386,16 @@ class PhaseTwoCoreTest extends TestCase
         $this->assertSame(2, FiscalPeriod::query()->where('company_id', $company->id)->count());
     }
 
+    public function test_fiscal_period_name_defaults_to_start_year_and_duplicate_names_are_rejected_cleanly(): void
+    {
+        ['company' => $company, 'user' => $user] = $this->tenant('period-name');
+        Sanctum::actingAs($user);
+        $this->postJson('/api/v1/fiscal-periods', ['starts_on' => '2027-01-01', 'ends_on' => '2027-12-31'])->assertCreated()->assertJsonPath('data.name', '2027');
+        $this->postJson('/api/v1/fiscal-periods', ['name' => '2027', 'starts_on' => '2028-01-01', 'ends_on' => '2028-12-31'])->assertStatus(409)->assertJsonPath('message', fn ($message): bool => str_contains($message, 'already exists'));
+        $this->assertDatabaseCount('fiscal_periods', 2);
+        $this->assertSame(1, FiscalPeriod::query()->where('company_id', $company->id)->where('name', '2027')->count());
+    }
+
     public function test_debtor_report_excludes_balances_below_fifty_egp(): void
     {
         ['company' => $company, 'user' => $user] = $this->tenant('debtor-threshold');

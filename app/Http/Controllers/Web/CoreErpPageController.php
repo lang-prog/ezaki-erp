@@ -219,7 +219,7 @@ class CoreErpPageController extends Controller
             'sales' => $request->user()->can('sales.view') ? SalesBill::query()->where('company_id', $companyId)->with('customer:id,name')->orderByDesc('id')->paginate(15, ['*'], 'sales_page') : ['data' => []],
             'vehicles' => $request->user()->can('fleet.view') ? Vehicle::query()->where('company_id', $companyId)->where('status', 'active')->orderBy('plate')->get(['id', 'plate', 'ownership']) : [],
             'trips' => $request->user()->can('fleet.view') ? Trip::query()->where('company_id', $companyId)->with('vehicle:id,plate')->latest('trip_at')->limit(15)->get() : [],
-            'capabilities' => $this->capabilities($request, ['purchases.view', 'purchases.create', 'purchases.update', 'purchases.approve', 'purchases.update_approved', 'purchases.reverse', 'purchases.print', 'sales.view', 'sales.create', 'sales.update', 'sales.approve', 'sales.update_approved', 'sales.reverse', 'sales.print', 'fleet.view', 'fleet.create', 'fleet.expenses', 'fleet.maintenance']),
+            'capabilities' => $this->capabilities($request, ['purchases.view', 'purchases.create', 'purchases.update', 'purchases.approve', 'purchases.update_approved', 'purchases.reverse', 'purchases.print', 'purchases.export', 'sales.view', 'sales.create', 'sales.update', 'sales.approve', 'sales.update_approved', 'sales.reverse', 'sales.print', 'sales.export', 'fleet.view', 'fleet.create', 'fleet.expenses', 'fleet.maintenance']),
         ]);
     }
 
@@ -301,11 +301,31 @@ class CoreErpPageController extends Controller
         [$type, $bill] = in_array((string) $first, ['purchase', 'sales'], true) ? [(string) $first, (int) $second] : [(string) $second, (int) $first];
         abort_unless(in_array($type, ['purchase', 'sales'], true), 404);
         $company = $request->attributes->get('company');
+        $mode = $request->string('mode', 'invoice')->toString();
+        abort_unless(in_array($mode, ['invoice', 'delivery'], true), 422);
         $document = $type === 'purchase'
-            ? PurchaseBill::query()->where('company_id', $company->id)->with(['lines.product', 'supplier'])->findOrFail($bill)
-            : SalesBill::query()->where('company_id', $company->id)->with(['lines.product', 'customer'])->findOrFail($bill);
+            ? PurchaseBill::query()->where('company_id', $company->id)->with(['lines.product.type', 'lines.product.diameter', 'supplier', 'branch', 'warehouse', 'vehicle'])->findOrFail($bill)
+            : SalesBill::query()->where('company_id', $company->id)->with(['lines.product.type', 'lines.product.diameter', 'customer', 'branch', 'warehouse', 'vehicle'])->findOrFail($bill);
 
-        return response()->view($type === 'purchase' ? 'operations.purchase-print' : 'operations.sales-print', ['document' => $document, 'company' => $company, 'locale' => app()->getLocale()]);
+        return response()->view($type === 'purchase' ? 'operations.purchase-print' : 'operations.sales-print', ['document' => $document, 'company' => $company, 'locale' => app()->getLocale(), 'mode' => $mode]);
+    }
+
+    public function showBill(Request $request, string|int $first, string|int|null $second = null): Response
+    {
+        [$type, $bill] = is_string($first) && in_array($first, ['purchase', 'sales'], true) ? [$first, $second === null ? null : (int) $second] : [(string) $second, $first === null ? null : (int) $first];
+        abort_unless(in_array($type, ['purchase', 'sales'], true) && $bill, 404);
+        $companyId = (int) $request->user()->company_id;
+        $document = $type === 'purchase'
+            ? PurchaseBill::query()->where('company_id', $companyId)->with(['lines.product.type', 'lines.product.diameter', 'supplier', 'branch', 'warehouse', 'vehicle', 'createdBy:id,name', 'approvedBy:id,name', 'revisions.user:id,name'])->findOrFail($bill)
+            : SalesBill::query()->where('company_id', $companyId)->with(['lines.product.type', 'lines.product.diameter', 'customer', 'branch', 'warehouse', 'vehicle', 'createdBy:id,name', 'approvedBy:id,name', 'revisions.user:id,name'])->findOrFail($bill);
+        $editPermission = $type === 'purchase' ? ($document->status === 'approved' ? 'purchases.update_approved' : 'purchases.update') : ($document->status === 'approved' ? 'sales.update_approved' : 'sales.update');
+
+        return Inertia::render('Company/BillView', [
+            'type' => $type,
+            'document' => $document,
+            'revisions' => $document->revisions->sortByDesc('created_at')->values(),
+            'capabilities' => $this->capabilities($request, [$editPermission, $type === 'purchase' ? 'purchases.print' : 'sales.print', $type === 'purchase' ? 'purchases.export' : 'sales.export']),
+        ]);
     }
 
     public function exportBill(Request $request, string|int $first, string|int|null $second = null): \Illuminate\Http\Response

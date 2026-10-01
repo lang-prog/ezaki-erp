@@ -475,6 +475,16 @@ class PhaseThreeOperationsTest extends TestCase
         $this->actingAs($context['user'])->get("/operations/purchase/{$bill}/print")->assertOk()->assertSee('فاتورة مشتريات')->assertSee('dir="rtl"', false);
     }
 
+    public function test_bill_view_and_two_print_modes_expose_complete_data_without_leaking_prices_to_operational_copy(): void
+    {
+        $context = $this->tenant('bill-view-modes');
+        Sanctum::actingAs($context['user']);
+        $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'VIEW-MODE'))->assertCreated()->json('data.id');
+        $this->actingAs($context['user'])->get("/operations/purchase/{$bill}")->assertOk()->assertInertia(fn ($page) => $page->component('Company/BillView')->where('document.id', $bill)->has('revisions'));
+        $this->get("/operations/purchase/{$bill}/print?mode=invoice")->assertOk()->assertSee('سعر الوحدة');
+        $this->get("/operations/purchase/{$bill}/print?mode=delivery")->assertOk()->assertSee('بوليصة استلام مشتريات')->assertDontSee('سعر الوحدة')->assertDontSee('الإجمالي النهائي');
+    }
+
     public function test_company_navigation_targets_are_inertia_pages_and_server_protected(): void
     {
         $context = $this->tenant('navigation');

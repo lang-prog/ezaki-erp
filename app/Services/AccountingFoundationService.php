@@ -165,12 +165,15 @@ class AccountingFoundationService
         return $period;
     }
 
-    public function createPeriod(Company $company, string $name, string $startsOn, string $endsOn): FiscalPeriod
+    public function createPeriod(Company $company, ?string $name, string $startsOn, string $endsOn): FiscalPeriod
     {
         abort_if($startsOn > $endsOn, 422, 'The fiscal period end must be on or after its start.');
+        $name = trim((string) $name) ?: (string) now()->parse($startsOn)->year;
 
         return DB::transaction(function () use ($company, $name, $startsOn, $endsOn): FiscalPeriod {
             $company->newQuery()->whereKey($company->id)->lockForUpdate()->firstOrFail();
+            $duplicateName = FiscalPeriod::query()->where('company_id', $company->id)->where('name', $name)->exists();
+            abort_if($duplicateName, 409, 'A fiscal period with this name already exists. Choose a different name, such as 2027 or 2027-H1.');
             $overlaps = FiscalPeriod::query()->where('company_id', $company->id)
                 ->whereDate('starts_on', '<=', $endsOn)
                 ->whereDate('ends_on', '>=', $startsOn)
