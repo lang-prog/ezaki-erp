@@ -23,7 +23,15 @@ class ReleaseContractTest extends TestCase
     public function test_release_scripts_are_executable_and_do_not_put_passwords_in_arguments(): void
     {
         foreach (['backup.sh', 'restore.sh', 'preflight.sh', 'smoke.sh'] as $script) {
-            self::assertTrue(is_executable(__DIR__.'/../../scripts/'.$script), $script.' must be executable');
+            $path = __DIR__.'/../../scripts/'.$script;
+            self::assertFileExists($path);
+            self::assertIsReadable($path);
+            self::assertStringStartsWith('#!/usr/bin/env bash', (string) file_get_contents($path));
+
+            // Windows does not expose Git's Unix executable bit through is_executable().
+            if (PHP_OS_FAMILY !== 'Windows') {
+                self::assertTrue(is_executable($path), $script.' must be executable');
+            }
         }
         $backup = (string) file_get_contents(__DIR__.'/../../scripts/backup.sh');
         self::assertStringNotContainsString('DB_PASSWORD=', $backup);
