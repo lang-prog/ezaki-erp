@@ -101,19 +101,19 @@ class CoreErpPageController extends Controller
         }, 'inventory-matrix.csv', ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 
-    public function parties(Request $request, AccountingFoundationService $foundation): Response
+    public function parties(Request $request, AccountingFoundationService $foundation, AccountingReportService $reports): Response
     {
-        return $this->partyPage($request, $foundation, null);
+        return $this->partyPage($request, $foundation, $reports, null);
     }
 
-    public function customers(Request $request, AccountingFoundationService $foundation): Response
+    public function customers(Request $request, AccountingFoundationService $foundation, AccountingReportService $reports): Response
     {
-        return $this->partyPage($request, $foundation, 'customer');
+        return $this->partyPage($request, $foundation, $reports, 'customer');
     }
 
-    public function suppliers(Request $request, AccountingFoundationService $foundation): Response
+    public function suppliers(Request $request, AccountingFoundationService $foundation, AccountingReportService $reports): Response
     {
-        return $this->partyPage($request, $foundation, 'supplier');
+        return $this->partyPage($request, $foundation, $reports, 'supplier');
     }
 
     public function customerProfile(Request $request, CustomerSupplier $party): Response
@@ -138,13 +138,22 @@ class CoreErpPageController extends Controller
         ]);
     }
 
-    private function partyPage(Request $request, AccountingFoundationService $foundation, ?string $kind): Response
+    private function partyPage(Request $request, AccountingFoundationService $foundation, AccountingReportService $reports, ?string $kind): Response
     {
         $company = $request->attributes->get('company');
         $companyId = (int) $company->id;
+        $range = $request->validate(['from' => ['nullable', 'date'], 'to' => ['nullable', 'date']]);
+        $from = $range['from'] ?? now()->startOfMonth()->toDateString();
+        $to = $range['to'] ?? now()->endOfMonth()->toDateString();
+        abort_if($from > $to, 422, 'The report start date must be before the end date.');
+        $summary = $reports->partySummary($company, $kind, $from, $to);
 
         return Inertia::render('Company/Parties', [
             'parties' => CustomerSupplier::query()->where('company_id', $companyId)->where('status', 'active')->when($kind === 'customer', fn ($query) => $query->where('is_customer', true))->when($kind === 'supplier', fn ($query) => $query->where('is_supplier', true))->with('account:id,code')->orderBy('name')->paginate(25),
+            'reportRows' => $summary['rows'],
+            'reportSummary' => $summary['summary'],
+            'from' => $from,
+            'to' => $to,
             'kind' => $kind,
             'accounts' => Account::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('code')->get(['id', 'code', 'name', 'account_type']),
             'capabilities' => $this->capabilities($request, ['parties.create', 'parties.update']),

@@ -32,6 +32,7 @@ test('owner receives all permitted destinations and correct owner-only settings'
     const items = visible(companyNavigation, { ...allCompany, 'company.owner': true }).flatMap((group) => group.items);
     assert.ok(items.length >= 33, items.length);
     assert.ok(items.some((item) => item.href === '/settings/accounting'));
+    assert.ok(items.some((item) => item.href === '/settings/company'));
     assert.ok(items.some((item) => item.href === '/reports/account-statement'));
     assert.ok(items.some((item) => item.href === '/settings/users/42/activity'));
     assert.ok(items.some((item) => item.href === '/fleet/reports/branch-performance'));
@@ -39,12 +40,14 @@ test('owner receives all permitted destinations and correct owner-only settings'
 
 test('staff sees only allowed destinations without empty groups or owner settings', () => {
     const groups = visible(companyNavigation, { 'sales.view': true, 'fleet.view': true });
-    assert.deepEqual(groups.map((group) => group.id), ['overview', 'sales', 'fleet', 'fleet-reports']);
+    assert.deepEqual(groups.map((group) => group.id), ['overview', 'sales', 'fleet', 'fleet-reports', 'management']);
     const hrefs = groups.flatMap((group) => group.items.map((item) => item.href));
     assert.ok(hrefs.includes('/operations#sales'));
+    assert.ok(hrefs.includes('/help'));
     assert.ok(!hrefs.includes('/settings/users/42/activity'));
     assert.ok(!hrefs.includes('/operations/sales/create'));
     assert.ok(!hrefs.includes('/settings/accounting'));
+    assert.ok(!hrefs.includes('/settings/company'));
     assert.ok(!hrefs.includes('/reports/journal'));
 });
 

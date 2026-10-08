@@ -15,6 +15,7 @@ use App\Services\CompanyLimitService;
 use App\Services\CompanyProvisioningService;
 use App\Services\LocalLicenseService;
 use App\Services\SubscriptionLifecycle;
+use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
@@ -146,6 +147,16 @@ class PhaseOneFoundationTest extends TestCase
             ->assertRedirect(route('company.users.profile', ['user' => $user->id]));
         $this->assertAuthenticatedAs(User::query()->where('email', 'company-login@example.test')->firstOrFail());
         $this->assertDatabaseHas('login_logs', ['email' => 'company-login@example.test', 'successful' => true]);
+    }
+
+    public function test_password_reset_request_sends_a_notification_and_renders_the_reset_pages(): void
+    {
+        Notification::fake();
+        $user = User::query()->create(['name' => 'Reset User', 'email' => 'reset-user@example.test', 'password' => 'password', 'account_type' => 'company', 'status' => 'active']);
+
+        $this->get('/forgot-password')->assertOk()->assertInertia(fn ($page) => $page->component('Auth/ForgotPassword'));
+        $this->post('/forgot-password', ['email' => $user->email])->assertRedirect()->assertSessionHas('status');
+        Notification::assertSentTo($user, ResetPassword::class);
     }
 
     public function test_staff_without_dashboard_access_lands_on_a_permitted_page_after_login(): void

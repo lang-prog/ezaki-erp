@@ -541,3 +541,27 @@ Code-level implementation is complete for this remediation cycle. Production acc
 - Added two protected print modes for each bill: a financial invoice copy with prices/totals/costs and an operational copy without prices, totals or expenses.
 - Replaced the old minimal purchase/sales print views with a shared responsive RTL/LTR A4 template.
 - Acceptance evidence: PHPUnit 93 tests / 1163 assertions; Pint, Composer validation, OpenAPI lint, Vite build and npm audit all pass.
+
+
+### Readability, company settings, password recovery and party reporting — 2026-10-09
+
+Implemented the requested first feedback package without changing the accounting document lifecycle:
+
+- Added a readable global typography layer with larger form/table text, stronger contrast, comfortable line-height, and a saved light/dark theme toggle in the shared workspace header. The daytime theme remains the default.
+- Added owner-only **Company settings** at `/settings/company` for legal name, trade name, tax number, phone, country, city, address and notes. The route and controller enforce `isCompanyOwner()` server-side, and the sidebar link is permission-aware.
+- Added standard Laravel password recovery at `/forgot-password` and `/reset-password/{token}`, including email notification, token reset, session revocation, login link, and localized Inertia screens. Production mail must be configured in `.env`.
+- Rebuilt the Customers/Suppliers page as a period-aware party report. It shows weight, goods value, invoice total, period payments and balance, supports date filters and printing, keeps tenant-scoped profile/statement/edit actions, and calculates the opening/period/closing movement from current bills, payments and opening balances.
+- Updated the in-app user manual with the party report, company settings and dark mode instructions.
+
+Verification:
+
+- `vendor/bin/phpunit` — **95 tests, 1227 assertions, 0 failures**.
+- `node --test tests/navigation.test.mjs` — **5 passing**.
+- `vendor/bin/pint --test` — **154 files passed**.
+- `composer validate --no-check-publish` — valid.
+- `php scripts/lint-openapi.php` — contract passed.
+- `npm run build` — production build passed.
+- `npm audit --omit=optional` — **0 vulnerabilities** after lockfile refresh.
+- `git diff --check HEAD` — clean.
+
+Operational note: password recovery sends through the configured Laravel mailer. With the default local `MAIL_MAILER=log`, the reset URL is written to the Laravel log; production requires SMTP or the hosting provider's mail settings.

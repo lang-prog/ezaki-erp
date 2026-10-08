@@ -35,6 +35,10 @@ class HandleInertiaRequests extends Middleware
         return array_merge(parent::share($request), [
             'locale' => app()->getLocale(),
             'auth' => ['user' => $user],
+            'flash' => [
+                'status' => fn () => $request->session()->get('status'),
+                'message' => fn () => $request->session()->get('message'),
+            ],
             'isCompanyOwner' => $user?->isCompanyOwner() ?? false,
             'capabilities' => $capabilities,
             'navigationCapabilities' => $capabilities,

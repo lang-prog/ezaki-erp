@@ -2,7 +2,7 @@ import { Link, useForm, usePage } from '@inertiajs/react';
 import { translate } from '../../i18n';
 
 export default function Login({ accountType }) {
-    const { errors, registrationOpen, locale } = usePage().props;
+    const { errors, registrationOpen, locale, flash } = usePage().props;
     const form = useForm({ email: '', password: '', remember: false });
     const platform = accountType === 'super_admin';
     const t = (key) => translate(locale, key);
@@ -17,9 +17,11 @@ export default function Login({ accountType }) {
             {errors.email && <div className="login-error" role="alert">{errors.email}</div>}
             <label className="field" htmlFor="login-password"><span>{t('password')}</span><div className="field-control"><input id="login-password" name="password" required autoComplete="current-password" type="password" value={form.data.password} onChange={(event) => form.setData('password', event.target.value)} aria-invalid={Boolean(errors.password)} /></div></label>
             {errors.password && <div className="login-error" role="alert">{errors.password}</div>}
+            {!platform && <div className="login-forgot"><Link href="/forgot-password">{t('forgotPassword')}</Link></div>}
             <div className="login-options"><label><input id="remember" name="remember" type="checkbox" checked={form.data.remember} onChange={(event) => form.setData('remember', event.target.checked)} /> <span>{t('rememberMe')}</span></label><span>{locale === 'ar' ? 'دخول محمي' : 'Secure sign in'}</span></div>
             <button disabled={form.processing} className="primary-button login-button" type="submit">{form.processing ? (locale === 'ar' ? 'جارٍ التحقق…' : 'Signing in…') : t('signIn')} <span aria-hidden="true">←</span></button>
             {form.recentlySuccessful && <p className="api-feedback" role="status">{locale === 'ar' ? 'تم تسجيل الدخول.' : 'Signed in successfully.'}</p>}
+            {flash?.status && <p className="api-feedback" role="status">{flash.status === 'Password reset successfully.' ? t('passwordResetSuccess') : flash.status}</p>}
             {!platform && registrationOpen && <small className="login-foot">{t('newCompany')} <Link href="/register">{t('createRequest')}</Link></small>}
         </form>
     </main>;

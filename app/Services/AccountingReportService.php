@@ -128,6 +128,120 @@ class AccountingReportService
         return $this->payables($company, $threshold, $from, $to);
     }
 
+    public function partySummary(Company $company, ?string $kind, string $from, string $to): array
+    {
+        $parties = CustomerSupplier::query()
+            ->where('company_id', $company->id)
+            ->where('status', 'active')
+            ->when($kind === 'customer', fn ($query) => $query->where('is_customer', true))
+            ->when($kind === 'supplier', fn ($query) => $query->where('is_supplier', true))
+            ->with('account:id,code,name')->orderBy('name')->get();
+        $before = Carbon::parse($from)->subDay()->toDateString();
+        $salesPeriod = $this->partyBillTotals($company, 'sales_bills', 'sales_bill_lines', 'customer_id', 'bill_date', $from, $to);
+        $salesBefore = $this->partyBillTotals($company, 'sales_bills', 'sales_bill_lines', 'customer_id', 'bill_date', null, $before);
+        $purchasesPeriod = $this->partyBillTotals($company, 'purchase_bills', 'purchase_bill_lines', 'supplier_id', 'supplier_bill_date', $from, $to);
+        $purchasesBefore = $this->partyBillTotals($company, 'purchase_bills', 'purchase_bill_lines', 'supplier_id', 'supplier_bill_date', null, $before);
+        $receiptsPeriod = $this->partyPaymentTotals($company, 'receipts', 'receipt_date', $from, $to);
+        $receiptsBefore = $this->partyPaymentTotals($company, 'receipts', 'receipt_date', null, $before);
+        $vouchersPeriod = $this->partyPaymentTotals($company, 'payment_vouchers', 'voucher_date', $from, $to);
+        $vouchersBefore = $this->partyPaymentTotals($company, 'payment_vouchers', 'voucher_date', null, $before);
+
+        $rows = $parties->map(function (CustomerSupplier $party) use ($kind, $salesPeriod, $salesBefore, $purchasesPeriod, $purchasesBefore, $receiptsPeriod, $receiptsBefore, $vouchersPeriod, $vouchersBefore): CustomerSupplier {
+            $customer = $kind === 'customer' || ($kind === null && (bool) $party->is_customer);
+            $supplier = $kind === 'supplier' || ($kind === null && (bool) $party->is_supplier);
+            $periodSales = $customer ? ($salesPeriod[(int) $party->id] ?? []) : [];
+            $beforeSales = $customer ? ($salesBefore[(int) $party->id] ?? []) : [];
+            $periodPurchases = $supplier ? ($purchasesPeriod[(int) $party->id] ?? []) : [];
+            $beforePurchases = $supplier ? ($purchasesBefore[(int) $party->id] ?? []) : [];
+            $periodReceipts = $customer ? ($receiptsPeriod[(int) $party->id] ?? []) : [];
+            $beforeReceipts = $customer ? ($receiptsBefore[(int) $party->id] ?? []) : [];
+            $periodVouchers = $supplier ? ($vouchersPeriod[(int) $party->id] ?? []) : [];
+            $beforeVouchers = $supplier ? ($vouchersBefore[(int) $party->id] ?? []) : [];
+            $opening = $this->partyOpeningDue($party, $customer, $supplier)
+                + $this->dueFromTotals($beforeSales, $beforePurchases, $beforeReceipts, $beforeVouchers);
+            $invoiceTotal = $this->number($periodSales, 'invoice_total') + $this->number($periodPurchases, 'invoice_total');
+            $goodsValue = $this->number($periodSales, 'goods_value') + $this->number($periodPurchases, 'goods_value');
+            $weight = $this->number($periodSales, 'weight') + $this->number($periodPurchases, 'weight');
+            $payments = $this->number($periodSales, 'bill_paid') + $this->number($periodPurchases, 'bill_paid') + $this->number($periodReceipts, 'amount') + $this->number($periodVouchers, 'amount');
+            $balance = $opening + $invoiceTotal - $payments;
+            $party->setAttribute('party_kind', $customer && $supplier ? 'both' : ($customer ? 'customer' : 'supplier'));
+            $party->setAttribute('weight', round($weight, 3));
+            $party->setAttribute('goods_value', round($goodsValue, 2));
+            $party->setAttribute('invoice_total', round($invoiceTotal, 2));
+            $party->setAttribute('payments', round($payments, 2));
+            $party->setAttribute('opening_balance_due', round($opening, 2));
+            $party->setAttribute('balance', round($balance, 2));
+            $party->setAttribute('balance_due', round(max($balance, 0), 2));
+
+            return $party;
+        })->sortByDesc(fn (CustomerSupplier $party) => (float) $party->balance_due)->values();
+        $page = LengthAwarePaginator::resolveCurrentPage();
+        $rowsPaginator = new LengthAwarePaginator($rows->forPage($page, 25)->values(), $rows->count(), 25, $page, ['path' => LengthAwarePaginator::resolveCurrentPath(), 'query' => request()->query()]);
+
+        return [
+            'rows' => $rowsPaginator,
+            'summary' => [
+                'weight' => round((float) $rows->sum('weight'), 3),
+                'goods_value' => round((float) $rows->sum('goods_value'), 2),
+                'invoice_total' => round((float) $rows->sum('invoice_total'), 2),
+                'payments' => round((float) $rows->sum('payments'), 2),
+                'balance' => round((float) $rows->sum('balance'), 2),
+            ],
+        ];
+    }
+
+    private function partyBillTotals(Company $company, string $billsTable, string $linesTable, string $partyColumn, string $dateColumn, ?string $from, ?string $to): array
+    {
+        $bills = DB::table($billsTable)->where('company_id', $company->id)->where('status', 'approved')
+            ->when($from, fn ($query) => $query->whereDate($dateColumn, '>=', $from))
+            ->when($to, fn ($query) => $query->whereDate($dateColumn, '<=', $to))
+            ->groupBy($partyColumn)->select($partyColumn)->selectRaw('SUM(total) as invoice_total, SUM(subtotal) as goods_value, SUM(paid_amount) as bill_paid')->get()->keyBy($partyColumn)->map(fn ($row) => (array) $row)->all();
+        $weightExpression = $billsTable === 'purchase_bills' ? 'COALESCE(lines.actual_weight, lines.factory_weight, 0)' : 'COALESCE(lines.actual_weight, 0)';
+        $weights = DB::table($linesTable.' as lines')->join($billsTable.' as bills', 'bills.id', '=', 'lines.'.($billsTable === 'sales_bills' ? 'sales_bill_id' : 'purchase_bill_id'))
+            ->where('bills.company_id', $company->id)->where('bills.status', 'approved')
+            ->when($from, fn ($query) => $query->whereDate('bills.'.$dateColumn, '>=', $from))
+            ->when($to, fn ($query) => $query->whereDate('bills.'.$dateColumn, '<=', $to))
+            ->groupBy('bills.'.$partyColumn)->select('bills.'.$partyColumn.' as party_id')->selectRaw('SUM('.$weightExpression.') as weight')->pluck('weight', 'party_id');
+        foreach ($bills as $partyId => &$row) {
+            $row['weight'] = (float) ($weights[(int) $partyId] ?? 0);
+        }
+
+        return $bills;
+    }
+
+    private function partyPaymentTotals(Company $company, string $table, string $dateColumn, ?string $from, ?string $to): array
+    {
+        return DB::table($table)->where('company_id', $company->id)->where('status', 'posted')
+            ->when($from, fn ($query) => $query->whereDate($dateColumn, '>=', $from))
+            ->when($to, fn ($query) => $query->whereDate($dateColumn, '<=', $to))
+            ->groupBy('party_id')->select('party_id')->selectRaw('SUM(amount) as amount')->get()->keyBy('party_id')->map(fn ($row) => (array) $row)->all();
+    }
+
+    private function partyOpeningDue(CustomerSupplier $party, bool $customer, bool $supplier): float
+    {
+        $opening = (float) ($party->opening_balance ?? 0);
+        $direction = $party->opening_balance_direction ?? ($customer ? 'debit' : 'credit');
+        $due = 0.0;
+        if ($customer) {
+            $due += $direction === 'debit' ? $opening : -$opening;
+        }
+        if ($supplier) {
+            $due += $direction === 'credit' ? $opening : -$opening;
+        }
+
+        return $due;
+    }
+
+    private function dueFromTotals(array $sales, array $purchases, array $receipts, array $vouchers): float
+    {
+        return $this->number($sales, 'invoice_total') + $this->number($purchases, 'invoice_total') - $this->number($sales, 'bill_paid') - $this->number($purchases, 'bill_paid') - $this->number($receipts, 'amount') - $this->number($vouchers, 'amount');
+    }
+
+    private function number(array $values, string $key): float
+    {
+        return (float) ($values[$key] ?? 0);
+    }
+
     private function partyAging(Company $company, bool $customer, float $threshold, ?string $from, ?string $to): array
     {
         $partyBalances = DB::table('journal_lines as lines')

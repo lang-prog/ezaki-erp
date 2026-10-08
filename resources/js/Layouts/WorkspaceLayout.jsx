@@ -9,6 +9,7 @@ export default function WorkspaceLayout({ title, children, platform = false }) {
     const { props, url } = usePage();
     const { auth, locale, subscriptionWarning, navigationCapabilities = {} } = props;
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [theme, setTheme] = useState(() => (typeof window !== 'undefined' ? window.localStorage.getItem('ezaki-theme') || 'light' : 'light'));
     const closeSidebar = useCallback(() => setSidebarOpen(false), []);
     const t = (key) => translate(locale, key);
     const user = auth?.user;
@@ -20,6 +21,10 @@ export default function WorkspaceLayout({ title, children, platform = false }) {
         document.documentElement.lang = locale;
         document.documentElement.dir = locale === 'ar' ? 'rtl' : 'ltr';
     }, [locale]);
+    useEffect(() => {
+        document.documentElement.dataset.theme = theme;
+        window.localStorage.setItem('ezaki-theme', theme);
+    }, [theme]);
 
     return <div className={`ez-shell ${platform ? 'ez-shell--platform' : ''}`} dir={locale === 'ar' ? 'rtl' : 'ltr'}>
         <Head title={title} />
@@ -42,6 +47,7 @@ export default function WorkspaceLayout({ title, children, platform = false }) {
                 <div className="ez-breadcrumb" aria-label={t('breadcrumb')}><Link href={home}>{platform ? t('platformOverview') : t('home')}</Link><span aria-hidden="true">/</span><strong>{title}</strong></div>
                 <div className="ez-header-actions">
                     <Link href={`/locale/${locale === 'ar' ? 'en' : 'ar'}`} method="post" as="button" className="ez-language-button" aria-label={t('switchLanguage')}>{locale === 'ar' ? 'EN' : 'ع'}</Link>
+                    <button type="button" className="ez-theme-button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label={t(theme === 'dark' ? 'switchToLight' : 'switchToDark')} title={t(theme === 'dark' ? 'lightMode' : 'darkMode')}>{theme === 'dark' ? '☀' : '◐'}<span>{t(theme === 'dark' ? 'lightMode' : 'darkMode')}</span></button>
                     <span className="ez-header-user" title={user?.name}><span className="ez-header-avatar">{initials}</span><span>{user?.name}</span></span>
                     <Link href="/logout" method="post" as="button" className="ez-logout-button" title={t('signOut')} aria-label={t('signOut')}><NavigationIcon name="logout" size={19} /></Link>
                 </div>

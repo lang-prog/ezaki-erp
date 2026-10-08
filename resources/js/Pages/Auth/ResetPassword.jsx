@@ -1,0 +1,9 @@
+import { Link, useForm, usePage } from '@inertiajs/react';
+import { translate } from '../../i18n';
+
+export default function ResetPassword({ token, email = '' }) {
+    const { locale, errors } = usePage().props;
+    const t = (key) => translate(locale, key);
+    const form = useForm({ token, email, password: '', password_confirmation: '' });
+    return <main className="auth-simple-page" dir={locale === 'ar' ? 'rtl' : 'ltr'}><section className="auth-simple-card"><Link href="/login" className="brand auth-simple-brand"><span className="brand-mark" aria-hidden="true">◆</span><span><strong>E‑Zaki</strong><small>ERP / BUSINESS OS</small></span></Link><p className="eyebrow">{t('companySignIn')}</p><h1>{t('resetPassword')}</h1><p className="auth-simple-copy">{t('resetPasswordIntro')}</p>{errors?.email && <div className="notice-card error" role="alert">{errors.email}</div>}<form onSubmit={(event) => { event.preventDefault(); form.post('/reset-password'); }} className="auth-simple-form"><label className="field"><span>{t('email')}</span><input required type="email" autoComplete="email" value={form.data.email} onChange={(event) => form.setData('email', event.target.value)} /></label><label className="field"><span>{t('newPassword')}</span><input required minLength="8" type="password" autoComplete="new-password" value={form.data.password} onChange={(event) => form.setData('password', event.target.value)} /></label><label className="field"><span>{t('confirmNewPassword')}</span><input required minLength="8" type="password" autoComplete="new-password" value={form.data.password_confirmation} onChange={(event) => form.setData('password_confirmation', event.target.value)} /></label><button className="primary-button" disabled={form.processing}>{form.processing ? t('saving') : t('resetPassword')}</button></form><Link href="/login" className="auth-back-link">{t('backToLogin')}</Link></section></main>;
+}

@@ -5,6 +5,7 @@ use App\Http\Controllers\Web\CompanyAccessController;
 use App\Http\Controllers\Web\CompanyProfileController;
 use App\Http\Controllers\Web\CoreErpPageController;
 use App\Http\Controllers\Web\LocaleController;
+use App\Http\Controllers\Web\PasswordResetController;
 use App\Http\Controllers\Web\RegistrationController;
 use App\Http\Controllers\Web\SuperAdminLicenseController;
 use App\Http\Controllers\Web\SuperAdminPlatformController;
@@ -25,6 +26,10 @@ Route::get('/', function (Request $request, CompanyLandingService $landing) {
 Route::middleware('guest')->group(function (): void {
     Route::get('/login', [AuthenticationController::class, 'show'])->defaults('type', 'company')->name('login');
     Route::post('/login', [AuthenticationController::class, 'login'])->defaults('type', 'company')->middleware('throttle:login');
+    Route::get('/forgot-password', [PasswordResetController::class, 'request'])->name('password.request');
+    Route::post('/forgot-password', [PasswordResetController::class, 'sendLink'])->middleware('throttle:3,1')->name('password.email');
+    Route::get('/reset-password/{token}', [PasswordResetController::class, 'form'])->name('password.reset');
+    Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:3,1')->name('password.update');
     Route::get('/super-admin/login', [AuthenticationController::class, 'show'])->defaults('type', 'super_admin')->name('super-admin.login');
     Route::post('/super-admin/login', [AuthenticationController::class, 'login'])->defaults('type', 'super_admin')->middleware('throttle:login');
     Route::get('/register', [RegistrationController::class, 'show'])->name('registration.create');
@@ -39,6 +44,9 @@ Route::post('/logout', [AuthenticationController::class, 'logout'])->middleware(
 
 Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'local.license', 'session.version'])->group(function (): void {
     Route::get('/dashboard', [CoreErpPageController::class, 'dashboard'])->middleware('can:dashboard.view')->name('company.dashboard');
+    Route::get('/help', fn () => Inertia::render('Company/HelpCenter'))->name('company.help');
+    Route::get('/settings/company', [CompanyProfileController::class, 'companySettings'])->name('company.settings');
+    Route::put('/settings/company', [CompanyProfileController::class, 'updateCompany'])->name('company.settings.update');
     Route::get('/settings/access', [CompanyAccessController::class, 'manage'])->middleware('can:users.view')->name('company.access');
     Route::get('/settings/users/{user}', [CompanyAccessController::class, 'profile'])->name('company.users.profile');
     Route::get('/settings/users/{user}/activity', [CompanyAccessController::class, 'activityPage'])->middleware('can:users.view_activity')->name('company.users.activity');

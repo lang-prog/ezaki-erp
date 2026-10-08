@@ -525,6 +525,22 @@ class PhaseThreeOperationsTest extends TestCase
         }
     }
 
+    public function test_company_settings_are_owner_only_and_party_report_has_period_payload(): void
+    {
+        $context = $this->tenant('settings-report');
+        $this->actingAs($context['user'])->get('/settings/company')->assertForbidden();
+        $registrar = app(PermissionRegistrar::class);
+        $registrar->setPermissionsTeamId((int) $context['company']->id);
+        $ownerRole = Role::query()->create(['name' => 'Company Owner', 'guard_name' => 'web', 'company_id' => $context['company']->id]);
+        $context['user']->assignRole($ownerRole);
+        $registrar->setPermissionsTeamId(null);
+
+        $this->actingAs($context['user'])->get('/settings/company')->assertOk()->assertInertia(fn ($page) => $page->component('Company/CompanySettings')->where('company.name', 'Operations settings-report'));
+        $this->put('/settings/company', ['name' => 'Updated Operations', 'trade_name' => 'Updated Trade', 'tax_number' => 'TAX-1', 'phone' => '0100', 'country' => 'Egypt', 'city' => 'Cairo', 'address' => 'Industrial', 'notes' => 'Updated'])->assertRedirect();
+        $this->assertDatabaseHas('companies', ['id' => $context['company']->id, 'name' => 'Updated Operations', 'tax_number' => 'TAX-1']);
+        $this->get('/customers?from=2026-01-01&to=2026-12-31')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Parties')->where('from', '2026-01-01')->where('to', '2026-12-31')->has('reportRows')->has('reportSummary'));
+    }
+
     public function test_active_owner_bypasses_stale_permissions_and_can_edit_own_profile(): void
     {
         $context = $this->tenant('owner-bypass');

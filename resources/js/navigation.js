@@ -51,6 +51,8 @@ export const companyNavigation = [
         { id: 'fleet-branches', label: 'branchPerformanceReport', href: '/fleet/reports/branch-performance', permission: 'fleet.view', icon: 'chart' },
     ] },
     { id: 'management', label: 'navCompany', icon: 'settings', items: [
+        { id: 'help-center', label: 'helpCenter', href: '/help', icon: 'document' },
+        { id: 'company-settings', label: 'companySettings', href: '/settings/company', permission: 'company.owner', icon: 'settings' },
         { id: 'users-access', label: 'usersAccess', href: '/settings/access', permission: 'users.view', icon: 'people' },
         { id: 'accounting-policy', label: 'accountingPolicies', href: '/settings/accounting', permission: 'company.owner', icon: 'settings' },
         { id: 'subscription', label: 'subscriptionStatus', href: '/subscription', permission: 'subscriptions.view', icon: 'document' },
