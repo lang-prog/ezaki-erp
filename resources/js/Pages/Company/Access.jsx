@@ -3,6 +3,7 @@ import { Link, usePage } from '@inertiajs/react';
 import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
 import { permissionDescription, permissionLabel, permissionModule } from '../../permissions';
+import { csrfFetch } from '../../csrf';
 
 function groupPermissions(permissions, locale) {
     return permissions.reduce((groups, permission) => {
@@ -41,7 +42,7 @@ export default function Access({ roles, users, permissions, canViewActivity }) {
 
     async function request(path, method, body) {
         try {
-            const response = await fetch(`/api/v1/${path}`, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content ?? '' }, body: body ? JSON.stringify(body) : undefined });
+            const response = await csrfFetch(`/api/v1/${path}`, { method, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: body ? JSON.stringify(body) : undefined });
             const data = await response.json();
             if (!response.ok) throw new Error(data.errors ? Object.values(data.errors).flat().join(' ') : data.message ?? t('requestFailed'));
             window.location.reload();

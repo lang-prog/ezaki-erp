@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { usePage } from '@inertiajs/react';
 import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
+import { csrfFetch } from '../../csrf';
 
 export default function AccountingSettings({ policy }) {
     const { locale } = usePage().props;
@@ -15,9 +16,9 @@ export default function AccountingSettings({ policy }) {
         setProcessing(true);
         setNotice({ type: '', message: '' });
         try {
-            const response = await fetch('/api/v1/accounting-settings', {
-                method: 'PUT', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content ?? '' },
+            const response = await csrfFetch('/api/v1/accounting-settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
                 body: JSON.stringify(form),
             });
             const payload = await response.json().catch(() => ({}));

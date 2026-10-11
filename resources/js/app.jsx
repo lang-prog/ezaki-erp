@@ -2,6 +2,7 @@ import './bootstrap';
 import React from 'react';
 import { createInertiaApp, router } from '@inertiajs/react';
 import { createRoot } from 'react-dom/client';
+import { csrfHeaders } from './csrf';
 
 const pages = import.meta.glob('./Pages/**/*.jsx');
 
@@ -61,6 +62,9 @@ createInertiaApp({
         return page();
     },
     setup({ el, App, props }) {
+        router.on('before', (event) => {
+            event.detail.visit.headers = { ...event.detail.visit.headers, ...csrfHeaders() };
+        });
         const syncDocumentLanguage = (locale = 'en') => {
             document.documentElement.lang = locale;
             document.documentElement.dir = locale === 'ar' ? 'rtl' : 'ltr';

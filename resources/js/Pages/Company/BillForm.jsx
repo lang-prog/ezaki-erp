@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, usePage } from '@inertiajs/react';
 import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
+import { csrfFetch } from '../../csrf';
 
 const number = (value) => Number(value || 0);
 const dateInput = (value) => value ? String(value).slice(0, 10) : '';
@@ -65,7 +66,7 @@ export default function BillForm({ type, document, branches, warehouses, parties
         setProcessing(true);
         setNotice({ type: '', message: '' });
         try {
-            const response = await fetch(`/api/v1/${path}`, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-TOKEN': globalThis.document.querySelector('meta[name="csrf-token"]')?.content ?? '' }, body: body ? JSON.stringify(body) : undefined });
+            const response = await csrfFetch(`/api/v1/${path}`, { method, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: body ? JSON.stringify(body) : undefined });
             const contentType = response.headers.get('content-type') || '';
             const result = contentType.includes('application/json') ? await response.json() : {};
             if (!response.ok) throw new Error(result.errors ? Object.values(result.errors).flat().join(' ') : result.message || text('تعذر إتمام الطلب.', 'Request failed.'));

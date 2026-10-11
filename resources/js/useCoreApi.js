@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { csrfFetch } from './csrf';
 
 export function useCoreApi() {
     const [notice, setNotice] = useState({ type: '', message: '' });
@@ -8,13 +9,11 @@ export function useCoreApi() {
         setProcessing(true);
         setNotice({ type: '', message: '' });
         try {
-            const response = await fetch(`/api/v1/${path}`, {
+            const response = await csrfFetch(`/api/v1/${path}`, {
                 method,
-                credentials: 'same-origin',
                 headers: {
                     'Content-Type': 'application/json',
                     Accept: 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content ?? '',
                 },
                 body: body === undefined ? undefined : JSON.stringify(body),
             });
