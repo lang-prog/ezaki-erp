@@ -9,6 +9,7 @@ use App\Http\Middleware\ScopeSessionCookie;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\SetLocale;
 use App\Http\Middleware\SetTenantContext;
+use App\Http\Middleware\TrustProxies;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -23,7 +24,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
-        $middleware->web(prepend: [ScopeSessionCookie::class], append: [SetLocale::class, HandleInertiaRequests::class]);
+        $middleware->web(prepend: [TrustProxies::class, ScopeSessionCookie::class], append: [SetLocale::class, HandleInertiaRequests::class]);
         $middleware->alias([
             'account.type' => CheckAccountType::class,
             'tenant' => SetTenantContext::class,

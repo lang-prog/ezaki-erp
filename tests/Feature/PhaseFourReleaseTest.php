@@ -28,4 +28,14 @@ final class PhaseFourReleaseTest extends TestCase
         $this->get('/')->assertOk()->assertHeader('X-Content-Type-Options', 'nosniff');
         $this->get('/login')->assertOk()->assertHeader('X-Frame-Options', 'SAMEORIGIN');
     }
+
+    public function test_vite_assets_use_https_when_hosting_proxy_forwards_https(): void
+    {
+        $response = $this->withHeader('X-Forwarded-Proto', 'https')->get('/login');
+        $response->assertOk();
+        $html = $response->getContent();
+
+        $this->assertStringContainsString('https://localhost/build/assets/', $html);
+        $this->assertStringNotContainsString('http://localhost/build/assets/', $html);
+    }
 }

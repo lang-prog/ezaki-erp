@@ -28,7 +28,7 @@
 
 Set the site's document root to the project's `public` directory. If the host fixes the document root elsewhere, deploy the Laravel public entrypoint and its public assets there; do not expose `.env`, `vendor`, `storage`, or the project root over HTTP. Enable URL rewriting and grant Laravel write access to `storage` and `bootstrap/cache`.
 
-Set `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL` to the HTTPS site URL, a secure generated `APP_KEY`, a MySQL connection, secure session cookies, and a production mail transport. Then run migrations and `npm run build` as part of deployment. Use `php artisan config:cache`, `php artisan route:cache`, and `php artisan view:cache` after deployment configuration is final.
+Set `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL` to the HTTPS site URL, `TRUSTED_PROXIES=*` when the host terminates TLS through OpenResty/Passenger, a secure generated `APP_KEY`, a MySQL connection, secure session cookies, and a production mail transport. The application includes a `TrustProxies` middleware so Laravel honors the hosting provider's `X-Forwarded-Proto: https` header and generates HTTPS Vite asset URLs. Then run migrations and `npm run build` as part of deployment. Use `php artisan optimize:clear` before rebuilding the production cache, followed by `php artisan config:cache`, `php artisan route:cache`, and `php artisan view:cache` after deployment configuration is final.
 
 For production, set `SESSION_SECURE_COOKIE=true`, keep `SESSION_HTTP_ONLY=true` and `SESSION_SAME_SITE=lax` (use `none` only for a deliberately cross-site HTTPS client), and set `CORS_ALLOWED_ORIGINS` to a comma-separated, explicit HTTPS origin allowlist. Never use `*` with credentials. HSTS is emitted on HTTPS responses by default; if TLS terminates at a reverse proxy, forward the original HTTPS scheme and verify `TrustProxies` before enabling preload-style policies.
 
@@ -66,13 +66,16 @@ The v1 contract is `docs/openapi/v1/openapi.json` (OpenAPI 3.1.0, base `/api/v1`
 1. Start MySQL and Apache in the XAMPP Control Panel. Create an empty `utf8mb4` database and a dedicated local application user with privileges only on that database. Never use MySQL `root` in `.env`.
 2. Point the Apache vhost `DocumentRoot` only at `<repo>/public`, enable `mod_rewrite`, and grant `AllowOverride All` for that directory. Never map the repository root, `.env`, `vendor`, or `storage` as a document root.
 3. Keep `.env` outside source control and outside any public directory. Set `APP_ENV=production`, `APP_DEBUG=false`, a unique `APP_KEY`, an HTTPS `APP_URL`, `SESSION_SECURE_COOKIE=true`, and the real MySQL/mail/queue/cache values. Do not copy secrets into `.env.example`.
-4. Install/build and migrate forward only:
+4. Install/build and migrate forward only. If the site is behind OpenResty/Passenger, keep `TRUSTED_PROXIES=*` in `.env`:
 
 ```text
 composer install --no-dev --optimize-autoloader
-npm ci && npm run build
+npm ci --include=optional && npm run build
 php artisan migrate --force
-php artisan optimize
+php artisan optimize:clear
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
 ```
 
 Do not run `migrate:fresh`, `migrate:refresh`, or drop/recreate commands against an existing installation. Take a verified backup before migrations.
@@ -124,4 +127,3 @@ Recommended policy for a single-site deployment: daily database plus private-sto
 ### External verification still required
 
 This repository-only pass cannot provide XAMPP/Apache, SMTP, Redis, a persistent queue worker, production HTTPS, load/P95, or a real MySQL migration/backup/restore proof. Run those integration checks in the deployment environment/CI (including foreign keys, `EXPLAIN`, queue retry/failure behavior, and a restore drill) before release acceptance.
-
