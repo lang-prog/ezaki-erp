@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Http\Middleware\ScopeSessionCookie;
 use Tests\TestCase;
 
 final class PhaseFourReleaseTest extends TestCase
@@ -37,5 +38,13 @@ final class PhaseFourReleaseTest extends TestCase
 
         $this->assertStringContainsString('https://localhost/build/assets/', $html);
         $this->assertStringNotContainsString('http://localhost/build/assets/', $html);
+    }
+
+    public function test_stateful_api_shares_the_company_session_cookie_with_web_requests(): void
+    {
+        $groups = app('router')->getMiddlewareGroups();
+
+        $this->assertContains(ScopeSessionCookie::class, $groups['web']);
+        $this->assertContains(ScopeSessionCookie::class, $groups['api']);
     }
 }

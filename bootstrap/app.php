@@ -25,6 +25,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
         $middleware->web(prepend: [TrustProxies::class, ScopeSessionCookie::class], append: [SetLocale::class, HandleInertiaRequests::class]);
+        $middleware->api(prepend: [TrustProxies::class, ScopeSessionCookie::class]);
         $middleware->alias([
             'account.type' => CheckAccountType::class,
             'tenant' => SetTenantContext::class,
