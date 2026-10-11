@@ -68,7 +68,12 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/suppliers', [CoreErpPageController::class, 'suppliers'])->middleware('can:parties.view')->name('company.suppliers');
     Route::get('/suppliers/{party}', [CoreErpPageController::class, 'supplierProfile'])->middleware('can:parties.view')->name('company.supplier.profile');
     Route::get('/accounting', [CoreErpPageController::class, 'accounting'])->middleware('can:accounting.view')->name('company.accounting');
+    Route::get('/accounting/receipts/{document}', [CoreErpPageController::class, 'showMoneyDocument'])->defaults('kind', 'receipt')->middleware('can:accounting.view')->whereNumber('document')->name('company.receipt.show');
+    Route::get('/accounting/receipts/{document}/print', [CoreErpPageController::class, 'printMoneyDocument'])->defaults('kind', 'receipt')->middleware('can:accounting.view')->whereNumber('document')->name('company.receipt.print');
+    Route::get('/accounting/payment-vouchers/{document}', [CoreErpPageController::class, 'showMoneyDocument'])->defaults('kind', 'voucher')->middleware('can:accounting.view')->whereNumber('document')->name('company.voucher.show');
+    Route::get('/accounting/payment-vouchers/{document}/print', [CoreErpPageController::class, 'printMoneyDocument'])->defaults('kind', 'voucher')->middleware('can:accounting.view')->whereNumber('document')->name('company.voucher.print');
     Route::get('/settings/accounting', [CoreErpPageController::class, 'accountingSettings'])->name('company.accounting-settings');
+    Route::get('/reports/product-movement', [CoreErpPageController::class, 'productMovementReport'])->middleware(['can:reports.view', 'throttle:api.reports'])->name('company.product-movement-report');
     Route::get('/reports/{report}', [CoreErpPageController::class, 'report'])->middleware(['can:reports.view', 'throttle:api.reports'])->whereIn('report', ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'])->name('company.accounting.report');
     Route::get('/operations/purchase/create', [CoreErpPageController::class, 'billForm'])->defaults('type', 'purchase')->middleware('can:purchases.create')->name('company.purchase.create');
     Route::get('/operations/sales/create', [CoreErpPageController::class, 'billForm'])->defaults('type', 'sales')->middleware('can:sales.create')->name('company.sales.create');
@@ -87,6 +92,7 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
 });
 
 Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account.type:super_admin', 'session.version'])->group(function (): void {
+    Route::post('/logout', [AuthenticationController::class, 'logout'])->name('logout');
     Route::get('/', [SuperAdminPlatformController::class, 'index'])->name('dashboard');
     Route::post('/registration-setting', [SuperAdminPlatformController::class, 'updateRegistration'])->name('registration-setting');
     Route::post('/plans', [SuperAdminPlatformController::class, 'storePlan'])->name('plans.store');

@@ -17,7 +17,6 @@ export default function Welcome() {
                     <p className="welcome-lead">{isArabic ? 'إدارة المبيعات والمشتريات والمخزون والمحاسبة من مساحة عمل واحدة واضحة.' : 'Manage sales, purchasing, inventory, and accounting from one clear workspace.'}</p>
                     <div className="welcome-actions">
                         <Link href="/login" className="primary-button">{translate(locale, 'companySignIn')} <span aria-hidden="true">←</span></Link>
-                        <Link href="/super-admin/login" className="secondary-button">{translate(locale, 'platformSignIn')}</Link>
                     </div>
                     <div className="welcome-trust"><span aria-hidden="true">✓</span><span>{isArabic ? 'صلاحيات واضحة وأثر محاسبي قابل للتدقيق' : 'Clear permissions and auditable accounting context'}</span></div>
                 </div>

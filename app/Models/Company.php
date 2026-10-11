@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Company extends Model
 {
     protected $fillable = [
-        'name', 'trade_name', 'tax_number', 'phone', 'country', 'city', 'address', 'notes',
+        'name', 'trade_name', 'tax_number', 'phone', 'country', 'city', 'address', 'notes', 'print_background_path',
         'status', 'edition', 'settings', 'approved_at', 'archived_at',
     ];
 

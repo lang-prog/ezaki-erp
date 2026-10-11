@@ -49,7 +49,7 @@ export default function WorkspaceLayout({ title, children, platform = false }) {
                     <Link href={`/locale/${locale === 'ar' ? 'en' : 'ar'}`} method="post" as="button" className="ez-language-button" aria-label={t('switchLanguage')}>{locale === 'ar' ? 'EN' : 'ع'}</Link>
                     <button type="button" className="ez-theme-button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label={t(theme === 'dark' ? 'switchToLight' : 'switchToDark')} title={t(theme === 'dark' ? 'lightMode' : 'darkMode')}>{theme === 'dark' ? '☀' : '◐'}<span>{t(theme === 'dark' ? 'lightMode' : 'darkMode')}</span></button>
                     <span className="ez-header-user" title={user?.name}><span className="ez-header-avatar">{initials}</span><span>{user?.name}</span></span>
-                    <Link href="/logout" method="post" as="button" className="ez-logout-button" title={t('signOut')} aria-label={t('signOut')}><NavigationIcon name="logout" size={19} /></Link>
+                    <Link href={platform ? '/super-admin/logout' : '/logout'} method="post" as="button" className="ez-logout-button" title={t('signOut')} aria-label={t('signOut')}><NavigationIcon name="logout" size={19} /></Link>
                 </div>
             </header>
             <main id="main-content" className="ez-main" tabIndex={-1}>

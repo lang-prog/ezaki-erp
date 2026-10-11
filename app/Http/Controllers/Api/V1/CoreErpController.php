@@ -163,7 +163,6 @@ class CoreErpController extends Controller
     public function updateDiameter(Request $request, Diameter $diameter, AuditRecorder $audit): JsonResponse
     {
         abort_unless((int) $diameter->company_id === (int) $this->company($request)->id, 404);
-        abort_if(Product::query()->where('company_id', $diameter->company_id)->where('diameter_id', $diameter->id)->exists(), 409, 'A diameter referenced by products cannot be changed.');
         $data = $request->validate(['millimeters' => ['required', 'numeric', 'gt:0', 'max:1000', Rule::unique('diameters')->where('company_id', $diameter->company_id)->ignore($diameter->id)]]);
         $diameter->forceFill($data)->save();
         $audit->record('diameters.updated', $diameter, $diameter->company_id, $request->user()->id, [], $request);

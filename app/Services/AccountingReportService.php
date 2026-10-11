@@ -81,7 +81,7 @@ class AccountingReportService
 
             return $line;
         }));
-        $this->attachInvoiceDetails($lines);
+        $this->attachSourceDetails($company, $lines);
         $openingBalance = (float) $opening + (float) $legacyPartyOpening;
         if ($lines->count()) {
             $first = $lines->first();
@@ -394,31 +394,68 @@ class AccountingReportService
         return array_map(fn (float $amount): float => round($amount, 2), $buckets);
     }
 
-    private function attachInvoiceDetails(LengthAwarePaginator $lines): void
+    private function attachSourceDetails(Company $company, LengthAwarePaginator $lines): void
     {
         $salesIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === SalesBill::class)->pluck('source_id')->filter()->unique();
         $purchaseIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === PurchaseBill::class)->pluck('source_id')->filter()->unique();
-        $sales = SalesBill::query()->whereIn('id', $salesIds)->with('lines.product:id,name')->get()->keyBy('id');
-        $purchases = PurchaseBill::query()->whereIn('id', $purchaseIds)->with('lines.product:id,name')->get()->keyBy('id');
-        $lines->setCollection($lines->getCollection()->map(function ($line) use ($sales, $purchases) {
-            $bill = $line->source_type === SalesBill::class ? $sales->get($line->source_id) : $purchases->get($line->source_id);
-            if (! $bill) {
+        $receiptIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === Receipt::class)->pluck('source_id')->filter()->unique();
+        $voucherIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === PaymentVoucher::class)->pluck('source_id')->filter()->unique();
+        $sales = SalesBill::query()->where('company_id', $company->id)->whereIn('id', $salesIds)->with(['lines.product:id,name', 'customer:id,name'])->get()->keyBy('id');
+        $purchases = PurchaseBill::query()->where('company_id', $company->id)->whereIn('id', $purchaseIds)->with(['lines.product:id,name', 'supplier:id,name'])->get()->keyBy('id');
+        $receipts = Receipt::query()->where('company_id', $company->id)->whereIn('id', $receiptIds)->with('party:id,name')->get()->keyBy('id');
+        $vouchers = PaymentVoucher::query()->where('company_id', $company->id)->whereIn('id', $voucherIds)->with('party:id,name')->get()->keyBy('id');
+        $lines->setCollection($lines->getCollection()->map(function ($line) use ($sales, $purchases, $receipts, $vouchers) {
+            if ($line->source_type === SalesBill::class) {
+                $document = $sales->get($line->source_id);
+                $type = 'sales';
+            } elseif ($line->source_type === PurchaseBill::class) {
+                $document = $purchases->get($line->source_id);
+                $type = 'purchase';
+            } elseif ($line->source_type === Receipt::class) {
+                $document = $receipts->get($line->source_id);
+                $type = 'receipt';
+            } elseif ($line->source_type === PaymentVoucher::class) {
+                $document = $vouchers->get($line->source_id);
+                $type = 'voucher';
+            } else {
+                $document = null;
+                $type = null;
+            }
+            if (! $document || ! $type) {
                 return $line;
             }
-            $details = $bill->lines->map(fn ($item) => [
-                'product' => $item->product?->name,
-                'weight' => (float) ($item->actual_weight ?? $item->factory_weight ?? 0),
-                'factory_weight' => (float) ($item->factory_weight ?? 0),
-                'actual_weight' => (float) ($item->actual_weight ?? 0),
-                'unit_price' => (float) ($item->unit_price ?? 0),
-                'value' => (float) ($item->line_total ?? 0),
-                'packages' => (float) ($item->packages ?? 0),
-            ])->values()->all();
-            $line->invoice_details = $details;
-            $line->details = $details;
-            $line->weight = round(array_sum(array_column($details, 'weight')), 3);
-            $line->unit_price = count($details) === 1 ? $details[0]['unit_price'] : null;
-            $line->value = round(array_sum(array_column($details, 'value')), 2);
+            if (in_array($type, ['sales', 'purchase'], true)) {
+                $details = $document->lines->map(fn ($item) => [
+                    'product' => $item->product?->name,
+                    'weight' => (float) ($item->actual_weight ?? $item->factory_weight ?? 0),
+                    'factory_weight' => (float) ($item->factory_weight ?? 0),
+                    'actual_weight' => (float) ($item->actual_weight ?? 0),
+                    'unit_price' => (float) ($item->unit_price ?? 0),
+                    'value' => (float) ($item->line_total ?? 0),
+                    'packages' => (float) ($item->packages ?? 0),
+                ])->values()->all();
+                $line->invoice_details = $details;
+                $line->details = $details;
+                $line->weight = round(array_sum(array_column($details, 'weight')), 3);
+                $line->unit_price = count($details) === 1 ? $details[0]['unit_price'] : null;
+                $line->value = round(array_sum(array_column($details, 'value')), 2);
+                $number = $document->internal_number;
+                $date = $type === 'sales' ? $document->bill_date?->toDateString() : $document->supplier_bill_date?->toDateString();
+                $amount = (float) $document->total;
+                $party = $type === 'sales' ? $document->customer?->name : $document->supplier?->name;
+                $viewUrl = '/operations/'.$type.'/'.$document->id;
+                $printUrl = '/operations/'.$type.'/'.$document->id.'/print?mode=invoice';
+            } else {
+                $line->details = [];
+                $line->invoice_details = [];
+                $number = $type === 'receipt' ? $document->receipt_number : $document->voucher_number;
+                $date = ($type === 'receipt' ? $document->receipt_date : $document->voucher_date)?->toDateString();
+                $amount = (float) $document->amount;
+                $party = $document->party?->name;
+                $viewUrl = '/accounting/'.$type.'s/'.$document->id;
+                $printUrl = $viewUrl.'/print';
+            }
+            $line->source_document = ['kind' => $type, 'title' => $number, 'date' => $date, 'amount' => $amount, 'party' => $party, 'status' => $document->status, 'notes' => $document->notes, 'view_url' => $viewUrl, 'print_url' => $printUrl, 'details' => $line->details];
 
             return $line;
         }));

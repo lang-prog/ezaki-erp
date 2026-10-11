@@ -15,9 +15,11 @@ use App\Models\Driver;
 use App\Models\FiscalPeriod;
 use App\Models\FleetExpense;
 use App\Models\MaintenanceRecord;
+use App\Models\PaymentVoucher;
 use App\Models\Product;
 use App\Models\ProductType;
 use App\Models\PurchaseBill;
+use App\Models\Receipt;
 use App\Models\SalesBill;
 use App\Models\Trip;
 use App\Models\Vehicle;
@@ -29,6 +31,7 @@ use App\Services\FleetReportService;
 use App\Services\InventoryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -80,7 +83,7 @@ class CoreErpPageController extends Controller
             'products' => Product::query()->where('company_id', $company->id)->whereNull('archived_at')->with(['type:id,name', 'diameter:id,millimeters'])->orderBy('name')->get(),
             'productTypes' => ProductType::query()->where('company_id', $company->id)->where('status', 'active')->orderBy('name')->get(),
             'diameters' => Diameter::query()->where('company_id', $company->id)->orderBy('millimeters')->get(),
-            'capabilities' => $this->capabilities($request, ['products.create', 'inventory.transfer', 'inventory.export']),
+            'capabilities' => $this->capabilities($request, ['products.create', 'products.update', 'inventory.transfer', 'inventory.export']),
         ]);
     }
 
@@ -99,6 +102,22 @@ class CoreErpPageController extends Controller
             }
             fclose($output);
         }, 'inventory-matrix.csv', ['Content-Type' => 'text/csv; charset=UTF-8']);
+    }
+
+    public function productMovementReport(Request $request): Response
+    {
+        $filters = $request->validate(['kind' => ['nullable', 'in:sales,purchases'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'product_type_id' => ['nullable', 'integer'], 'diameter_id' => ['nullable', 'integer']]);
+        $company = $request->attributes->get('company');
+        $kind = $filters['kind'] ?? 'sales';
+        $isSales = $kind === 'sales';
+        $billsTable = $isSales ? 'sales_bills' : 'purchase_bills';
+        $linesTable = $isSales ? 'sales_bill_lines' : 'purchase_bill_lines';
+        $billKey = $isSales ? 'sales_bill_id' : 'purchase_bill_id';
+        $dateColumn = $isSales ? 'bill_date' : 'supplier_bill_date';
+        $weight = $isSales ? 'COALESCE(lines.actual_weight, 0)' : 'COALESCE(lines.actual_weight, lines.factory_weight, 0)';
+        $query = DB::table($linesTable.' as lines')->join($billsTable.' as bills', 'bills.id', '=', 'lines.'.$billKey)->join('products', 'products.id', '=', 'lines.product_id')->leftJoin('product_types', 'product_types.id', '=', 'products.product_type_id')->leftJoin('diameters', 'diameters.id', '=', 'products.diameter_id')->where('bills.company_id', $company->id)->where('bills.status', 'approved')->when($filters['from'] ?? null, fn ($q, $value) => $q->whereDate('bills.'.$dateColumn, '>=', $value))->when($filters['to'] ?? null, fn ($q, $value) => $q->whereDate('bills.'.$dateColumn, '<=', $value))->when($filters['product_type_id'] ?? null, fn ($q, $value) => $q->where('products.product_type_id', $value))->when($filters['diameter_id'] ?? null, fn ($q, $value) => $q->where('products.diameter_id', $value))->select('product_types.name as type_name', 'diameters.millimeters as diameter')->selectRaw('COUNT(DISTINCT bills.id) as document_count')->selectRaw('SUM('.$weight.') as weight')->selectRaw('SUM(lines.line_total) as value')->groupBy('product_types.name', 'diameters.millimeters')->orderBy('product_types.name')->orderBy('diameters.millimeters');
+
+        return Inertia::render('Company/ProductMovementReport', ['kind' => $kind, 'rows' => $query->get(), 'productTypes' => ProductType::query()->where('company_id', $company->id)->where('status', 'active')->orderBy('name')->get(['id', 'name']), 'diameters' => Diameter::query()->where('company_id', $company->id)->orderBy('millimeters')->get(['id', 'millimeters']), 'filters' => $filters]);
     }
 
     public function parties(Request $request, AccountingFoundationService $foundation, AccountingReportService $reports): Response
@@ -130,10 +149,13 @@ class CoreErpPageController extends Controller
     {
         $matchesKind = $kind === 'customer' ? $party->is_customer : $party->is_supplier;
         abort_unless((int) $party->company_id === (int) $request->attributes->get('company')->id && $matchesKind, 404);
+        $companyId = (int) $request->attributes->get('company')->id;
 
         return Inertia::render('Company/PartyProfile', [
             'party' => $party->load('account:id,code,name'),
             'kind' => $kind,
+            'cashboxes' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name']),
             'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.post']),
         ]);
     }
@@ -316,7 +338,7 @@ class CoreErpPageController extends Controller
             ? PurchaseBill::query()->where('company_id', $company->id)->with(['lines.product.type', 'lines.product.diameter', 'supplier', 'branch', 'warehouse', 'vehicle'])->findOrFail($bill)
             : SalesBill::query()->where('company_id', $company->id)->with(['lines.product.type', 'lines.product.diameter', 'customer', 'branch', 'warehouse', 'vehicle'])->findOrFail($bill);
 
-        return response()->view($type === 'purchase' ? 'operations.purchase-print' : 'operations.sales-print', ['document' => $document, 'company' => $company, 'locale' => app()->getLocale(), 'mode' => $mode]);
+        return response()->view($type === 'purchase' ? 'operations.purchase-print' : 'operations.sales-print', ['document' => $document, 'company' => $company, 'locale' => app()->getLocale(), 'mode' => $mode, 'printBackgroundUrl' => $company->print_background_path ? Storage::disk('public')->url($company->print_background_path) : null]);
     }
 
     public function showBill(Request $request, string|int $first, string|int|null $second = null): Response
@@ -335,6 +357,29 @@ class CoreErpPageController extends Controller
             'revisions' => $document->revisions->sortByDesc('created_at')->values(),
             'capabilities' => $this->capabilities($request, [$editPermission, $type === 'purchase' ? 'purchases.print' : 'sales.print', $type === 'purchase' ? 'purchases.export' : 'sales.export']),
         ]);
+    }
+
+    public function showMoneyDocument(Request $request, string $kind, string|int $document): Response
+    {
+        $companyId = (int) $request->attributes->get('company')->id;
+        $model = $kind === 'receipt' ? Receipt::class : PaymentVoucher::class;
+        $query = $model::query()->where('company_id', $companyId)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name']);
+        $record = $query->findOrFail((int) $document);
+
+        return Inertia::render('Company/MoneyDocumentView', [
+            'kind' => $kind,
+            'document' => $record,
+            'capabilities' => $this->capabilities($request, ['accounting.view']),
+        ]);
+    }
+
+    public function printMoneyDocument(Request $request, string $kind, string|int $document): \Illuminate\Http\Response
+    {
+        $company = $request->attributes->get('company');
+        $model = $kind === 'receipt' ? Receipt::class : PaymentVoucher::class;
+        $record = $model::query()->where('company_id', $company->id)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->findOrFail((int) $document);
+
+        return response()->view('operations.money-document-print', ['kind' => $kind, 'document' => $record, 'company' => $company, 'locale' => app()->getLocale(), 'printBackgroundUrl' => $company->print_background_path ? Storage::disk('public')->url($company->print_background_path) : null]);
     }
 
     public function exportBill(Request $request, string|int $first, string|int|null $second = null): \Illuminate\Http\Response

@@ -5,6 +5,7 @@ use App\Http\Middleware\CheckSubscriptionStatus;
 use App\Http\Middleware\EnsureLocalLicense;
 use App\Http\Middleware\EnsureSessionVersion;
 use App\Http\Middleware\HandleInertiaRequests;
+use App\Http\Middleware\ScopeSessionCookie;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\SetLocale;
 use App\Http\Middleware\SetTenantContext;
@@ -22,7 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
-        $middleware->web(append: [SetLocale::class, HandleInertiaRequests::class]);
+        $middleware->web(prepend: [ScopeSessionCookie::class], append: [SetLocale::class, HandleInertiaRequests::class]);
         $middleware->alias([
             'account.type' => CheckAccountType::class,
             'tenant' => SetTenantContext::class,

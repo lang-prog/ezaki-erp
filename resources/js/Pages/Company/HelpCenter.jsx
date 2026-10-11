@@ -1,5 +1,5 @@
 import { Link, usePage } from '@inertiajs/react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
 import manualSource from '../../../docs/E-ZAKI-ERP-USER-MANUAL.md?raw';
@@ -102,6 +102,25 @@ export default function HelpCenter() {
         { href: '/settings/access', label: locale === 'en' ? 'Users & access' : 'المستخدمون والصلاحيات' },
     ];
     const mainSections = filtered.filter((section) => section.level === 1 || section.level === 2);
+
+    const focusHash = (hash = window.location.hash) => {
+        const id = decodeURIComponent(hash.replace(/^#/, ''));
+        if (!id) return;
+        const target = document.getElementById(id);
+        const section = sections.find((item) => item.id === id);
+        if (section) setExpanded((current) => ({ ...current, [id]: true }));
+        if (target) {
+            setActiveId(id);
+            window.requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+        }
+    };
+
+    useEffect(() => {
+        const onHashChange = () => focusHash();
+        window.addEventListener('hashchange', onHashChange);
+        const timer = window.setTimeout(() => focusHash(), 0);
+        return () => { window.clearTimeout(timer); window.removeEventListener('hashchange', onHashChange); };
+    }, [sections]);
 
     return <CompanyLayout title={pageTitle}>
         <div className="help-center">

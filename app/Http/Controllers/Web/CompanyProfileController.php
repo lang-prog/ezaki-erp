@@ -9,6 +9,7 @@ use App\Services\SessionRevocationService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -19,7 +20,7 @@ class CompanyProfileController extends Controller
         abort_unless($request->user()->isCompanyOwner(), 403);
         $company = $request->attributes->get('company');
 
-        return Inertia::render('Company/CompanySettings', ['company' => $company->only(['id', 'name', 'trade_name', 'tax_number', 'phone', 'country', 'city', 'address', 'notes'])]);
+        return Inertia::render('Company/CompanySettings', ['company' => [...$company->only(['id', 'name', 'trade_name', 'tax_number', 'phone', 'country', 'city', 'address', 'notes']), 'print_background_url' => $company->print_background_path ? Storage::disk('public')->url($company->print_background_path) : null]]);
     }
 
     public function updateCompany(Request $request): RedirectResponse
@@ -34,8 +35,22 @@ class CompanyProfileController extends Controller
             'city' => ['nullable', 'string', 'max:100'],
             'address' => ['nullable', 'string', 'max:500'],
             'notes' => ['nullable', 'string', 'max:2000'],
+            'print_background' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'remove_print_background' => ['nullable', 'boolean'],
         ]);
-        $request->attributes->get('company')->update($data);
+        $company = $request->attributes->get('company');
+        unset($data['print_background'], $data['remove_print_background']);
+        if ($request->boolean('remove_print_background') && $company->print_background_path) {
+            Storage::disk('public')->delete($company->print_background_path);
+            $data['print_background_path'] = null;
+        }
+        if ($request->hasFile('print_background')) {
+            if ($company->print_background_path) {
+                Storage::disk('public')->delete($company->print_background_path);
+            }
+            $data['print_background_path'] = $request->file('print_background')->store('companies/'.$company->id.'/print', 'public');
+        }
+        $company->update($data);
 
         return back()->with('status', 'Company details updated.');
     }
