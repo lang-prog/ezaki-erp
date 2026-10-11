@@ -443,8 +443,8 @@ class AccountingReportService
                 $date = $type === 'sales' ? $document->bill_date?->toDateString() : $document->supplier_bill_date?->toDateString();
                 $amount = (float) $document->total;
                 $party = $type === 'sales' ? $document->customer?->name : $document->supplier?->name;
-                $viewUrl = '/operations/'.$type.'/'.$document->id;
-                $printUrl = '/operations/'.$type.'/'.$document->id.'/print?mode=invoice';
+                $viewUrl = route($type === 'sales' ? 'company.sales.show' : 'company.purchase.show', ['bill' => $document->id]);
+                $printUrl = route($type === 'sales' ? 'company.sales.print' : 'company.purchase.print', ['bill' => $document->id, 'mode' => 'invoice']);
             } else {
                 $line->details = [];
                 $line->invoice_details = [];
@@ -452,10 +452,10 @@ class AccountingReportService
                 $date = ($type === 'receipt' ? $document->receipt_date : $document->voucher_date)?->toDateString();
                 $amount = (float) $document->amount;
                 $party = $document->party?->name;
-                $viewUrl = '/accounting/'.$type.'s/'.$document->id;
-                $printUrl = $viewUrl.'/print';
+                $viewUrl = route($type === 'receipt' ? 'company.receipt.show' : 'company.voucher.show', ['document' => $document->id]);
+                $printUrl = route($type === 'receipt' ? 'company.receipt.print' : 'company.voucher.print', ['document' => $document->id]);
             }
-            $line->source_document = ['kind' => $type, 'title' => $number, 'date' => $date, 'amount' => $amount, 'party' => $party, 'status' => $document->status, 'notes' => $document->notes, 'view_url' => $viewUrl, 'print_url' => $printUrl, 'details' => $line->details];
+            $line->source_document = ['kind' => $type, 'title' => $number, 'date' => $date, 'amount' => $amount, 'party' => $party, 'status' => $document->status, 'notes' => $document->notes, 'weight' => $line->weight ?? null, 'unit_price' => $line->unit_price ?? null, 'value' => $line->value ?? $amount, 'view_url' => $viewUrl, 'print_url' => $printUrl, 'details' => $line->details];
 
             return $line;
         }));
@@ -483,10 +483,10 @@ class AccountingReportService
         }
 
         return match ($sourceType) {
-            Receipt::class => '/accounting#receipt-'.$sourceId,
-            PaymentVoucher::class => '/accounting#voucher-'.$sourceId,
-            PurchaseBill::class => '/operations/purchase/'.$sourceId.'/edit',
-            SalesBill::class => '/operations/sales/'.$sourceId.'/edit',
+            Receipt::class => route('company.receipt.show', ['document' => $sourceId]),
+            PaymentVoucher::class => route('company.voucher.show', ['document' => $sourceId]),
+            PurchaseBill::class => route('company.purchase.show', ['bill' => $sourceId]),
+            SalesBill::class => route('company.sales.show', ['bill' => $sourceId]),
             default => null,
         };
     }

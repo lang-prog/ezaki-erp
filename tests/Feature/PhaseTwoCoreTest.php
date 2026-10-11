@@ -373,7 +373,7 @@ class PhaseTwoCoreTest extends TestCase
         $this->assertDatabaseHas('journal_entries', ['id' => $receipt->journal_entry_id, 'source_type' => Receipt::class, 'source_id' => $receipt->id, 'status' => 'posted']);
         $this->assertSame(1, DB::table('receipts')->where('company_id', $company->id)->where('receipt_number', 'LEGACY-1')->count());
         $this->assertSame(2, app(AccountingReportService::class)->journal($company)['entries']->total());
-        $this->assertSame('/accounting#receipt-'.$receipt->id, app(AccountingReportService::class)->journal($company)['entries']->first()->source_url);
+        $this->assertSame(route('company.receipt.show', ['document' => $receipt->id]), app(AccountingReportService::class)->journal($company)['entries']->first()->source_url);
         $this->assertSame(0, app(AccountingService::class)->backfillUnjournaledVouchers($company, $user));
     }
 

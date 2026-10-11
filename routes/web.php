@@ -68,10 +68,10 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/suppliers', [CoreErpPageController::class, 'suppliers'])->middleware('can:parties.view')->name('company.suppliers');
     Route::get('/suppliers/{party}', [CoreErpPageController::class, 'supplierProfile'])->middleware('can:parties.view')->name('company.supplier.profile');
     Route::get('/accounting', [CoreErpPageController::class, 'accounting'])->middleware('can:accounting.view')->name('company.accounting');
-    Route::get('/accounting/receipts/{document}', [CoreErpPageController::class, 'showMoneyDocument'])->defaults('kind', 'receipt')->middleware('can:accounting.view')->whereNumber('document')->name('company.receipt.show');
-    Route::get('/accounting/receipts/{document}/print', [CoreErpPageController::class, 'printMoneyDocument'])->defaults('kind', 'receipt')->middleware('can:accounting.view')->whereNumber('document')->name('company.receipt.print');
-    Route::get('/accounting/payment-vouchers/{document}', [CoreErpPageController::class, 'showMoneyDocument'])->defaults('kind', 'voucher')->middleware('can:accounting.view')->whereNumber('document')->name('company.voucher.show');
-    Route::get('/accounting/payment-vouchers/{document}/print', [CoreErpPageController::class, 'printMoneyDocument'])->defaults('kind', 'voucher')->middleware('can:accounting.view')->whereNumber('document')->name('company.voucher.print');
+    Route::get('/accounting/receipts/{document}', [CoreErpPageController::class, 'showReceipt'])->middleware('can:accounting.view')->whereNumber('document')->name('company.receipt.show');
+    Route::get('/accounting/receipts/{document}/print', [CoreErpPageController::class, 'printReceipt'])->middleware('can:accounting.view')->whereNumber('document')->name('company.receipt.print');
+    Route::get('/accounting/payment-vouchers/{document}', [CoreErpPageController::class, 'showVoucher'])->middleware('can:accounting.view')->whereNumber('document')->name('company.voucher.show');
+    Route::get('/accounting/payment-vouchers/{document}/print', [CoreErpPageController::class, 'printVoucher'])->middleware('can:accounting.view')->whereNumber('document')->name('company.voucher.print');
     Route::get('/settings/accounting', [CoreErpPageController::class, 'accountingSettings'])->name('company.accounting-settings');
     Route::get('/reports/product-movement', [CoreErpPageController::class, 'productMovementReport'])->middleware(['can:reports.view', 'throttle:api.reports'])->name('company.product-movement-report');
     Route::get('/reports/{report}', [CoreErpPageController::class, 'report'])->middleware(['can:reports.view', 'throttle:api.reports'])->whereIn('report', ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'])->name('company.accounting.report');

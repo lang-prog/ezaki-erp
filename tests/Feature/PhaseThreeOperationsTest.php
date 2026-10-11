@@ -681,4 +681,25 @@ class PhaseThreeOperationsTest extends TestCase
         $this->assertNotNull($entryId);
         $this->assertDatabaseHas('journal_lines', ['journal_entry_id' => $entryId, 'account_id' => $selectedAccount->id, 'credit' => 60]);
     }
+
+    public function test_receipt_and_voucher_details_and_print_routes_are_available_from_party_workspaces(): void
+    {
+        $context = $this->tenant('money-document-routes');
+        Sanctum::actingAs($context['user']);
+        $receiptId = $this->postJson('/api/v1/receipts', [
+            'counterparty_type' => 'customer', 'party_id' => $context['customer']->id, 'cashbox_id' => $context['cashbox']->id,
+            'receipt_date' => now()->toDateString(), 'amount' => 125, 'notes' => 'Customer collection',
+        ])->assertCreated()->json('data.id');
+        $voucherId = $this->postJson('/api/v1/payment-vouchers', [
+            'counterparty_type' => 'supplier', 'party_id' => $context['supplier']->id, 'cashbox_id' => $context['cashbox']->id,
+            'voucher_date' => now()->toDateString(), 'amount' => 75, 'notes' => 'Supplier payment',
+        ])->assertCreated()->json('data.id');
+
+        $this->actingAs($context['user'])->get('/accounting/receipts/'.$receiptId)->assertOk()->assertInertia(fn ($page) => $page->component('Company/MoneyDocumentView')->where('kind', 'receipt'));
+        $this->get('/accounting/receipts/'.$receiptId.'/print')->assertOk();
+        $this->get('/accounting/payment-vouchers/'.$voucherId)->assertOk()->assertInertia(fn ($page) => $page->component('Company/MoneyDocumentView')->where('kind', 'voucher'));
+        $this->get('/accounting/payment-vouchers/'.$voucherId.'/print')->assertOk();
+        $this->get('/customers/'.$context['customer']->id)->assertOk()->assertInertia(fn ($page) => $page->where('canPost', true));
+        $this->get('/suppliers/'.$context['supplier']->id)->assertOk()->assertInertia(fn ($page) => $page->where('canPost', true));
+    }
 }

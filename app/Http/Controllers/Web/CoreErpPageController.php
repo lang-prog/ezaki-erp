@@ -157,6 +157,7 @@ class CoreErpPageController extends Controller
             'cashboxes' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name']),
             'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name']),
             'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.post']),
+            'canPost' => $request->user()->isCompanyOwner() || $request->user()->can('accounting.post'),
         ]);
     }
 
@@ -359,8 +360,19 @@ class CoreErpPageController extends Controller
         ]);
     }
 
-    public function showMoneyDocument(Request $request, string $kind, string|int $document): Response
+    public function showReceipt(Request $request, string|int $document): Response
     {
+        return $this->showMoneyDocument($request, 'receipt', $document);
+    }
+
+    public function showVoucher(Request $request, string|int $document): Response
+    {
+        return $this->showMoneyDocument($request, 'voucher', $document);
+    }
+
+    private function showMoneyDocument(Request $request, string $kind, string|int $document): Response
+    {
+        abort_unless(in_array($kind, ['receipt', 'voucher'], true), 404);
         $companyId = (int) $request->attributes->get('company')->id;
         $model = $kind === 'receipt' ? Receipt::class : PaymentVoucher::class;
         $query = $model::query()->where('company_id', $companyId)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name']);
@@ -373,8 +385,19 @@ class CoreErpPageController extends Controller
         ]);
     }
 
-    public function printMoneyDocument(Request $request, string $kind, string|int $document): \Illuminate\Http\Response
+    public function printReceipt(Request $request, string|int $document): \Illuminate\Http\Response
     {
+        return $this->printMoneyDocument($request, 'receipt', $document);
+    }
+
+    public function printVoucher(Request $request, string|int $document): \Illuminate\Http\Response
+    {
+        return $this->printMoneyDocument($request, 'voucher', $document);
+    }
+
+    private function printMoneyDocument(Request $request, string $kind, string|int $document): \Illuminate\Http\Response
+    {
+        abort_unless(in_array($kind, ['receipt', 'voucher'], true), 404);
         $company = $request->attributes->get('company');
         $model = $kind === 'receipt' ? Receipt::class : PaymentVoucher::class;
         $record = $model::query()->where('company_id', $company->id)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->findOrFail((int) $document);
