@@ -1,18 +1,33 @@
-function readCookie(name) {
+function rawCookie(name) {
     if (typeof document === 'undefined') return '';
 
     const prefix = `${name}=`;
     const item = document.cookie.split('; ').find((value) => value.startsWith(prefix));
 
-    return item ? decodeURIComponent(item.slice(prefix.length)) : '';
+    return item ? item.slice(prefix.length) : '';
+}
+
+function decoded(value) {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
 }
 
 export function csrfHeaders() {
-    const cookieToken = readCookie('XSRF-TOKEN');
+    const rawCookieToken = rawCookie('XSRF-TOKEN');
+    const cookieToken = decoded(rawCookieToken);
     const metaToken = typeof document === 'undefined' ? '' : document.querySelector('meta[name="csrf-token"]')?.content ?? '';
-    const token = cookieToken || metaToken;
 
-    return token ? { 'X-CSRF-TOKEN': token } : {};
+    // Laravel may encrypt the XSRF-TOKEN cookie. In that case the server
+    // expects the original encoded value in X-XSRF-TOKEN, not the decrypted
+    // value in X-CSRF-TOKEN.
+    if (rawCookieToken && cookieToken.startsWith('eyJpdiI6')) {
+        return { 'X-XSRF-TOKEN': rawCookieToken };
+    }
+
+    return cookieToken || metaToken ? { 'X-CSRF-TOKEN': cookieToken || metaToken } : {};
 }
 
 export function csrfFetch(url, options = {}) {
