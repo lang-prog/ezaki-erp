@@ -3,6 +3,7 @@ import React from 'react';
 import { createInertiaApp, router } from '@inertiajs/react';
 import { createRoot } from 'react-dom/client';
 import { csrfHeaders } from './csrf';
+import { translate } from './i18n';
 
 const pages = import.meta.glob('./Pages/**/*.jsx');
 
@@ -64,6 +65,14 @@ createInertiaApp({
     setup({ el, App, props }) {
         router.on('before', (event) => {
             event.detail.visit.headers = { ...event.detail.visit.headers, ...csrfHeaders() };
+        });
+        // Expired session/CSRF (419) and other non-Inertia failures get a message instead of a raw HTML modal.
+        router.on('invalid', (event) => {
+            const status = event.detail.response?.status;
+            if (status === 419 || status === 403 || status >= 500) {
+                event.preventDefault();
+                window.alert(translate(document.documentElement.lang || 'en', 'requestFailed'));
+            }
         });
         const syncDocumentLanguage = (locale = 'en') => {
             document.documentElement.lang = locale;

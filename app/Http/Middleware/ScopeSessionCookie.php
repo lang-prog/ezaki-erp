@@ -13,9 +13,10 @@ final class ScopeSessionCookie
     public function handle(Request $request, Closure $next): Response
     {
         $isPlatform = $request->is('super-admin', 'super-admin/*');
-        config(['session.cookie' => config($isPlatform
-            ? 'session.platform_cookie'
-            : 'session.company_cookie')]);
+        $name = config($isPlatform ? 'session.platform_cookie' : 'session.company_cookie');
+        config(['session.cookie' => $name]);
+        // The session store caches its name when first resolved, so update it too.
+        app('session')->driver()->setName($name);
 
         return $next($request);
     }
