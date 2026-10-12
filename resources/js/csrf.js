@@ -21,10 +21,9 @@ export function csrfHeaders() {
     const metaToken = typeof document === 'undefined' ? '' : document.querySelector('meta[name="csrf-token"]')?.content ?? '';
 
     // Laravel may encrypt the XSRF-TOKEN cookie. In that case the server
-    // expects the original encoded value in X-XSRF-TOKEN, not the decrypted
-    // value in X-CSRF-TOKEN.
+    // decrypts the URL-decoded cookie value from X-XSRF-TOKEN.
     if (rawCookieToken && cookieToken.startsWith('eyJpdiI6')) {
-        return { 'X-XSRF-TOKEN': rawCookieToken };
+        return { 'X-XSRF-TOKEN': cookieToken };
     }
 
     return cookieToken || metaToken ? { 'X-CSRF-TOKEN': cookieToken || metaToken } : {};

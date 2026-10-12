@@ -13,9 +13,9 @@ final class ScopeSessionCookie
     public function handle(Request $request, Closure $next): Response
     {
         $isPlatform = $request->is('super-admin', 'super-admin/*');
-        config(['session.cookie' => $isPlatform
-            ? env('PLATFORM_SESSION_COOKIE', 'ezaki-platform-session')
-            : env('COMPANY_SESSION_COOKIE', 'ezaki-company-session')]);
+        config(['session.cookie' => config($isPlatform
+            ? 'session.platform_cookie'
+            : 'session.company_cookie')]);
 
         return $next($request);
     }

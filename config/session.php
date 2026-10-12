@@ -132,6 +132,10 @@ return [
         Str::slug((string) env('APP_NAME', 'laravel')).'-session'
     ),
 
+    'company_cookie' => env('COMPANY_SESSION_COOKIE', 'ezaki-company-session'),
+
+    'platform_cookie' => env('PLATFORM_SESSION_COOKIE', 'ezaki-platform-session'),
+
     /*
     |--------------------------------------------------------------------------
     | Session Cookie Path

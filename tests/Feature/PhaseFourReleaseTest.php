@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Http\Middleware\ScopeSessionCookie;
+use Illuminate\Http\Request;
 use Tests\TestCase;
 
 final class PhaseFourReleaseTest extends TestCase
@@ -36,7 +37,7 @@ final class PhaseFourReleaseTest extends TestCase
         $response->assertOk();
         $html = $response->getContent();
 
-        $this->assertStringContainsString('https://localhost/build/assets/', $html);
+        $this->assertMatchesRegularExpression('~https://localhost(?::\d+)?/build/assets/~', $html);
         $this->assertStringNotContainsString('http://localhost/build/assets/', $html);
     }
 
@@ -46,5 +47,25 @@ final class PhaseFourReleaseTest extends TestCase
 
         $this->assertContains(ScopeSessionCookie::class, $groups['web']);
         $this->assertContains(ScopeSessionCookie::class, $groups['api']);
+    }
+
+    public function test_company_and_platform_requests_select_distinct_configured_session_cookies(): void
+    {
+        config([
+            'session.company_cookie' => 'test-company-session',
+            'session.platform_cookie' => 'test-platform-session',
+        ]);
+        $middleware = app(ScopeSessionCookie::class);
+
+        $middleware->handle(Request::create('/api/v1/products'), function () {
+            $this->assertSame('test-company-session', config('session.cookie'));
+
+            return response('ok');
+        });
+        $middleware->handle(Request::create('/super-admin'), function () {
+            $this->assertSame('test-platform-session', config('session.cookie'));
+
+            return response('ok');
+        });
     }
 }
