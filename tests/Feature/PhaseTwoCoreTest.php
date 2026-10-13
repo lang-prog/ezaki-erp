@@ -272,6 +272,9 @@ class PhaseTwoCoreTest extends TestCase
         $this->get('/suppliers/1')->assertNotFound();
         $this->get('/accounting?counterparty_type=customer&party_id=1')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Accounting'));
         $this->get('/accounting')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Accounting'));
+        $this->get('/accounting/receipts')->assertOk()->assertInertia(fn ($page) => $page->component('Company/ReceiptsList'));
+        $this->get('/accounting/payment-vouchers')->assertOk()->assertInertia(fn ($page) => $page->component('Company/PaymentVouchersList'));
+        $this->get('/reports/invoice-settlements')->assertOk()->assertInertia(fn ($page) => $page->component('Company/InvoiceSettlementReport'));
         Sanctum::actingAs($user);
         $cashbox = $this->postJson('/api/v1/cashboxes', ['name' => 'Main till'])->assertCreated()->json('data.id');
         $this->assertDatabaseHas('cashboxes', ['id' => $cashbox]);

@@ -81,7 +81,7 @@ export default function Accounting({ accounts = [], cashboxes = [], banks = [], 
     const canCreate = Boolean(capabilities['accounting.create']);
     const canPost = Boolean(capabilities['accounting.post']);
     const visibleCustomCount = accounts.filter((account) => !account.is_system).length;
-    const reportLinks = useMemo(() => [['journal', 'journal'], ['ledger', 'ledger'], ['trial-balance', 'trialBalance'], ['income-statement', 'incomeStatement'], ['balance-sheet', 'balanceSheet'], ['debtors', 'debtors'], ['receivables', 'receivablesReport'], ['payables', 'payablesReport']], []);
+    const reportLinks = useMemo(() => [['journal', 'journal'], ['ledger', 'ledger'], ['trial-balance', 'trialBalance'], ['income-statement', 'incomeStatement'], ['balance-sheet', 'balanceSheet'], ['debtors', 'debtors'], ['receivables', 'receivablesReport'], ['payables', 'payablesReport'], ['invoice-settlements', 'invoiceSettlements']], []);
 
     const saveAccount = (event) => { event.preventDefault(); send(`accounts/${editingAccount.id}`, 'PUT', editingAccount).then(() => setEditingAccount(null)); };
     const createAccount = (event) => { event.preventDefault(); send('accounts', 'POST', childAccount).then(() => setChildAccount({ parent_id: '', name: '' })); };

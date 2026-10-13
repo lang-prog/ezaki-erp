@@ -24,6 +24,8 @@ export const companyNavigation = [
     ] },
     { id: 'accounting', label: 'accounting', icon: 'ledger', items: [
         { id: 'accounting-main', label: 'accountingWorkspace', href: '/accounting', permission: 'accounting.view', icon: 'ledger' },
+        { id: 'accounting-receipts', label: 'receipts', href: '/accounting/receipts', permission: 'accounting.view', icon: 'document' },
+        { id: 'accounting-vouchers', label: 'vouchers', href: '/accounting/payment-vouchers', permission: 'accounting.view', icon: 'document' },
     ] },
     { id: 'financial-reports', label: 'financialReports', icon: 'chart', items: [
         { id: 'report-journal', label: 'journal', href: '/reports/journal', permission: 'reports.view', icon: 'document' },
@@ -36,6 +38,7 @@ export const companyNavigation = [
         { id: 'report-receivables', label: 'receivablesReport', href: '/reports/receivables', permission: 'reports.view', icon: 'people' },
         { id: 'report-payables', label: 'payablesReport', href: '/reports/payables', permission: 'reports.view', icon: 'people' },
         { id: 'report-creditors', label: 'creditorsReport', href: '/reports/creditors', permission: 'reports.view', icon: 'people' },
+        { id: 'report-invoice-settlements', label: 'invoiceSettlements', href: '/reports/invoice-settlements', permission: 'reports.view', icon: 'chart' },
     ] },
     { id: 'fleet', label: 'fleet', icon: 'truck', items: [
         { id: 'fleet-main', label: 'fleetWorkspace', href: '/fleet', permission: 'fleet.view', icon: 'truck' },

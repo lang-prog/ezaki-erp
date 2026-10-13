@@ -203,6 +203,47 @@ class CoreErpPageController extends Controller
         ]);
     }
 
+    public function receiptsList(Request $request): Response
+    {
+        $companyId = (int) $request->attributes->get('company')->id;
+
+        return Inertia::render('Company/ReceiptsList', [
+            'documents' => Receipt::query()->where('company_id', $companyId)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->orderByDesc('receipt_date')->orderByDesc('id')->paginate(25),
+            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.post', 'accounting.reverse']),
+        ]);
+    }
+
+    public function paymentVouchersList(Request $request): Response
+    {
+        $companyId = (int) $request->attributes->get('company')->id;
+
+        return Inertia::render('Company/PaymentVouchersList', [
+            'documents' => PaymentVoucher::query()->where('company_id', $companyId)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->orderByDesc('voucher_date')->orderByDesc('id')->paginate(25),
+            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.post', 'accounting.reverse']),
+        ]);
+    }
+
+    public function invoiceSettlementReport(Request $request, PaymentAllocationService $allocations, AccountingReportService $reports): Response
+    {
+        $company = $request->attributes->get('company');
+        $from = $request->query('from', now()->startOfMonth()->toDateString());
+        $to = $request->query('to', now()->endOfMonth()->toDateString());
+        $customerSummary = $reports->receivables($company, 0, $from, $to);
+        $supplierSummary = $reports->payables($company, 0, $from, $to);
+
+        return Inertia::render('Company/InvoiceSettlementReport', [
+            'from' => $from,
+            'to' => $to,
+            'customerRows' => $customerSummary['rows'],
+            'supplierRows' => $supplierSummary['rows'],
+            'customerTotal' => $customerSummary['total_outstanding'] ?? 0,
+            'supplierTotal' => $supplierSummary['total_outstanding'] ?? 0,
+            'openSales' => $allocations->openInvoices($company, 'sales'),
+            'openPurchases' => $allocations->openInvoices($company, 'purchase'),
+            'capabilities' => $this->capabilities($request, ['reports.view', 'accounting.view']),
+        ]);
+    }
+
     public function accountingSettings(Request $request, CompanyAccountingPolicyService $policies): Response
     {
         abort_unless($request->user()->isCompanyOwner(), 403);
@@ -387,7 +428,7 @@ class CoreErpPageController extends Controller
         return Inertia::render('Company/MoneyDocumentView', [
             'kind' => $kind,
             'document' => $record,
-            'capabilities' => $this->capabilities($request, ['accounting.view']),
+            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.reverse']),
         ]);
     }
 
