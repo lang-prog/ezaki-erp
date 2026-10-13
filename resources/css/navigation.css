@@ -122,6 +122,31 @@ body { font-size: var(--ez-font-size); line-height: var(--ez-readable-line); }
 .party-form .primary-button { min-height: 42px; }
 .party-edit-modal { width: min(760px, 100%); }
 .statement-ledger-wrap { margin-top: 18px; border: 1px solid var(--ez-line); border-radius: 12px; background: var(--ez-surface); box-shadow: var(--ez-shadow-sm); }
+.statement-workspace { margin-top: 16px; display: flex; flex-direction: column; gap: 16px; }
+.statement-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 14px; }
+.statement-kpi-card { background: var(--ez-surface); border: 1px solid var(--ez-line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; box-shadow: var(--ez-shadow-sm); }
+.statement-kpi-card--primary { border-color: var(--ez-focus); background: color-mix(in srgb, var(--ez-emerald-wash) 40%, var(--ez-surface)); }
+.statement-kpi-label { font-size: 12px; font-weight: 700; color: var(--ez-ink-soft); }
+.statement-kpi-value { font-size: 18px; font-weight: 900; font-family: Manrope, Cairo, sans-serif; }
+.statement-kpi-tag { font-size: 11px; font-weight: 700; color: var(--ez-muted); }
+.statement-meta-banner { display: flex; justify-content: space-between; align-items: center; background: color-mix(in srgb, var(--ez-emerald-wash) 20%, var(--ez-surface)); border: 1px solid var(--ez-line); border-radius: 10px; padding: 14px 18px; flex-wrap: wrap; gap: 12px; }
+.statement-meta-banner h3 { margin: 0; font-size: 16px; font-weight: 800; color: var(--ez-ink); }
+.statement-meta-party { margin: 2px 0 0; font-size: 13px; font-weight: 600; color: var(--ez-ink-soft); }
+.statement-meta-range { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.statement-meta-range span { font-weight: 700; font-size: 13px; }
+.statement-meta-range small { color: var(--ez-muted); font-size: 12px; }
+.document-badge { display: inline-block; padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; margin-inline-end: 6px; }
+.document-badge--sales { background: #fef3c7; color: #92400e; }
+.document-badge--purchase { background: #e0f2fe; color: #075985; }
+.document-badge--receipt { background: #dcfce7; color: #166534; }
+.document-badge--voucher { background: #fce7f3; color: #9d174d; }
+.document-badge--opening_balance { background: #f3e8ff; color: #6b21a8; }
+.document-badge--reversal { background: #fee2e2; color: #991b1b; }
+.document-badge--journal { background: #f1f5f9; color: #334155; }
+.statement-debit-val { color: #15803d; font-weight: 700; }
+.statement-credit-val { color: #b45309; font-weight: 700; }
+.statement-settled-val { color: #0284c7; }
+.balance-indicator { font-size: 10px; margin-inline-start: 4px; padding: 1px 4px; border-radius: 4px; background: rgba(0,0,0,0.06); font-weight: 800; }
 .statement-ledger-table { min-width: 1060px; }
 .statement-ledger-table th { background: #eef6f4; color: var(--ez-ink-soft); font-size: 12px; font-weight: 800; }
 .statement-ledger-table td, .statement-ledger-table th { padding: 13px 14px; border-bottom: 1px solid var(--ez-line); }

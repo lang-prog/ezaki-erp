@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Account;
 use App\Models\Company;
 use App\Models\CustomerSupplier;
+use App\Models\JournalEntry;
 use App\Models\PaymentVoucher;
 use App\Models\PurchaseBill;
 use App\Models\Receipt;
@@ -65,28 +66,103 @@ class AccountingReportService
     {
         abort_unless((int) $account->company_id === (int) $company->id, 404);
         $accountIds = $this->descendantIds($company, $account->id);
-        $opening = $this->balanceForAccounts($company, $accountIds, $from);
-        $legacyPartyOpening = CustomerSupplier::query()->where('company_id', $company->id)->where('account_id', $account->id)->whereNull('opening_balance_journal_entry_id')->sum('opening_balance');
-        $lines = DB::table('journal_lines as lines')
+
+        $party = CustomerSupplier::query()
+            ->where('company_id', $company->id)
+            ->whereIn('account_id', $accountIds)
+            ->first();
+
+        $legacyPartyOpening = 0.0;
+        $legacyParties = CustomerSupplier::query()
+            ->where('company_id', $company->id)
+            ->whereIn('account_id', $accountIds)
+            ->whereNull('opening_balance_journal_entry_id')
+            ->get(['id', 'opening_balance', 'opening_balance_direction', 'opening_balance_date']);
+        foreach ($legacyParties as $lp) {
+            $amt = (float) $lp->opening_balance;
+            if ($amt <= 0) {
+                continue;
+            }
+            $dir = $lp->opening_balance_direction ?? 'debit';
+            $signed = $dir === 'credit' ? -$amt : $amt;
+            $opDate = $lp->opening_balance_date?->toDateString();
+            if ($from === null || ($opDate !== null && $opDate < $from)) {
+                $legacyPartyOpening += $signed;
+            }
+        }
+
+        $journalOpening = 0.0;
+        if ($from !== null) {
+            $journalOpening = (float) DB::table('journal_lines as lines')
+                ->join('journal_entries as entries', 'entries.id', '=', 'lines.journal_entry_id')
+                ->where('entries.company_id', $company->id)
+                ->whereIn('entries.status', ['posted', 'reversed'])
+                ->where('lines.company_id', $company->id)
+                ->whereIn('lines.account_id', $accountIds)
+                ->whereDate('entries.entry_date', '<', $from)
+                ->selectRaw('COALESCE(SUM(lines.debit - lines.credit), 0) as balance')
+                ->value('balance');
+        }
+        $openingBalance = round($journalOpening + $legacyPartyOpening, 2);
+
+        $periodQuery = DB::table('journal_lines as lines')
             ->join('journal_entries as entries', 'entries.id', '=', 'lines.journal_entry_id')
-            ->where('entries.company_id', $company->id)->whereIn('entries.status', ['posted', 'reversed'])
-            ->where('lines.company_id', $company->id)->whereIn('lines.account_id', $accountIds)
-            ->when($from, fn ($query) => $query->whereDate('entries.entry_date', '>=', $from))
-            ->when($to, fn ($query) => $query->whereDate('entries.entry_date', '<=', $to))
             ->join('accounts', 'accounts.id', '=', 'lines.account_id')
-            ->select('lines.id', 'accounts.code as account_code', 'accounts.name as account_name', 'entries.entry_number', 'entries.entry_date', 'entries.description', 'entries.source_type', 'entries.source_id', 'lines.description as line_description', 'lines.debit', 'lines.credit')
-            ->orderBy('entries.entry_date')->orderBy('entries.id')->orderBy('lines.id')->paginate(50);
+            ->where('entries.company_id', $company->id)
+            ->whereIn('entries.status', ['posted', 'reversed'])
+            ->where('lines.company_id', $company->id)
+            ->whereIn('lines.account_id', $accountIds)
+            ->when($from, fn ($query) => $query->whereDate('entries.entry_date', '>=', $from))
+            ->when($to, fn ($query) => $query->whereDate('entries.entry_date', '<=', $to));
+
+        $totals = (clone $periodQuery)
+            ->selectRaw('COALESCE(SUM(lines.debit), 0) as total_debit')
+            ->selectRaw('COALESCE(SUM(lines.credit), 0) as total_credit')
+            ->selectRaw('COUNT(lines.id) as total_count')
+            ->first();
+
+        $periodDebit = round((float) ($totals?->total_debit ?? 0), 2);
+        $periodCredit = round((float) ($totals?->total_credit ?? 0), 2);
+        $periodNet = round($periodDebit - $periodCredit, 2);
+        $closingBalance = round($openingBalance + $periodNet, 2);
+        $transactionCount = (int) ($totals?->total_count ?? 0);
+
+        $lines = (clone $periodQuery)
+            ->select([
+                'lines.id',
+                'lines.journal_entry_id',
+                'lines.account_id',
+                'accounts.code as account_code',
+                'accounts.name as account_name',
+                'entries.entry_number',
+                'entries.entry_date',
+                'entries.description',
+                'entries.status as entry_status',
+                'entries.source_type',
+                'entries.source_id',
+                'entries.reversed_by_id',
+                'lines.description as line_description',
+                'lines.debit',
+                'lines.credit',
+            ])
+            ->orderBy('entries.entry_date')
+            ->orderBy('entries.id')
+            ->orderBy('lines.id')
+            ->paginate(50)
+            ->withQueryString();
+
         $lines->setCollection($lines->getCollection()->map(function ($line) {
             $line->source_url = $this->sourceUrl($line->source_type, $line->source_id);
 
             return $line;
         }));
+
         $this->attachSourceDetails($company, $lines);
-        $openingBalance = (float) $opening + (float) $legacyPartyOpening;
+
         if ($lines->count()) {
             $first = $lines->first();
-            $priorLines = $this->balanceBeforeLine($company, $accountIds, $first->entry_date, (int) $first->id, $from);
-            $running = $openingBalance + (float) $priorLines;
+            $priorMovement = $this->movementBeforeLine($company, $accountIds, $first->entry_date, (int) $first->journal_entry_id, (int) $first->id, $from);
+            $running = $openingBalance + (float) $priorMovement;
             $lines->setCollection($lines->getCollection()->map(function ($line) use (&$running) {
                 $running += (float) $line->debit - (float) $line->credit;
                 $line->running_balance = round($running, 2);
@@ -95,7 +171,40 @@ class AccountingReportService
             }));
         }
 
-        return ['account' => $account, 'account_ids' => $accountIds, 'opening_balance' => round($openingBalance, 2), 'lines' => $lines, 'from' => $from, 'to' => $to];
+        $partyType = $party ? ($party->is_customer && $party->is_supplier ? 'both' : ($party->is_customer ? 'customer' : 'supplier')) : null;
+
+        return [
+            'account' => $account,
+            'account_ids' => $accountIds,
+            'opening_balance' => $openingBalance,
+            'lines' => $lines,
+            'from' => $from,
+            'to' => $to,
+            'meta' => [
+                'account_id' => $account->id,
+                'account_code' => $account->code,
+                'account_name' => $account->name,
+                'party_id' => $party?->id,
+                'party_name' => $party?->name,
+                'party_type' => $partyType,
+                'from' => $from,
+                'to' => $to,
+                'date_filter_mode' => $from ? 'filtered' : 'all_activity',
+            ],
+            'summary' => [
+                'opening_balance' => $openingBalance,
+                'period_debit' => $periodDebit,
+                'period_credit' => $periodCredit,
+                'period_net' => $periodNet,
+                'closing_balance' => $closingBalance,
+                'transaction_count' => $transactionCount,
+            ],
+            'closing_balance' => $closingBalance,
+            'period_debit' => $periodDebit,
+            'period_credit' => $periodCredit,
+            'period_net' => $periodNet,
+            'transaction_count' => $transactionCount,
+        ];
     }
 
     public function incomeStatement(Company $company, ?string $from = null, ?string $to = null): array
@@ -509,6 +618,11 @@ class AccountingReportService
 
     private function balanceBeforeLine(Company $company, array $accountIds, string $date, int $lineId, ?string $from = null): float
     {
+        return $this->movementBeforeLine($company, $accountIds, $date, 0, $lineId, $from);
+    }
+
+    private function movementBeforeLine(Company $company, array $accountIds, string $date, int $entryId, int $lineId, ?string $from = null): float
+    {
         $date = Carbon::parse($date)->toDateString();
 
         return (float) DB::table('journal_lines as lines')
@@ -518,10 +632,20 @@ class AccountingReportService
             ->where('lines.company_id', $company->id)
             ->whereIn('lines.account_id', $accountIds)
             ->when($from, fn ($query) => $query->whereDate('entries.entry_date', '>=', $from))
-            ->where(function ($query) use ($date, $lineId): void {
+            ->where(function ($query) use ($date, $entryId, $lineId): void {
                 $query->whereDate('entries.entry_date', '<', $date)
-                    ->orWhere(function ($sameDay) use ($date, $lineId): void {
-                        $sameDay->whereDate('entries.entry_date', '=', $date)->where('lines.id', '<', $lineId);
+                    ->orWhere(function ($sameDay) use ($date, $entryId, $lineId): void {
+                        $sameDay->whereDate('entries.entry_date', '=', $date);
+                        if ($entryId > 0) {
+                            $sameDay->where(function ($entryOrder) use ($entryId, $lineId): void {
+                                $entryOrder->where('entries.id', '<', $entryId)
+                                    ->orWhere(function ($sameEntry) use ($entryId, $lineId): void {
+                                        $sameEntry->where('entries.id', '=', $entryId)->where('lines.id', '<', $lineId);
+                                    });
+                            });
+                        } else {
+                            $sameDay->where('lines.id', '<', $lineId);
+                        }
                     });
             })
             ->selectRaw('COALESCE(SUM(lines.debit - lines.credit), 0) as balance')
@@ -534,62 +658,263 @@ class AccountingReportService
         $purchaseIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === PurchaseBill::class)->pluck('source_id')->filter()->unique();
         $receiptIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === Receipt::class)->pluck('source_id')->filter()->unique();
         $voucherIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === PaymentVoucher::class)->pluck('source_id')->filter()->unique();
-        $sales = SalesBill::query()->where('company_id', $company->id)->whereIn('id', $salesIds)->with(['lines.product:id,name', 'customer:id,name'])->get()->keyBy('id');
-        $purchases = PurchaseBill::query()->where('company_id', $company->id)->whereIn('id', $purchaseIds)->with(['lines.product:id,name', 'supplier:id,name'])->get()->keyBy('id');
-        $receipts = Receipt::query()->where('company_id', $company->id)->whereIn('id', $receiptIds)->with('party:id,name')->get()->keyBy('id');
-        $vouchers = PaymentVoucher::query()->where('company_id', $company->id)->whereIn('id', $voucherIds)->with('party:id,name')->get()->keyBy('id');
-        $lines->setCollection($lines->getCollection()->map(function ($line) use ($sales, $purchases, $receipts, $vouchers) {
+        $partyOpeningIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === CustomerSupplier::class)->pluck('source_id')->filter()->unique();
+        $reversalIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === JournalEntry::class)->pluck('source_id')->filter()->unique();
+
+        $sales = $salesIds->isNotEmpty()
+            ? SalesBill::query()->where('company_id', $company->id)->whereIn('id', $salesIds)->with(['lines.product:id,name', 'customer:id,name', 'cashbox:id,name', 'bank:id,name'])->get()->keyBy('id')
+            : collect();
+        $purchases = $purchaseIds->isNotEmpty()
+            ? PurchaseBill::query()->where('company_id', $company->id)->whereIn('id', $purchaseIds)->with(['lines.product:id,name', 'supplier:id,name', 'cashbox:id,name', 'bank:id,name'])->get()->keyBy('id')
+            : collect();
+        $receipts = $receiptIds->isNotEmpty()
+            ? Receipt::query()->where('company_id', $company->id)->whereIn('id', $receiptIds)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->get()->keyBy('id')
+            : collect();
+        $vouchers = $voucherIds->isNotEmpty()
+            ? PaymentVoucher::query()->where('company_id', $company->id)->whereIn('id', $voucherIds)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->get()->keyBy('id')
+            : collect();
+        $parties = $partyOpeningIds->isNotEmpty()
+            ? CustomerSupplier::query()->where('company_id', $company->id)->whereIn('id', $partyOpeningIds)->get(['id', 'name', 'is_customer', 'is_supplier'])->keyBy('id')
+            : collect();
+        $reversalEntries = $reversalIds->isNotEmpty()
+            ? JournalEntry::query()->where('company_id', $company->id)->whereIn('id', $reversalIds)->get(['id', 'entry_number', 'description'])->keyBy('id')
+            : collect();
+
+        $salesAllocations = $salesIds->isNotEmpty() ? DB::table('party_payment_allocations as ppa')
+            ->leftJoin('receipts as r', fn ($j) => $j->on('r.id', '=', 'ppa.payment_id')->where('ppa.payment_type', '=', 'receipt'))
+            ->where('ppa.company_id', $company->id)
+            ->where('ppa.bill_type', 'sales')
+            ->whereIn('ppa.bill_id', $salesIds->all())
+            ->where('ppa.status', 'posted')
+            ->select('ppa.bill_id', 'ppa.amount', 'ppa.allocated_at', 'r.receipt_number as payment_number', 'r.id as receipt_id')
+            ->get()
+            ->groupBy('bill_id') : collect();
+
+        $purchaseAllocations = $purchaseIds->isNotEmpty() ? DB::table('party_payment_allocations as ppa')
+            ->leftJoin('payment_vouchers as pv', fn ($j) => $j->on('pv.id', '=', 'ppa.payment_id')->where('ppa.payment_type', '=', 'voucher'))
+            ->where('ppa.company_id', $company->id)
+            ->where('ppa.bill_type', 'purchase')
+            ->whereIn('ppa.bill_id', $purchaseIds->all())
+            ->where('ppa.status', 'posted')
+            ->select('ppa.bill_id', 'ppa.amount', 'ppa.allocated_at', 'pv.voucher_number as payment_number', 'pv.id as voucher_id')
+            ->get()
+            ->groupBy('bill_id') : collect();
+
+        $receiptAllocations = $receiptIds->isNotEmpty() ? DB::table('party_payment_allocations as ppa')
+            ->leftJoin('sales_bills as sb', 'sb.id', '=', 'ppa.bill_id')
+            ->where('ppa.company_id', $company->id)
+            ->where('ppa.payment_type', 'receipt')
+            ->whereIn('ppa.payment_id', $receiptIds->all())
+            ->where('ppa.status', 'posted')
+            ->select('ppa.payment_id', 'ppa.amount', 'ppa.allocated_at', 'sb.internal_number as invoice_number', 'sb.id as bill_id', 'sb.bill_date')
+            ->get()
+            ->groupBy('payment_id') : collect();
+
+        $voucherAllocations = $voucherIds->isNotEmpty() ? DB::table('party_payment_allocations as ppa')
+            ->leftJoin('purchase_bills as pb', 'pb.id', '=', 'ppa.bill_id')
+            ->where('ppa.company_id', $company->id)
+            ->where('ppa.payment_type', 'voucher')
+            ->whereIn('ppa.payment_id', $voucherIds->all())
+            ->where('ppa.status', 'posted')
+            ->select('ppa.payment_id', 'ppa.amount', 'ppa.allocated_at', 'pb.internal_number as invoice_number', 'pb.id as bill_id', 'pb.supplier_bill_date as bill_date')
+            ->get()
+            ->groupBy('payment_id') : collect();
+
+        $lines->setCollection($lines->getCollection()->map(function ($line) use (
+            $sales, $purchases, $receipts, $vouchers, $parties, $reversalEntries,
+            $salesAllocations, $purchaseAllocations, $receiptAllocations, $voucherAllocations
+        ) {
+            $type = null;
+            $document = null;
+            $particulars = null;
+            $particularsAr = null;
+            $docNumber = $line->entry_number;
+            $docAmount = null;
+            $settledAmount = null;
+            $remainingAmount = null;
+            $paymentSource = null;
+            $partyName = null;
+            $status = $line->entry_status ?? 'posted';
+            $reversalReason = null;
+            $details = [];
+            $allocations = [];
+            $date = $line->entry_date;
+            $viewUrl = null;
+            $printUrl = null;
+
             if ($line->source_type === SalesBill::class) {
                 $document = $sales->get($line->source_id);
-                $type = 'sales';
+                if ($document) {
+                    $type = 'sales';
+                    $docNumber = $document->internal_number;
+                    $partyName = $document->customer?->name;
+                    $date = $document->bill_date?->toDateString() ?? $line->entry_date;
+                    $docAmount = (float) $document->total;
+                    $allocs = $salesAllocations->get($document->id, collect())->all();
+                    $allocations = array_map(fn ($a) => (array) $a, $allocs);
+                    $allocatedSum = array_sum(array_column($allocations, 'amount'));
+                    $settledAmount = round((float) $document->paid_amount + $allocatedSum, 2);
+                    $remainingAmount = round(max(0, $docAmount - $settledAmount), 2);
+                    $paymentSource = $document->cashbox?->name ?? $document->bank?->name;
+                    $status = $document->status;
+                    $reversalReason = $document->reversal_reason ?? null;
+                    $particulars = 'Sales invoice · '.$docNumber.($partyName ? ' · '.$partyName : '');
+                    $particularsAr = 'فاتورة بيع · '.$docNumber.($partyName ? ' · '.$partyName : '');
+                    $viewUrl = route('company.sales.show', ['bill' => $document->id]);
+                    $printUrl = route('company.sales.print', ['bill' => $document->id, 'mode' => 'invoice']);
+
+                    $details = $document->lines->map(fn ($item) => [
+                        'product' => $item->product?->name,
+                        'weight' => (float) ($item->actual_weight ?? $item->factory_weight ?? 0),
+                        'factory_weight' => (float) ($item->factory_weight ?? 0),
+                        'actual_weight' => (float) ($item->actual_weight ?? 0),
+                        'unit_price' => (float) ($item->unit_price ?? 0),
+                        'value' => (float) ($item->line_total ?? 0),
+                        'packages' => (float) ($item->packages ?? 0),
+                    ])->values()->all();
+                    $line->weight = round(array_sum(array_column($details, 'weight')), 3);
+                    $line->unit_price = count($details) === 1 ? $details[0]['unit_price'] : null;
+                    $line->value = round(array_sum(array_column($details, 'value')), 2);
+                }
             } elseif ($line->source_type === PurchaseBill::class) {
                 $document = $purchases->get($line->source_id);
-                $type = 'purchase';
+                if ($document) {
+                    $type = 'purchase';
+                    $docNumber = $document->internal_number;
+                    $partyName = $document->supplier?->name;
+                    $date = $document->supplier_bill_date?->toDateString() ?? $line->entry_date;
+                    $docAmount = (float) $document->total;
+                    $allocs = $purchaseAllocations->get($document->id, collect())->all();
+                    $allocations = array_map(fn ($a) => (array) $a, $allocs);
+                    $allocatedSum = array_sum(array_column($allocations, 'amount'));
+                    $settledAmount = round((float) $document->paid_amount + $allocatedSum, 2);
+                    $remainingAmount = round(max(0, $docAmount - $settledAmount), 2);
+                    $paymentSource = $document->cashbox?->name ?? $document->bank?->name;
+                    $status = $document->status;
+                    $reversalReason = $document->reversal_reason ?? null;
+                    $particulars = 'Purchase bill · '.$docNumber.($partyName ? ' · '.$partyName : '');
+                    $particularsAr = 'فاتورة شراء · '.$docNumber.($partyName ? ' · '.$partyName : '');
+                    $viewUrl = route('company.purchase.show', ['bill' => $document->id]);
+                    $printUrl = route('company.purchase.print', ['bill' => $document->id, 'mode' => 'invoice']);
+
+                    $details = $document->lines->map(fn ($item) => [
+                        'product' => $item->product?->name,
+                        'weight' => (float) ($item->actual_weight ?? $item->factory_weight ?? 0),
+                        'factory_weight' => (float) ($item->factory_weight ?? 0),
+                        'actual_weight' => (float) ($item->actual_weight ?? 0),
+                        'unit_price' => (float) ($item->unit_price ?? 0),
+                        'value' => (float) ($item->line_total ?? 0),
+                        'packages' => (float) ($item->packages ?? 0),
+                    ])->values()->all();
+                    $line->weight = round(array_sum(array_column($details, 'weight')), 3);
+                    $line->unit_price = count($details) === 1 ? $details[0]['unit_price'] : null;
+                    $line->value = round(array_sum(array_column($details, 'value')), 2);
+                }
             } elseif ($line->source_type === Receipt::class) {
                 $document = $receipts->get($line->source_id);
-                $type = 'receipt';
+                if ($document) {
+                    $type = 'receipt';
+                    $docNumber = $document->receipt_number;
+                    $partyName = $document->party?->name;
+                    $date = $document->receipt_date?->toDateString() ?? $line->entry_date;
+                    $docAmount = (float) $document->amount;
+                    $allocs = $receiptAllocations->get($document->id, collect())->all();
+                    $allocations = array_map(fn ($a) => (array) $a, $allocs);
+                    $settledAmount = round(array_sum(array_column($allocations, 'amount')), 2);
+                    $remainingAmount = round(max(0, $docAmount - $settledAmount), 2);
+                    $paymentSource = $document->cashbox?->name ?? $document->bank?->name;
+                    $status = $document->status;
+                    $reversalReason = $document->reversal_reason ?? null;
+                    $particulars = 'Customer receipt · '.$docNumber.($partyName ? ' · '.$partyName : '');
+                    $particularsAr = 'إيصال تحصيل · '.$docNumber.($partyName ? ' · '.$partyName : '');
+                    $viewUrl = route('company.receipt.show', ['document' => $document->id]);
+                    $printUrl = route('company.receipt.print', ['document' => $document->id]);
+                    $line->value = $docAmount;
+                }
             } elseif ($line->source_type === PaymentVoucher::class) {
                 $document = $vouchers->get($line->source_id);
-                $type = 'voucher';
+                if ($document) {
+                    $type = 'voucher';
+                    $docNumber = $document->voucher_number;
+                    $partyName = $document->party?->name;
+                    $date = $document->voucher_date?->toDateString() ?? $line->entry_date;
+                    $docAmount = (float) $document->amount;
+                    $allocs = $voucherAllocations->get($document->id, collect())->all();
+                    $allocations = array_map(fn ($a) => (array) $a, $allocs);
+                    $settledAmount = round(array_sum(array_column($allocations, 'amount')), 2);
+                    $remainingAmount = round(max(0, $docAmount - $settledAmount), 2);
+                    $paymentSource = $document->cashbox?->name ?? $document->bank?->name;
+                    $status = $document->status;
+                    $reversalReason = $document->reversal_reason ?? null;
+                    $particulars = 'Supplier payment · '.$docNumber.($partyName ? ' · '.$partyName : '');
+                    $particularsAr = 'سند صرف · '.$docNumber.($partyName ? ' · '.$partyName : '');
+                    $viewUrl = route('company.voucher.show', ['document' => $document->id]);
+                    $printUrl = route('company.voucher.print', ['document' => $document->id]);
+                    $line->value = $docAmount;
+                }
+            } elseif ($line->source_type === CustomerSupplier::class) {
+                $partyDoc = $parties->get($line->source_id);
+                $type = 'opening_balance';
+                $partyName = $partyDoc?->name;
+                $docAmount = max((float) $line->debit, (float) $line->credit);
+                $particulars = 'Opening balance · '.($partyName ?? $line->entry_number);
+                $particularsAr = 'رصيد افتتاحي · '.($partyName ?? $line->entry_number);
+                $line->value = $docAmount;
+            } elseif ($line->source_type === JournalEntry::class || str_starts_with((string) $line->description, 'Reversal of')) {
+                $revDoc = $reversalEntries->get($line->source_id);
+                $type = 'reversal';
+                $docAmount = max((float) $line->debit, (float) $line->credit);
+                $particulars = (string) ($line->description ?: ('Reversal of '.($revDoc?->entry_number ?? 'journal')));
+                $particularsAr = 'عكس قيد · '.($line->description ?: ($revDoc?->entry_number ?? 'قيد'));
+                $line->value = $docAmount;
             } else {
-                $document = null;
-                $type = null;
+                $type = 'journal';
+                $docAmount = max((float) $line->debit, (float) $line->credit);
+                $note = $line->line_description ? ' · '.$line->line_description : ($line->description ? ' · '.$line->description : '');
+                $particulars = 'Journal entry · '.$line->entry_number.$note;
+                $particularsAr = 'قيد يومية · '.$line->entry_number.$note;
+                $line->value = $docAmount;
             }
-            if (! $document || ! $type) {
-                return $line;
+
+            if ($particulars === null) {
+                $type = $type ?? 'journal';
+                $docAmount = max((float) $line->debit, (float) $line->credit);
+                $note = $line->line_description ? ' · '.$line->line_description : ($line->description ? ' · '.$line->description : '');
+                $particulars = (string) ($line->description ?: ('Journal entry · '.$line->entry_number.$note));
+                $particularsAr = (string) ($line->description ?: ('قيد يومية · '.$line->entry_number.$note));
+                $line->value = $docAmount;
             }
-            if (in_array($type, ['sales', 'purchase'], true)) {
-                $details = $document->lines->map(fn ($item) => [
-                    'product' => $item->product?->name,
-                    'weight' => (float) ($item->actual_weight ?? $item->factory_weight ?? 0),
-                    'factory_weight' => (float) ($item->factory_weight ?? 0),
-                    'actual_weight' => (float) ($item->actual_weight ?? 0),
-                    'unit_price' => (float) ($item->unit_price ?? 0),
-                    'value' => (float) ($item->line_total ?? 0),
-                    'packages' => (float) ($item->packages ?? 0),
-                ])->values()->all();
-                $line->invoice_details = $details;
-                $line->details = $details;
-                $line->weight = round(array_sum(array_column($details, 'weight')), 3);
-                $line->unit_price = count($details) === 1 ? $details[0]['unit_price'] : null;
-                $line->value = round(array_sum(array_column($details, 'value')), 2);
-                $number = $document->internal_number;
-                $date = $type === 'sales' ? $document->bill_date?->toDateString() : $document->supplier_bill_date?->toDateString();
-                $amount = (float) $document->total;
-                $party = $type === 'sales' ? $document->customer?->name : $document->supplier?->name;
-                $viewUrl = route($type === 'sales' ? 'company.sales.show' : 'company.purchase.show', ['bill' => $document->id]);
-                $printUrl = route($type === 'sales' ? 'company.sales.print' : 'company.purchase.print', ['bill' => $document->id, 'mode' => 'invoice']);
-            } else {
-                $line->details = [];
-                $line->invoice_details = [];
-                $number = $type === 'receipt' ? $document->receipt_number : $document->voucher_number;
-                $date = ($type === 'receipt' ? $document->receipt_date : $document->voucher_date)?->toDateString();
-                $amount = (float) $document->amount;
-                $party = $document->party?->name;
-                $viewUrl = route($type === 'receipt' ? 'company.receipt.show' : 'company.voucher.show', ['document' => $document->id]);
-                $printUrl = route($type === 'receipt' ? 'company.receipt.print' : 'company.voucher.print', ['document' => $document->id]);
-            }
-            $line->source_document = ['kind' => $type, 'title' => $number, 'date' => $date, 'amount' => $amount, 'party' => $party, 'status' => $document->status, 'notes' => $document->notes, 'weight' => $line->weight ?? null, 'unit_price' => $line->unit_price ?? null, 'value' => $line->value ?? $amount, 'view_url' => $viewUrl, 'print_url' => $printUrl, 'details' => $line->details];
+
+            $line->particulars = $particulars;
+            $line->particulars_ar = $particularsAr;
+            $line->document_type = $type;
+            $line->document_number = $docNumber;
+            $line->document_amount = $docAmount;
+            $line->settled_amount = $settledAmount;
+            $line->remaining_amount = $remainingAmount;
+            $line->details = $details;
+            $line->invoice_details = $details;
+
+            $line->source_document = [
+                'kind' => $type,
+                'title' => $docNumber,
+                'date' => $date,
+                'amount' => $docAmount,
+                'paid_amount' => $settledAmount,
+                'remaining_amount' => $remainingAmount,
+                'payment_source' => $paymentSource,
+                'party' => $partyName,
+                'status' => $status,
+                'notes' => $document?->notes ?? $line->description,
+                'reversal_reason' => $reversalReason,
+                'weight' => $line->weight ?? null,
+                'unit_price' => $line->unit_price ?? null,
+                'value' => $line->value ?? $docAmount,
+                'view_url' => $viewUrl,
+                'print_url' => $printUrl,
+                'details' => $details,
+                'allocations' => $allocations,
+            ];
 
             return $line;
         }));

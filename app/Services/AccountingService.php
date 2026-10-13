@@ -50,7 +50,7 @@ class AccountingService
             $this->postOpeningBalance($company, $actor, $party);
             app(AuditRecorder::class)->record('parties.created', $party, $company->id, $actor->id, ['account_code' => $account->code]);
 
-            return $party->load('account');
+            return $party->fresh()->load('account');
         });
     }
 

@@ -39,6 +39,16 @@ class SalesBill extends Model
         return $this->belongsTo(Vehicle::class);
     }
 
+    public function cashbox(): BelongsTo
+    {
+        return $this->belongsTo(Cashbox::class);
+    }
+
+    public function bank(): BelongsTo
+    {
+        return $this->belongsTo(Bank::class);
+    }
+
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');

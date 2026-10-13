@@ -281,7 +281,7 @@ class CoreErpPageController extends Controller
             'from' => $from,
             'to' => $to,
             ...$payload,
-            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.reverse', 'reports.export']),
+            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.reverse', 'reports.export', 'sales.view', 'sales.print', 'purchases.view', 'purchases.print']),
         ]);
     }
 
