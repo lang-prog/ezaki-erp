@@ -28,7 +28,7 @@ return new class extends Migration
             $table->timestamp('reversed_at')->nullable();
             $table->text('reversal_reason')->nullable();
             $table->foreignId('reversal_journal_entry_id')->nullable()->constrained('journal_entries')->nullOnDelete();
-            $table->timestamp('allocated_at');
+            $table->timestamp('allocated_at')->useCurrent();
             $table->timestamps();
             $table->unique(['company_id', 'idempotency_key'], 'party_payment_allocations_idempotency_unique');
             $table->index(['company_id', 'party_id', 'status', 'allocated_at'], 'party_payment_allocations_party_date_idx');

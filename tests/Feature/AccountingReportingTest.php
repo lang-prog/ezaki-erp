@@ -106,6 +106,12 @@ class AccountingReportingTest extends TestCase
             ['account_id' => $cashbox->account_id, 'debit' => 100, 'credit' => 0, 'description' => 'Cash receipt'],
             ['account_id' => $revenue->id, 'debit' => 0, 'credit' => 100, 'description' => 'Revenue'],
         ]);
+        $retry = $accounting->postOperationalJournal($company, $actor, $date, 'Test revenue retry', 'test', 100, [
+            ['account_id' => $cashbox->account_id, 'debit' => 100, 'credit' => 0, 'description' => 'Cash receipt'],
+            ['account_id' => $revenue->id, 'debit' => 0, 'credit' => 100, 'description' => 'Revenue'],
+        ]);
+        $this->assertSame(1, JournalEntry::query()->where('company_id', $company->id)->where('source_type', 'test')->where('source_id', 100)->count());
+        $this->assertSame('Test revenue', $retry->description);
         $accounting->postOperationalJournal($company, $actor, $date, 'Test expense', 'test', 101, [
             ['account_id' => $expense->id, 'debit' => 50, 'credit' => 0, 'description' => 'Expense'],
             ['account_id' => $cashbox->account_id, 'debit' => 0, 'credit' => 50, 'description' => 'Cash payment'],

@@ -58,7 +58,7 @@ final class CompanySettingsCsrfTest extends TestCase
         $cookies = $this->browserCookies($owner);
 
         $this->call('POST', '/settings/company', ['_method' => 'put', 'name' => 'With Upload'], $cookies, [
-            'print_background' => UploadedFile::fake()->image('bg.png'),
+            'print_background' => UploadedFile::fake()->create('bg.png', 10, 'image/png'),
         ], ['HTTP_X_XSRF_TOKEN' => $this->xsrfHeader($cookies), 'HTTP_X_INERTIA' => 'true']);
 
         $path = $company->refresh()->print_background_path;
