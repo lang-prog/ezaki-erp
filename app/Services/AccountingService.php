@@ -380,6 +380,19 @@ class AccountingService
         $period = FiscalPeriod::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($period->id);
         abort_unless($period->status === 'open', 409, 'The fiscal period is closed.');
         abort_unless($date >= $period->starts_on->toDateString() && $date <= $period->ends_on->toDateString(), 422, 'The journal date is outside the selected fiscal period.');
+        if ($reversalOf === null) {
+            $existing = JournalEntry::query()
+                ->where('company_id', $company->id)
+                ->where('source_type', $sourceType)
+                ->where('source_id', $sourceId)
+                ->where('status', 'posted')
+                ->whereNull('reversal_of_id')
+                ->lockForUpdate()
+                ->first();
+            if ($existing) {
+                return $existing->load('lines');
+            }
+        }
         $debits = round(array_sum(array_column($lines, 'debit')), 2);
         $credits = round(array_sum(array_column($lines, 'credit')), 2);
         throw_if($debits <= 0 || $debits !== $credits, ValidationException::withMessages(['amount' => 'Journal entries must balance to a positive amount.']));
