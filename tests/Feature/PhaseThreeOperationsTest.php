@@ -16,9 +16,13 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Services\AccountingFoundationService;
+use App\Services\AccountingReportService;
 use App\Services\AccountingService;
 use App\Services\CompanyStructureService;
+use App\Services\FleetReportService;
 use App\Services\InventoryService;
+use App\Services\OperationsService;
+use App\Services\PaymentAllocationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
@@ -173,6 +177,11 @@ class PhaseThreeOperationsTest extends TestCase
         $this->putJson('/api/v1/accounting-settings', ['purchase_inventory_basis' => 'factory_weight', 'vat_enabled' => false, 'vat_rate' => 0])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('purchase_inventory_basis');
+        $this->assertSame(1000.0, (float) $context['product']->fresh()->stockBalances()->sum('inventory_value'));
+        $this->postJson("/api/v1/purchase-bills/{$bill}/reverse", ['date' => today()->toDateString()])->assertOk();
+        $this->assertSame(0.0, (float) $context['product']->fresh()->stockBalances()->sum('quantity'));
+        $this->assertSame(0.0, (float) $context['product']->fresh()->stockBalances()->sum('inventory_value'));
+        $this->assertSame(1000.0, (float) PurchaseBill::query()->findOrFail($bill)->total);
     }
 
     public function test_type_diameter_purchase_line_uses_factory_weight_and_actual_header_is_review_only(): void
@@ -288,6 +297,151 @@ class PhaseThreeOperationsTest extends TestCase
         $this->postJson('/api/v1/sales-bills', $credit)->assertUnprocessable();
     }
 
+    public function test_customer_balance_and_credit_limit_use_only_the_control_account(): void
+    {
+        $context = $this->tenant('party-control', 2000);
+        $product = app(InventoryService::class)->createProduct($context['company'], $context['user'], ['warehouse_id' => $context['warehouse']->id, 'sku' => 'PARTY-STOCK', 'name' => 'Party stock', 'unit' => 'ton', 'opening_balance' => 20]);
+        Sanctum::actingAs($context['user']);
+        $sale = $this->salesPayload($context, 'PARTY-CONTROL');
+        $sale['customer_id'] = $context['customer']->id;
+        $sale['payment_method'] = 'credit';
+        $sale['due_date'] = today()->addMonth()->toDateString();
+        $sale['lines'] = [['product_id' => $product->id, 'actual_weight' => 4, 'unit_price' => 200]];
+        $billId = $this->postJson('/api/v1/sales-bills', $sale)->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/sales-bills/{$billId}/approve")->assertOk();
+
+        $controlBalance = (float) DB::table('journal_lines')
+            ->where('company_id', $context['company']->id)
+            ->where('account_id', $context['customer']->account_id)
+            ->selectRaw('SUM(debit - credit) as balance')
+            ->value('balance');
+        $debtors = app(AccountingReportService::class)->debtors($context['company'], 0);
+        $this->assertSame(800.0, $controlBalance);
+        $this->assertSame(800.0, (float) $debtors['total_outstanding']);
+        $this->assertSame(800.0, (float) $debtors['rows']->first()->balance_due);
+
+        $overLimit = $this->salesPayload($context, 'PARTY-OVER-LIMIT');
+        $overLimit['payment_method'] = 'credit';
+        $overLimit['due_date'] = today()->addMonth()->toDateString();
+        $overLimit['total_actual_weight'] = 7;
+        $overLimit['lines'][0]['actual_weight'] = 7;
+        $overLimit['lines'][0]['unit_price'] = 200;
+        $this->postJson('/api/v1/sales-bills', $overLimit)->assertUnprocessable();
+        $this->assertDatabaseMissing('sales_bills', ['company_id' => $context['company']->id, 'customer_bill_number' => 'PARTY-OVER-LIMIT']);
+    }
+
+    public function test_receipt_allocates_fifo_and_specific_invoice_with_overpayment_and_reversal(): void
+    {
+        $context = $this->tenant('payment-allocation', 5000);
+        $product = app(InventoryService::class)->createProduct($context['company'], $context['user'], ['warehouse_id' => $context['warehouse']->id, 'sku' => 'ALLOC-STOCK', 'name' => 'Allocation stock', 'unit' => 'ton', 'opening_balance' => 20]);
+        Sanctum::actingAs($context['user']);
+        $makeCreditSale = function (string $number) use ($context, $product): int {
+            $payload = $this->salesPayload($context, $number);
+            $payload['payment_method'] = 'credit';
+            $payload['due_date'] = today()->addMonth()->toDateString();
+            $payload['lines'] = [['product_id' => $product->id, 'actual_weight' => 4, 'unit_price' => 100]];
+
+            $billId = (int) $this->postJson('/api/v1/sales-bills', $payload)->assertCreated()->json('data.id');
+            $this->postJson("/api/v1/sales-bills/{$billId}/approve")->assertOk();
+
+            return $billId;
+        };
+        $firstBill = $makeCreditSale('ALLOC-1');
+        $secondBill = $makeCreditSale('ALLOC-2');
+
+        $receipt = $this->postJson('/api/v1/receipts', [
+            'party_id' => $context['customer']->id, 'cashbox_id' => $context['cashbox']->id,
+            'receipt_date' => today()->toDateString(), 'amount' => 500,
+        ])->assertCreated()->json('data');
+        $allocations = DB::table('party_payment_allocations')->where('payment_type', 'receipt')->where('payment_id', $receipt['id'])->orderBy('id')->get();
+        $this->assertCount(2, $allocations);
+        $this->assertSame($firstBill, (int) $allocations[0]->bill_id);
+        $this->assertSame(400.0, (float) $allocations[0]->amount);
+        $this->assertSame($secondBill, (int) $allocations[1]->bill_id);
+        $this->assertSame(100.0, (float) $allocations[1]->amount);
+        $this->postJson("/api/v1/receipts/{$receipt['id']}/allocate")->assertOk()->assertJsonPath('data.allocations', []);
+        $this->assertSame(500.0, (float) DB::table('party_payment_allocations')->where('payment_type', 'receipt')->where('payment_id', $receipt['id'])->where('status', 'posted')->sum('amount'));
+
+        $extraReceipt = $this->postJson('/api/v1/receipts', [
+            'party_id' => $context['customer']->id, 'cashbox_id' => $context['cashbox']->id,
+            'receipt_date' => today()->toDateString(), 'amount' => 500, 'bill_id' => $secondBill,
+        ])->assertCreated()->json('data');
+        $this->assertSame(300.0, (float) DB::table('party_payment_allocations')->where('payment_type', 'receipt')->where('payment_id', $extraReceipt['id'])->where('status', 'posted')->sum('amount'));
+        $this->assertSame(200.0, app(PaymentAllocationService::class)->unallocatedAmount($context['company'], 'receipt', $extraReceipt['id']));
+
+        $this->postJson("/api/v1/receipts/{$extraReceipt['id']}/reverse", ['date' => today()->toDateString(), 'reason' => 'Overpayment void'])->assertCreated();
+        $this->assertDatabaseHas('receipts', ['id' => $extraReceipt['id'], 'status' => 'reversed']);
+        $this->assertSame(0.0, (float) DB::table('party_payment_allocations')->where('payment_type', 'receipt')->where('payment_id', $extraReceipt['id'])->where('status', 'posted')->sum('amount'));
+        $this->assertSame(300.0, (float) app(AccountingReportService::class)->debtors($context['company'], 0)['total_outstanding']);
+    }
+
+    public function test_stock_transfer_preserves_weighted_average_value_and_destination_cogs(): void
+    {
+        $context = $this->tenant('transfer-value');
+        Sanctum::actingAs($context['user']);
+        $purchase = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'TRANSFER-VALUE'))->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/purchase-bills/{$purchase}/approve")->assertOk();
+        $destinationBranch = app(CompanyStructureService::class)->createBranch($context['company'], $context['user'], ['code' => 'DST', 'name' => 'Destination']);
+        $destination = $destinationBranch->warehouses()->firstOrFail();
+        $inventory = app(InventoryService::class);
+        $transfer = $inventory->transfer($context['company'], $context['user'], [
+            'from_warehouse_id' => $context['warehouse']->id,
+            'to_warehouse_id' => $destination->id,
+            'transfer_number' => 'TRANSFER-VALUE-1',
+            'lines' => [['product_id' => $context['product']->id, 'quantity' => 5]],
+        ]);
+        $balances = DB::table('stock_balances')->where('company_id', $context['company']->id)->where('product_id', $context['product']->id)->get()->keyBy('warehouse_id');
+        $this->assertSame(500.0, (float) $balances[$context['warehouse']->id]->inventory_value);
+        $this->assertSame(500.0, (float) $balances[$destination->id]->inventory_value);
+        $this->assertSame(1000.0, (float) $balances->sum('inventory_value'));
+        $this->assertSame(500.0, (float) $transfer->lines->first()->transferred_value);
+        $reversal = $inventory->reverseTransfer($context['company'], $context['user'], $transfer, today()->toDateString(), 'Test transfer reversal');
+        $this->assertSame('reversed', $transfer->fresh()->status);
+        $this->assertSame($transfer->id, $reversal->reversal_of_id);
+        $restored = DB::table('stock_balances')->where('company_id', $context['company']->id)->where('product_id', $context['product']->id)->get()->keyBy('warehouse_id');
+        $this->assertSame(1000.0, (float) $restored[$context['warehouse']->id]->inventory_value);
+        $this->assertSame(0.0, (float) $restored[$destination->id]->inventory_value);
+
+        $secondTransfer = $inventory->transfer($context['company'], $context['user'], [
+            'from_warehouse_id' => $context['warehouse']->id,
+            'to_warehouse_id' => $destination->id,
+            'transfer_number' => 'TRANSFER-VALUE-2',
+            'lines' => [['product_id' => $context['product']->id, 'quantity' => 5]],
+        ]);
+        $retry = $inventory->transfer($context['company'], $context['user'], [
+            'from_warehouse_id' => $context['warehouse']->id,
+            'to_warehouse_id' => $destination->id,
+            'transfer_number' => 'TRANSFER-VALUE-2',
+            'lines' => [['product_id' => $context['product']->id, 'quantity' => 5]],
+        ]);
+        $this->assertSame($secondTransfer->id, $retry->id);
+
+        $sale = $this->salesPayload($context, 'TRANSFER-SALE');
+        $sale['branch_id'] = $destinationBranch->id;
+        $sale['warehouse_id'] = $destination->id;
+        $sale['lines'][0]['actual_weight'] = 1;
+        $sale['total_actual_weight'] = 1;
+        $billId = $this->postJson('/api/v1/sales-bills', $sale)->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/sales-bills/{$billId}/approve")->assertOk();
+        $this->assertSame(100.0, (float) DB::table('sales_bill_lines')->where('sales_bill_id', $billId)->value('inventory_cost'));
+    }
+
+    public function test_transport_allocation_rounding_remainder_reconciles_to_header(): void
+    {
+        $context = $this->tenant('transport-rounding');
+        $payload = $this->purchasePayload($context, 'ROUND-EXTRAS');
+        $payload['lines'] = array_fill(0, 3, ['product_id' => $context['product']->id, 'factory_weight' => 1, 'actual_weight' => 1, 'packages' => 0, 'unit_price' => 100]);
+        $payload['total_factory_weight'] = 3;
+        $payload['total_actual_weight'] = 3;
+        $payload['total_packages'] = 0;
+        $payload['transport_cost'] = 1000;
+        $bill = app(OperationsService::class)->savePurchase($context['company'], $context['user'], $payload, true);
+
+        $allocation = app(OperationsService::class)->transportAllocation($context['company'], 'purchase', $bill->id);
+        $this->assertSame(1000.0, array_sum(array_column($allocation['lines'], 'allocated_extra_cost')));
+        $this->assertSame([333.33, 333.33, 333.34], array_column($allocation['lines'], 'allocated_extra_cost'));
+    }
+
     public function test_company_vehicle_trip_is_stored_and_reverse_restores_stock_with_reversing_journal(): void
     {
         $context = $this->tenant('fleet');
@@ -364,10 +518,10 @@ class PhaseThreeOperationsTest extends TestCase
         $context = $this->tenant('fleet-reverse');
         $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'REV-1', 'ownership' => 'company', 'status' => 'active']);
         Sanctum::actingAs($context['user']);
-        $expense = $this->postJson('/api/v1/fleet/expenses', ['vehicle_id' => $vehicle->id, 'expense_date' => now()->toDateString(), 'category' => 'fuel', 'amount' => 50])->assertCreated()->json('data.id');
+        $expense = $this->postJson('/api/v1/fleet/expenses', ['vehicle_id' => $vehicle->id, 'cashbox_id' => $context['cashbox']->id, 'expense_date' => now()->toDateString(), 'category' => 'fuel', 'amount' => 50])->assertCreated()->json('data.id');
         $this->postJson("/api/v1/fleet/expenses/{$expense}/approve")->assertOk();
         $this->postJson("/api/v1/fleet/expenses/{$expense}/reverse", ['date' => now()->toDateString()])->assertOk();
-        $maintenance = $this->postJson('/api/v1/fleet/maintenance', ['vehicle_id' => $vehicle->id, 'maintenance_type' => 'preventive', 'issue' => 'Oil service', 'cost' => 75, 'starts_on' => now()->toDateString(), 'vehicle_status' => 'in_service'])->assertCreated()->json('data.id');
+        $maintenance = $this->postJson('/api/v1/fleet/maintenance', ['vehicle_id' => $vehicle->id, 'cashbox_id' => $context['cashbox']->id, 'maintenance_type' => 'preventive', 'issue' => 'Oil service', 'cost' => 75, 'starts_on' => now()->toDateString(), 'vehicle_status' => 'in_service'])->assertCreated()->json('data.id');
         $this->postJson("/api/v1/fleet/maintenance/{$maintenance}/approve")->assertOk();
         $this->postJson("/api/v1/fleet/maintenance/{$maintenance}/reverse", ['date' => now()->toDateString()])->assertOk();
         $this->assertSame(4, JournalEntry::query()->where('company_id', $context['company']->id)->count());
@@ -657,6 +811,28 @@ class PhaseThreeOperationsTest extends TestCase
         $this->postJson("/api/v1/fleet/trips/{$cancelled}/cancel")->assertOk()->assertJsonPath('data.status', 'cancelled');
     }
 
+    public function test_branch_performance_counts_each_vehicle_expense_once_and_includes_vehicles_without_trips(): void
+    {
+        $context = $this->tenant('branch-cost-allocation');
+        Sanctum::actingAs($context['user']);
+        $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'BR-1', 'ownership' => 'company', 'status' => 'active']);
+        $idleVehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'BR-2', 'ownership' => 'company', 'status' => 'active']);
+
+        foreach ([[$vehicle, 60], [$idleVehicle, 25]] as [$expenseVehicle, $amount]) {
+            $expenseId = $this->postJson('/api/v1/fleet/expenses', ['vehicle_id' => $expenseVehicle->id, 'expense_date' => now()->toDateString(), 'category' => 'fuel', 'amount' => $amount, 'cashbox_id' => $context['cashbox']->id])->assertCreated()->json('data.id');
+            $this->postJson("/api/v1/fleet/expenses/{$expenseId}/approve")->assertOk();
+        }
+
+        foreach ([$context['branch']->id, null] as $branchId) {
+            $tripId = $this->postJson('/api/v1/fleet/trips', ['vehicle_id' => $vehicle->id, 'branch_id' => $branchId, 'trip_type' => 'delivery', 'trip_at' => now()->toDateTimeString()])->assertCreated()->json('data.id');
+            $this->postJson("/api/v1/fleet/trips/{$tripId}/approve")->assertOk();
+        }
+
+        $rows = app(FleetReportService::class)->report($context['company'], 'branch-performance')['rows']->keyBy('id');
+        $this->assertSame(85.0, $rows->get($context['branch']->id)['cost']);
+        $this->assertSame(0.0, $rows->get('unassigned')['cost']);
+    }
+
     public function test_invoice_trip_fields_reverse_with_invoice_and_expense_uses_selected_account(): void
     {
         $context = $this->tenant('invoice-trip-expense');
@@ -674,7 +850,12 @@ class PhaseThreeOperationsTest extends TestCase
         $this->postJson("/api/v1/purchase-bills/{$bill}/reverse", ['date' => now()->toDateString()])->assertOk();
         $this->assertDatabaseHas('trips', ['id' => $trip->id, 'status' => 'reversed']);
         $this->getJson('/api/v1/fleet/reports/trip-cost')->assertOk()->assertJsonPath('data.rows', []);
-        $selectedAccount = Account::query()->where('company_id', $context['company']->id)->where('code', '1.2')->firstOrFail();
+        $selectedAccount = Account::query()->where('company_id', $context['company']->id)->where('system_key', 'fleet_payable')->firstOrFail();
+        $missingSettlementDraft = $this->postJson('/api/v1/fleet/expenses', ['vehicle_id' => $vehicle->id, 'expense_date' => now()->toDateString(), 'category' => 'fuel', 'amount' => 60]);
+        $this->assertSame(201, $missingSettlementDraft->getStatusCode(), $missingSettlementDraft->getContent());
+        $this->postJson('/api/v1/fleet/expenses/'.$missingSettlementDraft->json('data.id').'/approve')->assertUnprocessable();
+        $headerAccount = Account::query()->where('company_id', $context['company']->id)->where('code', '1.2')->firstOrFail();
+        $this->postJson('/api/v1/fleet/expenses', ['vehicle_id' => $vehicle->id, 'expense_date' => now()->toDateString(), 'category' => 'fuel', 'amount' => 60, 'account_id' => $headerAccount->id])->assertUnprocessable();
         $expense = $this->postJson('/api/v1/fleet/expenses', ['vehicle_id' => $vehicle->id, 'expense_date' => now()->toDateString(), 'category' => 'fuel', 'amount' => 60, 'account_id' => $selectedAccount->id, 'document' => 'FUEL-1'])->assertCreated()->json('data.id');
         $this->postJson("/api/v1/fleet/expenses/{$expense}/approve")->assertOk();
         $entryId = FleetExpense::query()->findOrFail($expense)->journal_entry_id;

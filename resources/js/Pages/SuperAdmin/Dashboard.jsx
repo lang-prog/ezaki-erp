@@ -15,14 +15,18 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
         form.post(url, { preserveScroll: true, onSuccess: () => form.reset() });
     }
 
+    function reloadOnSuccess(request) {
+        request.then(() => window.location.reload()).catch(() => {});
+    }
+
     function postCompany(companyId, action, data = {}) {
-        window.axios.post(`/super-admin/companies/${companyId}/${action}`, data).then(() => window.location.reload());
+        reloadOnSuccess(window.axios.post(`/super-admin/companies/${companyId}/${action}`, data));
     }
 
     function updateAddons(companyId, event) {
         event.preventDefault();
         const formData = new FormData(event.currentTarget);
-        window.axios.put(`/super-admin/companies/${companyId}/limit-addons`, Object.fromEntries(formData.entries())).then(() => window.location.reload());
+        reloadOnSuccess(window.axios.put(`/super-admin/companies/${companyId}/limit-addons`, Object.fromEntries(formData.entries())));
     }
 
     return (
@@ -40,7 +44,7 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
                 <div className="mt-3 divide-y divide-[#ded8cf] border-y border-[#ded8cf]">
                     {registrations.filter((request) => request.status === 'pending').map((request) => <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 py-4">
                         <div><p className="font-medium">{request.company_name}</p><p className="text-sm text-[#68645f]">{request.owner_name} · {request.email}</p></div>
-                        <div className="flex gap-2"><button onClick={() => window.confirm('Approve this verified registration?') && window.axios.post(`/super-admin/registrations/${request.id}/approve`).then(() => window.location.reload())} className="bg-[#34795c] px-3 py-2 text-sm text-white">{t('approve')}</button><button onClick={() => window.axios.post(`/super-admin/registrations/${request.id}/reject`).then(() => window.location.reload())} className="border border-[#b7aaa0] px-3 py-2 text-sm">{t('reject')}</button></div>
+                        <div className="flex gap-2"><button onClick={() => window.confirm(t('confirmApproval')) && reloadOnSuccess(window.axios.post(`/super-admin/registrations/${request.id}/approve`))} className="bg-[#34795c] px-3 py-2 text-sm text-white">{t('approve')}</button><button onClick={() => reloadOnSuccess(window.axios.post(`/super-admin/registrations/${request.id}/reject`))} className="border border-[#b7aaa0] px-3 py-2 text-sm">{t('reject')}</button></div>
                     </div>)}
                     {!registrations.some((request) => request.status === 'pending') && <p className="py-4 text-sm text-[#68645f]">{t('noPending')}</p>}
                 </div>
@@ -132,7 +136,7 @@ export default function Dashboard({ registrationOpen, registrations = [], plans 
                 <h2 className="font-semibold">{t('subscriptionsPayments')}</h2>
                 <div className="mt-3 divide-y divide-[#ded8cf] border-y border-[#ded8cf]">{subscriptions.map((subscription) => <div key={subscription.id} className="flex flex-wrap items-center justify-between gap-4 py-4">
                     <div><p className="font-medium">{subscription.company?.name}</p><p className="text-sm text-[#68645f]">{subscription.plan?.name} · {subscription.status} · {subscription.ends_at ?? 'Lifetime'}</p></div>
-                    <form onSubmit={(event) => { event.preventDefault(); window.axios?.post(`/super-admin/subscriptions/${subscription.id}/payments`, { amount: event.currentTarget.amount.value, status: event.currentTarget.status.value, reference: event.currentTarget.reference.value }).then(() => window.location.reload()); }} className="flex flex-wrap gap-2">
+                    <form onSubmit={(event) => { event.preventDefault(); reloadOnSuccess(window.axios?.post(`/super-admin/subscriptions/${subscription.id}/payments`, { amount: event.currentTarget.amount.value, status: event.currentTarget.status.value, reference: event.currentTarget.reference.value })); }} className="flex flex-wrap gap-2">
                         <input name="amount" aria-label={t('amount')} type="number" min="0" step="0.01" placeholder={t('amount')} className="w-28 border border-[#c8c0b7] bg-white px-2 py-2" />
                         <select name="status" aria-label="Payment status" className="border border-[#c8c0b7] bg-white px-2 py-2"><option value="paid">Paid</option><option value="pending">Pending</option><option value="failed">Failed</option></select>
                         <input name="reference" aria-label={t('reference')} placeholder={t('reference')} className="w-32 border border-[#c8c0b7] bg-white px-2 py-2" />

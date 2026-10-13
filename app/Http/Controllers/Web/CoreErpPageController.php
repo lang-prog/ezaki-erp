@@ -29,6 +29,7 @@ use App\Services\AccountingReportService;
 use App\Services\CompanyAccountingPolicyService;
 use App\Services\FleetReportService;
 use App\Services\InventoryService;
+use App\Services\PaymentAllocationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -183,7 +184,7 @@ class CoreErpPageController extends Controller
         ]);
     }
 
-    public function accounting(Request $request, AccountingFoundationService $foundation): Response
+    public function accounting(Request $request, AccountingFoundationService $foundation, PaymentAllocationService $allocations): Response
     {
         $company = $request->attributes->get('company');
         $companyId = (int) $company->id;
@@ -194,6 +195,8 @@ class CoreErpPageController extends Controller
             'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->with('account:id,code')->get(),
             'periods' => FiscalPeriod::query()->where('company_id', $companyId)->orderByDesc('starts_on')->get(),
             'parties' => CustomerSupplier::query()->where('company_id', $companyId)->where('status', 'active')->orderBy('name')->get(['id', 'name', 'is_customer', 'is_supplier']),
+            'receivableBills' => $allocations->openInvoices($company, 'sales'),
+            'payableBills' => $allocations->openInvoices($company, 'purchase'),
             'receipts' => DB::table('receipts')->where('company_id', $companyId)->orderByDesc('receipt_date')->limit(20)->get(),
             'vouchers' => DB::table('payment_vouchers')->where('company_id', $companyId)->orderByDesc('voucher_date')->limit(20)->get(),
             'capabilities' => $this->capabilities($request, ['accounting.create', 'accounting.post', 'accounting.close_period', 'accounting.reverse']),
@@ -266,6 +269,9 @@ class CoreErpPageController extends Controller
             'trips' => Trip::query()->where('company_id', $companyId)->with('vehicle:id,plate')->latest('trip_at')->paginate(25, ['*'], 'trips_page'),
             'expenses' => FleetExpense::query()->where('company_id', $companyId)->latest()->paginate(25, ['*'], 'expenses_page'),
             'maintenance' => MaintenanceRecord::query()->where('company_id', $companyId)->latest('starts_on')->paginate(25, ['*'], 'maintenance_page'),
+            'cashboxes' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'settlementAccounts' => Account::query()->where('company_id', $companyId)->where('is_active', true)->where('account_type', 'liability')->whereDoesntHave('children')->orderBy('code')->get(['id', 'code', 'name']),
             'capabilities' => $this->capabilities($request, ['fleet.view', 'fleet.create', 'fleet.update', 'fleet.approve', 'fleet.expenses', 'fleet.maintenance', 'fleet.export']),
         ]);
     }

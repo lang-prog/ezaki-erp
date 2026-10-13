@@ -14,8 +14,11 @@ use App\Models\CustomerSupplier;
 use App\Models\Diameter;
 use App\Models\FiscalPeriod;
 use App\Models\JournalEntry;
+use App\Models\PaymentVoucher;
 use App\Models\Product;
 use App\Models\ProductType;
+use App\Models\Receipt;
+use App\Models\StockTransfer;
 use App\Models\Warehouse;
 use App\Services\AccountingFoundationService;
 use App\Services\AccountingReportService;
@@ -23,6 +26,7 @@ use App\Services\AccountingService;
 use App\Services\AuditRecorder;
 use App\Services\CompanyStructureService;
 use App\Services\InventoryService;
+use App\Services\PaymentAllocationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -247,12 +251,21 @@ class CoreErpController extends Controller
         $companyId = (int) $this->company($request)->id;
         $data = $request->validate([
             'from_warehouse_id' => ['required', 'integer'], 'to_warehouse_id' => ['required', 'integer', 'different:from_warehouse_id'],
-            'transfer_number' => ['required', 'string', 'max:80', Rule::unique('stock_transfers')->where('company_id', $companyId)], 'transferred_at' => ['nullable', 'date'],
+            'transfer_number' => ['required', 'string', 'max:80'], 'transferred_at' => ['nullable', 'date'],
             'notes' => ['nullable', 'string', 'max:2000'], 'lines' => ['required', 'array', 'min:1'],
             'lines.*.product_id' => ['required', 'integer'], 'lines.*.quantity' => ['required', 'numeric', 'gt:0'],
         ]);
 
         return response()->json(['data' => $inventory->transfer($this->company($request), $request->user(), $data)], 201);
+    }
+
+    public function reverseTransfer(Request $request, StockTransfer $transfer, InventoryService $inventory): JsonResponse
+    {
+        $data = $request->validate(['date' => ['required', 'date'], 'reason' => ['required', 'string', 'max:1000']]);
+        $company = $this->company($request);
+        $transfer = StockTransfer::query()->where('company_id', $company->id)->findOrFail($transfer->id);
+
+        return response()->json(['data' => $inventory->reverseTransfer($company, $request->user(), $transfer, $data['date'], $data['reason'])], 201);
     }
 
     public function parties(Request $request): JsonResponse
@@ -363,8 +376,8 @@ class CoreErpController extends Controller
     public function createReceipt(Request $request, AccountingService $accounting): JsonResponse
     {
         $data = $request->validate([
-            'counterparty_type' => ['nullable', 'in:customer,other'], 'party_id' => ['required_without:other_account_id', 'nullable', 'integer'], 'other_account_id' => ['required_if:counterparty_type,other', 'nullable', 'integer'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'],
-            'receipt_date' => ['required', 'date'], 'amount' => ['required', 'numeric', 'gt:0'],
+            'counterparty_type' => ['nullable', 'in:customer,other'], 'party_id' => ['required_without:other_account_id', 'nullable', 'integer'], 'other_account_id' => ['required_if:counterparty_type,other', 'nullable', 'integer'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'bill_id' => ['nullable', 'integer'],
+            'receipt_date' => ['required', 'date'], 'amount' => ['required', 'numeric', 'gt:0'], 'bill_id' => ['nullable', 'integer'],
             'delivered_by' => ['nullable', 'string', 'max:255'], 'received_by' => ['nullable', 'string', 'max:255'],
             'location' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string', 'max:2000'],
         ]);
@@ -380,8 +393,8 @@ class CoreErpController extends Controller
     public function createVoucher(Request $request, AccountingService $accounting): JsonResponse
     {
         $data = $request->validate([
-            'counterparty_type' => ['nullable', 'in:supplier,other'], 'party_id' => ['required_without:other_account_id', 'nullable', 'integer'], 'other_account_id' => ['required_if:counterparty_type,other', 'nullable', 'integer'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'],
-            'voucher_date' => ['required', 'date'], 'amount' => ['required', 'numeric', 'gt:0'],
+            'counterparty_type' => ['nullable', 'in:supplier,other'], 'party_id' => ['required_without:other_account_id', 'nullable', 'integer'], 'other_account_id' => ['required_if:counterparty_type,other', 'nullable', 'integer'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'bill_id' => ['nullable', 'integer'],
+            'voucher_date' => ['required', 'date'], 'amount' => ['required', 'numeric', 'gt:0'], 'bill_id' => ['nullable', 'integer'],
             'paid_by' => ['nullable', 'string', 'max:255'], 'received_by' => ['nullable', 'string', 'max:255'],
             'location' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string', 'max:2000'],
         ]);
@@ -415,6 +428,42 @@ class CoreErpController extends Controller
         $data = $request->validate(['date' => ['required', 'date']]);
 
         return response()->json(['data' => $accounting->reverseJournal($this->company($request), $request->user(), $entry, $data['date'])], 201);
+    }
+
+    public function allocateReceipt(Request $request, Receipt $receipt, PaymentAllocationService $allocations): JsonResponse
+    {
+        $data = $request->validate(['bill_id' => ['nullable', 'integer']]);
+        $company = $this->company($request);
+        $receipt = Receipt::query()->where('company_id', $company->id)->findOrFail($receipt->id);
+
+        return response()->json(['data' => $allocations->allocateReceipt($company, $request->user(), $receipt, isset($data['bill_id']) ? (int) $data['bill_id'] : null)]);
+    }
+
+    public function allocateVoucher(Request $request, PaymentVoucher $voucher, PaymentAllocationService $allocations): JsonResponse
+    {
+        $data = $request->validate(['bill_id' => ['nullable', 'integer']]);
+        $company = $this->company($request);
+        $voucher = PaymentVoucher::query()->where('company_id', $company->id)->findOrFail($voucher->id);
+
+        return response()->json(['data' => $allocations->allocateVoucher($company, $request->user(), $voucher, isset($data['bill_id']) ? (int) $data['bill_id'] : null)]);
+    }
+
+    public function reverseReceipt(Request $request, Receipt $receipt, AccountingService $accounting): JsonResponse
+    {
+        $data = $request->validate(['date' => ['required', 'date'], 'reason' => ['required', 'string', 'max:1000']]);
+        $company = $this->company($request);
+        $receipt = Receipt::query()->where('company_id', $company->id)->findOrFail($receipt->id);
+
+        return response()->json(['data' => $accounting->reverseReceipt($company, $request->user(), $receipt, $data['date'], $data['reason'])], 201);
+    }
+
+    public function reverseVoucher(Request $request, PaymentVoucher $voucher, AccountingService $accounting): JsonResponse
+    {
+        $data = $request->validate(['date' => ['required', 'date'], 'reason' => ['required', 'string', 'max:1000']]);
+        $company = $this->company($request);
+        $voucher = PaymentVoucher::query()->where('company_id', $company->id)->findOrFail($voucher->id);
+
+        return response()->json(['data' => $accounting->reverseVoucher($company, $request->user(), $voucher, $data['date'], $data['reason'])], 201);
     }
 
     public function report(Request $request, AccountingReportService $reports, string $report): JsonResponse

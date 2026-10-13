@@ -16,7 +16,7 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/version', fn () => response()->json(['data' => ['api' => 'v1', 'application' => config('app.name'), 'laravel' => app()->version()]]))->name('api.v1.version');
     Route::post('/login', [AuthenticationController::class, 'login'])->middleware('throttle:login')->name('api.v1.login');
     Route::post('/license/activate', [LocalLicenseController::class, 'activate'])->middleware('throttle:5,1')->name('api.v1.license.activate');
-    Route::middleware(['auth:sanctum', 'account.type:company', 'tenant', 'subscription', 'local.license'])->group(function (): void {
+    Route::middleware(['auth:sanctum', 'session.version', 'account.type:company', 'tenant', 'subscription', 'local.license'])->group(function (): void {
         Route::get('/subscription', function (Request $request, SubscriptionLifecycle $lifecycle) {
             $subscription = $lifecycle->currentFor($request->attributes->get('company'));
 
@@ -58,6 +58,7 @@ Route::prefix('v1')->group(function (): void {
         Route::middleware('can:inventory.view')->get('/inventory/matrix', [CoreErpController::class, 'inventoryMatrix'])->middleware('throttle:api.read');
         Route::middleware('can:inventory.transfer')->get('/inventory/transfers', [CoreErpController::class, 'transfers'])->middleware('throttle:api.read');
         Route::middleware('can:inventory.transfer')->post('/inventory/transfers', [CoreErpController::class, 'createTransfer'])->middleware('throttle:api.write');
+        Route::middleware('can:inventory.transfer')->post('/inventory/transfers/{transfer}/reverse', [CoreErpController::class, 'reverseTransfer'])->middleware('throttle:api.write');
         Route::middleware('can:parties.view')->get('/parties', [CoreErpController::class, 'parties'])->middleware('throttle:api.read');
         Route::middleware('can:parties.create')->post('/parties', [CoreErpController::class, 'createParty'])->middleware('throttle:api.write');
         Route::middleware('can:parties.update')->put('/parties/{party}', [CoreErpController::class, 'updateParty'])->middleware('throttle:api.write');
@@ -75,8 +76,12 @@ Route::prefix('v1')->group(function (): void {
         Route::middleware('can:accounting.close_period')->post('/fiscal-periods/{period}/close', [CoreErpController::class, 'closePeriod'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.view')->get('/receipts', [CoreErpController::class, 'receipts'])->middleware('throttle:api.read');
         Route::middleware('can:accounting.post')->post('/receipts', [CoreErpController::class, 'createReceipt'])->middleware('throttle:api.write');
+        Route::middleware('can:accounting.post')->post('/receipts/{receipt}/allocate', [CoreErpController::class, 'allocateReceipt'])->middleware('throttle:api.write');
+        Route::middleware('can:accounting.reverse')->post('/receipts/{receipt}/reverse', [CoreErpController::class, 'reverseReceipt'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.view')->get('/payment-vouchers', [CoreErpController::class, 'vouchers'])->middleware('throttle:api.read');
         Route::middleware('can:accounting.post')->post('/payment-vouchers', [CoreErpController::class, 'createVoucher'])->middleware('throttle:api.write');
+        Route::middleware('can:accounting.post')->post('/payment-vouchers/{voucher}/allocate', [CoreErpController::class, 'allocateVoucher'])->middleware('throttle:api.write');
+        Route::middleware('can:accounting.reverse')->post('/payment-vouchers/{voucher}/reverse', [CoreErpController::class, 'reverseVoucher'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.view')->get('/journals', [CoreErpController::class, 'report'])->defaults('report', 'journal')->middleware('throttle:api.read');
         Route::middleware('can:accounting.view')->get('/reports/{report}', [CoreErpController::class, 'report'])->whereIn('report', ['account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'])->middleware('throttle:api.reports');
         Route::middleware('can:accounting.reverse')->post('/journals/{entry}/reverse', [CoreErpController::class, 'reverseJournal'])->middleware('throttle:api.write');

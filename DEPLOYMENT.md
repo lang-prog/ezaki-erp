@@ -34,7 +34,7 @@ For production, set `SESSION_SECURE_COOKIE=true`, keep `SESSION_HTTP_ONLY=true` 
 
 ## Local lifetime edition
 
-Set `APP_EDITION=local` and configure the installation's public verification key in `LOCAL_LICENSE_PUBLIC_KEY`. The matching private signing key belongs only in the offline issuer's protected environment and must never be deployed with the application. Activation is verified locally; no heartbeat or online check is performed after activation. Back up the local database and the application's private storage as one installation unit.
+Set `APP_EDITION=local` and configure `LOCAL_LICENSE_PUBLIC_KEY`, a unique `LOCAL_LICENSE_INSTALLATION_ID`, and the provisioned `LOCAL_LICENSE_CUSTOMER_BINDING` outside the database. The signed activation key must bind those values and the company ID; protected requests re-verify the stored signed payload, configured identity, status and expiry. The matching private signing key belongs only in the offline issuer's protected environment and must never be deployed with the application. No heartbeat or online check is performed. A privileged operator who copies both the application configuration/secrets and database can copy an offline installation; the application does not claim hardware-backed anti-copy protection. A transfer requires a newly signed destination license and updating the destination's local identity configuration. Back up the local database and private storage as one installation unit.
 
 ## `php artisan serve`
 For development, `php artisan serve` uses the Laravel public entrypoint and can be used alongside the Vite dev server. Run `npm run dev` in a second terminal. The API health route is `/api/v1/health`.
@@ -59,7 +59,13 @@ The smoke script always checks `/api/v1/health` and `/api/v1/version`. It checks
 
 ### Versioned API contract
 
-The v1 contract is `docs/openapi/v1/openapi.json` (OpenAPI 3.1.0, base `/api/v1`). It covers health/version, session auth, dashboard, subscription, profile, accounting settings, branches, warehouses, and the local license activation boundary. Run `php scripts/lint-openapi.php` in CI and before a release. This is a dependency-free structural/route sanity check; a full external OpenAPI validator and live contract/drift test remain recommended in CI where a validator and a running application are available.
+The v1 contract is `docs/openapi/v1/openapi.json` (OpenAPI 3.1.0, base `/api/v1`). It covers health/version, session auth, dashboard, subscription, profile, accounting settings, branches, warehouses, local license activation, payment allocation/source-aware reversal, and inventory-transfer reversal. Run `php scripts/lint-openapi.php` in CI and before a release. This is a dependency-free structural/route sanity check; a full external OpenAPI validator and live contract/drift test remain recommended in CI where a validator and a running application are available.
+
+### Accounting remediation migration
+
+The additive migration `2026_10_13_000001_add_accounting_remediation_controls` adds payment allocations, transfer value/reversal metadata, source reversal metadata, license signature storage and fleet settlement fields. It also provisions fleet posting accounts for existing companies. Apply it only with `php artisan migrate --force` after a verified backup; do not run destructive reset/refresh commands. No historical journals, bill payment records or stock movements are rewritten or automatically backfilled. Legacy unapplied party payments are virtually FIFO-applied in aging reports; new receipts/vouchers create explicit allocation rows, and overpayments remain as party credit. A rollback that drops `party_payment_allocations` loses those newly captured allocation details, so prefer a forward fix/code rollback and preserve the database rather than rolling back this migration after use.
+
+Local-edition installations activated before signed-payload persistence must be provisioned with `LOCAL_LICENSE_INSTALLATION_ID` and `LOCAL_LICENSE_CUSTOMER_BINDING`, then activated with a newly signed license before protected use after upgrade. The runtime now fails closed when the stored signed license cannot be reverified. Coordinate this with the offline issuer; do not copy issuer private keys to the application host.
 
 ### XAMPP / Apache
 

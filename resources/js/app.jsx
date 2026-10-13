@@ -7,6 +7,22 @@ import { translate } from './i18n';
 
 const pages = import.meta.glob('./Pages/**/*.jsx');
 
+function GlobalRequestErrors({ children }) {
+    const [message, setMessage] = React.useState('');
+    React.useEffect(() => {
+        const handleError = (event) => {
+            const locale = document.documentElement.lang || 'en';
+            const status = event.detail?.status;
+            const key = status === 419 ? 'sessionExpired' : status === 403 ? 'permissionDenied' : status === 429 ? 'tooManyRequests' : status === 422 ? 'requestInvalid' : status >= 500 ? 'serverError' : 'networkError';
+            setMessage(event.detail?.message || translate(locale, key));
+        };
+        window.addEventListener('ezaki:request-error', handleError);
+        return () => window.removeEventListener('ezaki:request-error', handleError);
+    }, []);
+
+    return <>{children}{message && <div role="alert" className="notice-card error no-print" style={{ position: 'fixed', insetInlineEnd: '1rem', bottom: '1rem', zIndex: 1000, maxWidth: 'min(32rem, calc(100vw - 2rem))' }}><span>{message}</span><button type="button" className="erp-link-button" onClick={() => setMessage('')} aria-label={translate(document.documentElement.lang || 'en', 'close')}>×</button></div>}</>;
+}
+
 const arabicText = /[\u0600-\u06ff]/;
 const legacyArabic = {
     Branch: 'الفرع', Warehouse: 'المخزن', Supplier: 'المورد', Customer: 'العميل', Lines: 'البنود', 'Type / brand': 'النوع / العلامة', Diameter: 'القطر', 'Factory weight': 'وزن المصنع', Packages: 'العبوات', 'Packages (optional)': 'العبوات (اختياري)', 'Actual weight': 'الوزن الفعلي', 'Unit price': 'سعر الوحدة', Transport: 'النقل', Loading: 'التحميل', Extras: 'إضافات', 'Discount': 'الخصم', 'VAT %': 'ضريبة القيمة المضافة %', 'External vehicle': 'مركبة خارجية', 'External plate': 'لوحة خارجية', 'Driver name': 'اسم السائق', 'Save as draft': 'حفظ كمسودة', 'Save & Approve': 'حفظ واعتماد', Approve: 'اعتماد', Reverse: 'عكس', 'Revision reason': 'سبب التعديل', Vehicles: 'المركبات', Drivers: 'السائقون', Trips: 'الرحلات', Expenses: 'المصروفات', Maintenance: 'الصيانة', 'New vehicle': 'مركبة جديدة', 'New driver': 'سائق جديد', 'Save vehicle': 'حفظ المركبة', 'Save driver': 'حفظ السائق', 'New trip': 'رحلة جديدة', 'New expense': 'مصروف جديد', 'Vehicle': 'المركبة', 'Trip type': 'نوع الرحلة', Origin: 'من', Destination: 'إلى', 'New maintenance': 'صيانة جديدة', 'Maintenance report': 'تقرير الصيانة', 'Inactive vehicles': 'المركبات غير النشطة', 'Total cost': 'إجمالي التكلفة', Plate: 'اللوحة', Type: 'النوع', 'Make / model': 'الماركة / الطراز', Company: 'الشركة', Rented: 'مؤجرة', External: 'خارجية', 'Save trip': 'حفظ الرحلة', 'Save expense': 'حفظ المصروف', 'Save maintenance': 'حفظ الصيانة', 'Start date': 'تاريخ البدء', Issue: 'العطل', Cost: 'التكلفة', 'Preventive': 'وقائية', 'In service': 'في الخدمة', 'Add line': 'إضافة بند', '+ line': '+ بند', 'Account number': 'رقم الحساب', Journal: 'اليومية', Source: 'المصدر', 'From date': 'من تاريخ', 'To date': 'إلى تاريخ', Apply: 'تطبيق', Print: 'طباعة', View: 'عرض', Statement: 'كشف الحساب', Edit: 'تعديل', Save: 'حفظ', Create: 'إنشاء', 'Select a plan': 'اختر خطة', Plan: 'الخطة', Email: 'البريد الإلكتروني', Password: 'كلمة المرور', Name: 'الاسم', Phone: 'الهاتف', Address: 'العنوان', 'Search...': 'بحث...'
@@ -66,13 +82,10 @@ createInertiaApp({
         router.on('before', (event) => {
             event.detail.visit.headers = { ...event.detail.visit.headers, ...csrfHeaders() };
         });
-        // Expired session/CSRF (419) and other non-Inertia failures get a message instead of a raw HTML modal.
         router.on('invalid', (event) => {
             const status = event.detail.response?.status;
-            if (status === 419 || status === 403 || status >= 500) {
-                event.preventDefault();
-                window.alert(translate(document.documentElement.lang || 'en', 'requestFailed'));
-            }
+            event.preventDefault();
+            window.dispatchEvent(new CustomEvent('ezaki:request-error', { detail: { status } }));
         });
         const syncDocumentLanguage = (locale = 'en') => {
             document.documentElement.lang = locale;
@@ -82,7 +95,7 @@ createInertiaApp({
         enhanceControls(props.initialPage.props.locale);
         router.on('navigate', (event) => syncDocumentLanguage(event.detail.page.props.locale));
         router.on('navigate', (event) => enhanceControls(event.detail.page.props.locale));
-        createRoot(el).render(<App {...props} />);
+        createRoot(el).render(<GlobalRequestErrors><App {...props} /></GlobalRequestErrors>);
         const observer = new MutationObserver(() => enhanceControls(document.documentElement.lang));
         observer.observe(el, { childList: true, subtree: true });
         queueMicrotask(() => enhanceControls(props.initialPage.props.locale));

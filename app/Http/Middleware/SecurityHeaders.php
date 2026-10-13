@@ -18,6 +18,9 @@ final class SecurityHeaders
         $response->headers->set('X-Frame-Options', 'SAMEORIGIN');
         $response->headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
         $response->headers->set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+        if (config('security.csp.report_only', true)) {
+            $response->headers->set('Content-Security-Policy-Report-Only', (string) config('security.csp.policy'));
+        }
 
         if (config('security.hsts.enabled', true) && $request->isSecure()) {
             $maxAge = (int) config('security.hsts.max_age', 31536000);

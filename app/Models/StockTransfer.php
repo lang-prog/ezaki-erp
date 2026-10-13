@@ -9,11 +9,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class StockTransfer extends Model
 {
-    protected $fillable = ['company_id', 'from_warehouse_id', 'to_warehouse_id', 'created_by', 'status', 'transfer_number', 'notes', 'transferred_at'];
+    protected $fillable = ['company_id', 'from_warehouse_id', 'to_warehouse_id', 'created_by', 'status', 'transfer_number', 'request_hash', 'reversal_of_id', 'reversed_by', 'reversed_at', 'reversal_reason', 'notes', 'transferred_at'];
 
     protected function casts(): array
     {
-        return ['transferred_at' => 'datetime'];
+        return ['transferred_at' => 'datetime', 'reversed_at' => 'datetime'];
     }
 
     public function lines(): HasMany

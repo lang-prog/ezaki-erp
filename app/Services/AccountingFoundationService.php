@@ -32,6 +32,9 @@ class AccountingFoundationService
         ['output_vat', '2', '2.VAT-OUT', 'Output VAT payable'],
         ['cost_of_goods_sold', '4', '4.COGS', 'Cost of goods sold'],
         ['opening_balance_equity', '3', '3.OPENING', 'Opening balance equity'],
+        ['fleet_expense', '4.2', '4.2.9001', 'Fleet operating expenses'],
+        ['maintenance_expense', '4.2', '4.2.9002', 'Vehicle maintenance expense'],
+        ['fleet_payable', '2.1', '2.1.9001', 'Fleet accrued payable'],
     ];
 
     public function seedCompany(Company $company, ?User $actor = null): void

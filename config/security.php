@@ -25,4 +25,8 @@ return [
         'max_age' => (int) env('SECURITY_HSTS_MAX_AGE', 31536000),
         'include_subdomains' => (bool) env('SECURITY_HSTS_INCLUDE_SUBDOMAINS', true),
     ],
+    'csp' => [
+        'report_only' => (bool) env('SECURITY_CSP_REPORT_ONLY', true),
+        'policy' => env('SECURITY_CSP_POLICY', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"),
+    ],
 ];

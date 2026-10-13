@@ -77,7 +77,7 @@ class OperationsService
     public function saveSales(Company $company, User $actor, array $data, bool $approve = false): SalesBill
     {
         return DB::transaction(function () use ($company, $actor, $data, $approve): SalesBill {
-            $customer = CustomerSupplier::query()->where('company_id', $company->id)->where('is_customer', true)->findOrFail((int) $data['customer_id']);
+            $customer = CustomerSupplier::query()->where('company_id', $company->id)->where('is_customer', true)->lockForUpdate()->findOrFail((int) $data['customer_id']);
             $this->validateHeader($data, false);
             $this->assertWarehouseBelongsToBranch($company, (int) $data['branch_id'], (int) $data['warehouse_id']);
             $this->duplicateCheck($company, 'sales', $data, $data['id'] ?? null);
@@ -219,6 +219,7 @@ class OperationsService
         abort_unless((int) $record->company_id === (int) $company->id, 404);
         abort_if($record->status !== 'draft', 409, 'Only draft maintenance records can be edited.');
         $data['vehicle_id'] = $this->fleetRelationId('vehicles', $company, $data['vehicle_id']);
+        $data = $this->settlementRelations($company, $data);
         $record->fill($data)->save();
         $this->audit->record('maintenance.updated', $record, $company->id, $actor->id);
 
@@ -375,6 +376,7 @@ class OperationsService
     {
         $data = $this->expenseRelations($company, $data);
         $expense = FleetExpense::query()->create(['company_id' => $company->id, 'created_by' => $actor->id, ...$data, 'status' => 'draft']);
+        $this->audit->record('fleet_expenses.created', $expense, $company->id, $actor->id);
         if ($approve) {
             return $this->approveExpense($company, $actor, $expense);
         }
@@ -391,13 +393,9 @@ class OperationsService
             }
             abort_if($expense->status !== 'draft', 409);
             $debitAccount = $expense->expense_account_id
-                ? Account::query()->where('company_id', $company->id)->findOrFail($expense->expense_account_id)
-                : Account::query()->where('company_id', $company->id)->where('code', '4.2')->firstOrFail();
-            $creditAccount = $expense->account_id
-                ? Account::query()->where('company_id', $company->id)->findOrFail($expense->account_id)
-                : ($expense->cashbox_id || $expense->bank_id
-                    ? $this->accounting->paymentSourceAccount($company, $expense->toArray())
-                    : Account::query()->where('company_id', $company->id)->where('code', '1.2')->firstOrFail());
+                ? $this->postableAccount($company, (int) $expense->expense_account_id, 'expense')
+                : $this->foundation->systemAccount($company, 'fleet_expense');
+            $creditAccount = $this->fleetSettlementAccount($company, $expense->toArray());
             $entry = $this->accounting->postOperationalJournal($company, $actor, $expense->expense_date->toDateString(), 'Fleet expense '.$expense->category, FleetExpense::class, $expense->id, [['account_id' => $debitAccount->id, 'debit' => $expense->amount, 'credit' => 0, 'description' => $expense->category], ['account_id' => $creditAccount->id, 'debit' => 0, 'credit' => $expense->amount, 'description' => 'Fleet expense payment']]);
             $expense->forceFill(['status' => 'approved', 'journal_entry_id' => $entry->id])->save();
             $this->audit->record('fleet_expenses.approved', $expense, $company->id, $actor->id, ['journal_entry_id' => $entry->id]);
@@ -409,7 +407,9 @@ class OperationsService
     public function createMaintenance(Company $company, User $actor, array $data, bool $approve = false): MaintenanceRecord
     {
         $data['vehicle_id'] = $this->fleetRelationId('vehicles', $company, $data['vehicle_id']);
+        $data = $this->settlementRelations($company, $data);
         $record = MaintenanceRecord::query()->create(['company_id' => $company->id, ...$data, 'status' => 'draft']);
+        $this->audit->record('maintenance.created', $record, $company->id, $actor->id);
         if ($approve) {
             return $this->approveMaintenance($company, $actor, $record);
         }
@@ -425,7 +425,8 @@ class OperationsService
                 return $record;
             }
             abort_if($record->status !== 'draft', 409);
-            $entry = $this->accounting->postOperationalJournal($company, $actor, $record->starts_on->toDateString(), 'Vehicle maintenance '.$record->issue, MaintenanceRecord::class, $record->id, [['account_id' => $this->accountId($company, '4.2'), 'debit' => $record->cost, 'credit' => 0, 'description' => 'Maintenance'], ['account_id' => $this->accountId($company, '1.2'), 'debit' => 0, 'credit' => $record->cost, 'description' => 'Maintenance payment']]);
+            $creditAccount = $this->fleetSettlementAccount($company, $record->toArray());
+            $entry = $this->accounting->postOperationalJournal($company, $actor, $record->starts_on->toDateString(), 'Vehicle maintenance '.$record->issue, MaintenanceRecord::class, $record->id, [['account_id' => $this->foundation->systemAccount($company, 'maintenance_expense')->id, 'debit' => $record->cost, 'credit' => 0, 'description' => 'Maintenance'], ['account_id' => $creditAccount->id, 'debit' => 0, 'credit' => $record->cost, 'description' => 'Maintenance settlement']]);
             $record->forceFill(['status' => 'approved', 'journal_entry_id' => $entry->id])->save();
             $this->audit->record('maintenance.approved', $record, $company->id, $actor->id, ['journal_entry_id' => $entry->id]);
 
@@ -450,8 +451,22 @@ class OperationsService
         $bill = $type === 'purchase' ? PurchaseBill::query()->where('company_id', $company->id)->with('lines')->findOrFail($id) : SalesBill::query()->where('company_id', $company->id)->with('lines')->findOrFail($id);
         $weight = $type === 'purchase' ? (float) $bill->total_factory_weight : (float) $bill->total_actual_weight;
         $extras = (float) $bill->transport_cost + (float) $bill->loading_cost + (float) $bill->extra_cost;
+        $lines = $bill->lines->values();
+        if ($extras > 0 && $weight <= 0) {
+            throw ValidationException::withMessages(['transport_cost' => 'Extra costs require a positive allocation weight.']);
+        }
+        $allocated = 0.0;
+        $allocations = [];
+        foreach ($lines as $index => $line) {
+            $lineWeight = (float) ($type === 'purchase' ? $line->factory_weight : $line->actual_weight);
+            $amount = $index === $lines->count() - 1
+                ? round($extras - $allocated, 2)
+                : ($weight > 0 ? round($extras * $lineWeight / $weight, 2) : 0.0);
+            $allocated += $amount;
+            $allocations[] = ['line_id' => $line->id, 'weight' => $lineWeight, 'allocated_extra_cost' => $amount];
+        }
 
-        return ['total_extra_cost' => $extras, 'basis_weight' => $weight, 'lines' => $bill->lines->map(fn ($line): array => ['line_id' => $line->id, 'weight' => (float) ($type === 'purchase' ? $line->factory_weight : $line->actual_weight), 'allocated_extra_cost' => $weight > 0 ? round($extras * (float) ($type === 'purchase' ? $line->factory_weight : $line->actual_weight) / $weight, 2) : 0])->all()];
+        return ['total_extra_cost' => $extras, 'basis_weight' => $weight, 'lines' => $allocations];
     }
 
     private function validateHeader(array $data, bool $purchase): void
@@ -540,8 +555,20 @@ class OperationsService
     {
         if (! in_array($data['payment_method'] ?? null, ['credit', 'partial'], true) || $customer->credit_limit === null) {
             return;
-        } $balance = (float) $customer->opening_balance + (float) DB::table('journal_lines')->where('company_id', $company->id)->where('party_id', $customer->id)->sum(DB::raw('debit-credit'));
-        throw_if($balance + max(0, $total - (float) ($data['paid_amount'] ?? 0)) > (float) $customer->credit_limit, ValidationException::withMessages(['customer_id' => 'Customer credit limit exceeded.']));
+        }
+
+        $balance = (float) DB::table('journal_lines as lines')
+            ->join('journal_entries as entries', 'entries.id', '=', 'lines.journal_entry_id')
+            ->where('lines.company_id', $company->id)
+            ->where('entries.company_id', $company->id)
+            ->whereIn('entries.status', ['posted', 'reversed'])
+            ->where('lines.account_id', $customer->account_id)
+            ->sum(DB::raw('lines.debit - lines.credit'));
+        if (! $customer->opening_balance_journal_entry_id) {
+            $opening = (float) $customer->opening_balance;
+            $balance += ($customer->opening_balance_direction ?? 'debit') === 'debit' ? $opening : -$opening;
+        }
+        throw_if(round($balance, 2) + max(0, $total - (float) ($data['paid_amount'] ?? 0)) > (float) $customer->credit_limit, ValidationException::withMessages(['customer_id' => 'Customer credit limit exceeded.']));
     }
 
     private function adjustStock(Company $company, User $actor, int $warehouseId, int $productId, float $delta, string $source, int $sourceId, string $type): void
@@ -780,8 +807,51 @@ class OperationsService
         }
         abort_if(! empty($data['account_id']) && (! empty($data['cashbox_id']) || ! empty($data['bank_id'])), 422, 'Choose one payment account, cashbox, or bank.');
         abort_if(! empty($data['cashbox_id']) && ! empty($data['bank_id']), 422, 'Choose exactly one cashbox or bank.');
+        $data = $this->settlementRelations($company, $data);
+        if (! empty($data['expense_account_id'])) {
+            $data['expense_account_id'] = $this->postableAccount($company, (int) $data['expense_account_id'], 'expense')->id;
+        }
 
         return $data;
+    }
+
+    private function settlementRelations(Company $company, array $data): array
+    {
+        $hasCashbox = ! empty($data['cashbox_id']);
+        $hasBank = ! empty($data['bank_id']);
+        $hasPayable = ! empty($data['account_id']);
+        abort_if(($hasCashbox && $hasBank) || ($hasPayable && ($hasCashbox || $hasBank)), 422, 'Choose exactly one cashbox, bank, or payable account.');
+        if ($hasCashbox) {
+            $data['cashbox_id'] = (int) DB::table('cashboxes')->where('company_id', $company->id)->where('id', (int) $data['cashbox_id'])->where('is_active', true)->value('id') ?: abort(404);
+        }
+        if ($hasBank) {
+            $data['bank_id'] = (int) DB::table('banks')->where('company_id', $company->id)->where('id', (int) $data['bank_id'])->where('is_active', true)->value('id') ?: abort(404);
+        }
+        if ($hasPayable) {
+            $data['account_id'] = $this->postableAccount($company, (int) $data['account_id'], 'liability')->id;
+        }
+
+        return $data;
+    }
+
+    private function fleetSettlementAccount(Company $company, array $data): Account
+    {
+        $count = (int) ! empty($data['cashbox_id']) + (int) ! empty($data['bank_id']) + (int) ! empty($data['account_id']);
+        throw_if($count !== 1, ValidationException::withMessages(['account_id' => 'Choose exactly one cashbox, bank, or payable account before approval.']));
+        if (! empty($data['cashbox_id']) || ! empty($data['bank_id'])) {
+            return $this->accounting->paymentSourceAccount($company, $data);
+        }
+
+        return $this->postableAccount($company, (int) $data['account_id'], 'liability');
+    }
+
+    private function postableAccount(Company $company, int $accountId, string $type): Account
+    {
+        $account = Account::query()->where('company_id', $company->id)->where('is_active', true)->findOrFail($accountId);
+        abort_unless($account->account_type === $type, 422, 'The selected account has the wrong account type.');
+        abort_if(Account::query()->where('company_id', $company->id)->where('parent_id', $account->id)->exists(), 422, 'Choose a posting account, not a header account.');
+
+        return $account;
     }
 
     private function fleetRelationId(string $table, Company $company, mixed $id, bool $nullable = false): ?int

@@ -34,7 +34,7 @@ Status values: `OPEN` | `IN_PROGRESS` | `DONE` | `DEFERRED`
 | A4 | Purchase lines type + diameter + factory weight only | IN_PROGRESS | Implemented and covered by type/diameter purchase tests; operator visual re-verification pending. |
 | A5 | Header fields at TOP including factory total + actual review weight | IN_PROGRESS | Implemented in BillForm; automated bill payload coverage passes; operator visual re-verification pending. |
 | A6 | Header factory weight equals sum of line factory weights | IN_PROGRESS | Server-side totals validation and focused tests pass; operator visual re-verification pending. |
-| A7 | Purchase stock/value uses factory weight; actual is review-only | IN_PROGRESS | Approval service uses factory weight and tests pass; operator visual re-verification pending. |
+| A7 | Purchase valuation uses factory weight; stock quantity follows company policy | IN_PROGRESS | New companies default to actual-weight stock; legacy companies with no saved policy retain factory-weight stock. Policy is locked after first approved purchase; no historical conversion is automatic. Operator visual re-verification pending. |
 | A8 | Sales optional packages; never affect stock | IN_PROGRESS | Nullable packages and approval coverage pass; operator visual re-verification pending. |
 | A9 | Sales cannot oversell | IN_PROGRESS | Approval stock guard and focused test pass; operator visual re-verification pending. |
 | A10 | Duplicate bill number blocked; near-duplicate does not wipe form | IN_PROGRESS | Duplicate validation and warning-preservation tests pass; operator visual re-verification pending. |

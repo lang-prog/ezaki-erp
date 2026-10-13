@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\Account;
 use App\Models\Company;
+use App\Models\JournalEntry;
 use App\Models\User;
 use App\Services\AccountingFoundationService;
 use App\Services\AccountingReportService;
@@ -90,6 +91,38 @@ class AccountingReportingTest extends TestCase
         $this->assertNotNull($row);
         $this->assertSame(75.0, (float) $row->balance_due);
         $this->assertSame(75.0, (float) $row->aging['current']);
+    }
+
+    public function test_balance_sheet_includes_unclosed_earnings_and_reconciles_after_reversal(): void
+    {
+        [$company, $actor] = $this->companyAndActor();
+        app(AccountingFoundationService::class)->seedCompany($company, $actor);
+        $accounting = app(AccountingService::class);
+        $cashbox = $accounting->createCashbox($company, $actor, 'Earnings test cash');
+        $revenue = Account::query()->where('company_id', $company->id)->where('code', '5.1')->firstOrFail();
+        $expense = Account::query()->where('company_id', $company->id)->where('code', '4.1')->firstOrFail();
+        $date = today()->toDateString();
+        $accounting->postOperationalJournal($company, $actor, $date, 'Test revenue', 'test', 100, [
+            ['account_id' => $cashbox->account_id, 'debit' => 100, 'credit' => 0, 'description' => 'Cash receipt'],
+            ['account_id' => $revenue->id, 'debit' => 0, 'credit' => 100, 'description' => 'Revenue'],
+        ]);
+        $accounting->postOperationalJournal($company, $actor, $date, 'Test expense', 'test', 101, [
+            ['account_id' => $expense->id, 'debit' => 50, 'credit' => 0, 'description' => 'Expense'],
+            ['account_id' => $cashbox->account_id, 'debit' => 0, 'credit' => 50, 'description' => 'Cash payment'],
+        ]);
+
+        $reports = app(AccountingReportService::class);
+        $profit = $reports->balanceSheet($company, $date);
+        $earnings = $profit['rows']->firstWhere('is_virtual', true);
+        $this->assertSame(50.0, (float) $earnings->balance);
+        $this->assertSame(0.0, (float) $profit['reconciliation_difference']);
+
+        $saleEntry = JournalEntry::query()->where('company_id', $company->id)->where('source_type', 'test')->where('source_id', 100)->firstOrFail();
+        $accounting->reverseJournal($company, $actor, $saleEntry, $date);
+        $loss = $reports->balanceSheet($company, $date);
+        $earningsAfterReversal = $loss['rows']->firstWhere('is_virtual', true);
+        $this->assertSame(-50.0, (float) $earningsAfterReversal->balance);
+        $this->assertSame(0.0, (float) $loss['reconciliation_difference']);
     }
 
     private function companyAndActor(): array

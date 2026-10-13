@@ -93,6 +93,20 @@ final class SecurityPlatformHardeningTest extends TestCase
         $this->assertFalse(Auth::check());
     }
 
+    public function test_stateful_api_rejects_stale_session_version_but_allows_bearer_tokens(): void
+    {
+        $company = Company::query()->create(['name' => 'API Session Co', 'status' => 'active']);
+        $plan = Plan::query()->create(['code' => 'api-session-plan', 'name' => 'API Session', 'duration' => 'yearly', 'price' => 1, 'limits' => [], 'is_active' => true]);
+        Subscription::query()->create(['company_id' => $company->id, 'plan_id' => $plan->id, 'status' => 'active', 'starts_at' => now()->subDay(), 'ends_at' => now()->addYear()]);
+        $user = User::query()->create(['name' => 'API Session Owner', 'email' => 'api-session@example.test', 'password' => 'correct-password', 'company_id' => $company->id, 'account_type' => 'company', 'status' => 'active', 'email_verified_at' => now(), 'session_version' => 2]);
+
+        $this->actingAs($user)->withSession(['session_version' => 1])->withHeader('Origin', 'http://localhost')->getJson('/api/v1/me')->assertUnauthorized();
+        $this->actingAs($user)->withSession(['session_version' => 2])->withHeader('Origin', 'http://localhost')->getJson('/api/v1/me')->assertOk();
+
+        $token = $user->createToken('session-version-test')->plainTextToken;
+        $this->withToken($token)->getJson('/api/v1/me')->assertOk();
+    }
+
     public function test_coupon_redemption_is_transactional_idempotent_and_honours_the_global_limit(): void
     {
         $plan = Plan::query()->create([
@@ -151,7 +165,17 @@ final class SecurityPlatformHardeningTest extends TestCase
         $service->disable($license);
         $this->assertSame('disabled', $license->fresh()->status);
         $service->enable($license);
-        $transferred = $service->transfer($license, 'install-two', 'customer-two', $company->id);
+        $keyPair = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_RSA, 'private_key_bits' => 2048]);
+        if ($keyPair === false) {
+            $this->markTestSkipped('The configured PHP CLI cannot generate an ephemeral OpenSSL keypair for license transfer.');
+        }
+        openssl_pkey_export($keyPair, $privateKey);
+        $keyDetails = openssl_pkey_get_details($keyPair);
+        config(['licensing.public_key' => $keyDetails['key']]);
+        $payload = json_encode(['installation_id' => 'install-two', 'customer_binding' => 'customer-two', 'company_id' => $company->id], JSON_THROW_ON_ERROR);
+        openssl_sign($payload, $signature, $privateKey, OPENSSL_ALGO_SHA256);
+        $transferredKey = base64_encode($payload).'.'.base64_encode($signature);
+        $transferred = $service->transfer($license, 'install-two', 'customer-two', $company->id, $transferredKey);
         $this->assertSame('install-two', $transferred->installation_id);
         $this->assertSame('customer-two', $transferred->customer_binding);
         $this->assertNotNull($transferred->transfer_reference);
@@ -164,6 +188,36 @@ final class SecurityPlatformHardeningTest extends TestCase
             $this->fail('A revoked license must not be enabled again.');
         } catch (HttpException $exception) {
             $this->assertSame(409, $exception->getStatusCode());
+        }
+    }
+
+    public function test_local_license_rejects_caller_identity_and_a_copied_database_on_another_installation(): void
+    {
+        $company = Company::query()->create(['name' => 'Bound Local Co', 'status' => 'active']);
+        config(['licensing.public_key' => 'configured-key', 'licensing.installation_id' => 'install-current', 'licensing.customer_binding' => 'customer-current']);
+        try {
+            app(LocalLicenseService::class)->activate('malformed', 'install-caller-chosen', 'customer-current', $company->id);
+            $this->fail('Activation must reject an ID that differs from installation configuration before parsing a key.');
+        } catch (HttpException $exception) {
+            $this->assertSame(422, $exception->getStatusCode());
+        }
+
+        LocalLicense::query()->create([
+            'key_hash' => hash('sha256', 'old-install-license'),
+            'installation_id' => 'install-old',
+            'customer_binding' => 'customer-current',
+            'company_id' => $company->id,
+            'status' => 'enabled',
+            'activated_at' => now(),
+            'enabled_at' => now(),
+            'signed_payload' => ['installation_id' => 'install-old', 'company_id' => $company->id, 'customer_binding' => 'customer-current'],
+        ]);
+
+        try {
+            app(LocalLicenseService::class)->verifyForCompany($company);
+            $this->fail('A database copied from another installation must not pass the configured installation binding.');
+        } catch (HttpException $exception) {
+            $this->assertSame(402, $exception->getStatusCode());
         }
     }
 

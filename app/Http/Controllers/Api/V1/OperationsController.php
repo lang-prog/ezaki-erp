@@ -225,7 +225,7 @@ class OperationsController
 
     public function storeMaintenance(Request $request): JsonResponse
     {
-        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'maintenance_type' => ['required', 'in:preventive,emergency'], 'issue' => ['required', 'string'], 'parts' => ['nullable', 'string'], 'labor_cost' => ['nullable', 'numeric'], 'parts_cost' => ['nullable', 'numeric'], 'vendor' => ['nullable', 'string'], 'cost' => ['required', 'numeric', 'gt:0'], 'starts_on' => ['required', 'date'], 'ends_on' => ['nullable', 'date'], 'next_due_on' => ['nullable', 'date'], 'vehicle_status' => ['required', 'in:in_service,out_of_service'], 'notes' => ['nullable', 'string']]);
+        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'account_id' => ['nullable', 'integer'], 'maintenance_type' => ['required', 'in:preventive,emergency'], 'issue' => ['required', 'string'], 'parts' => ['nullable', 'string'], 'labor_cost' => ['nullable', 'numeric'], 'parts_cost' => ['nullable', 'numeric'], 'vendor' => ['nullable', 'string'], 'cost' => ['required', 'numeric', 'gt:0'], 'starts_on' => ['required', 'date'], 'ends_on' => ['nullable', 'date'], 'next_due_on' => ['nullable', 'date'], 'vehicle_status' => ['required', 'in:in_service,out_of_service'], 'notes' => ['nullable', 'string']]);
 
         return response()->json(['data' => $this->operations->createMaintenance($this->company($request), $request->user(), $data, false)], 201);
     }
@@ -264,7 +264,7 @@ class OperationsController
     public function updateMaintenance(Request $request, MaintenanceRecord $record): JsonResponse
     {
         $this->owned($record, $request);
-        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'maintenance_type' => ['required', 'in:preventive,emergency'], 'issue' => ['required', 'string'], 'parts' => ['nullable', 'string'], 'labor_cost' => ['nullable', 'numeric'], 'parts_cost' => ['nullable', 'numeric'], 'vendor' => ['nullable', 'string'], 'cost' => ['required', 'numeric', 'gt:0'], 'starts_on' => ['required', 'date'], 'ends_on' => ['nullable', 'date'], 'next_due_on' => ['nullable', 'date'], 'vehicle_status' => ['required', 'in:in_service,out_of_service'], 'notes' => ['nullable', 'string']]);
+        $data = $request->validate(['vehicle_id' => ['required', 'integer'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'account_id' => ['nullable', 'integer'], 'maintenance_type' => ['required', 'in:preventive,emergency'], 'issue' => ['required', 'string'], 'parts' => ['nullable', 'string'], 'labor_cost' => ['nullable', 'numeric'], 'parts_cost' => ['nullable', 'numeric'], 'vendor' => ['nullable', 'string'], 'cost' => ['required', 'numeric', 'gt:0'], 'starts_on' => ['required', 'date'], 'ends_on' => ['nullable', 'date'], 'next_due_on' => ['nullable', 'date'], 'vehicle_status' => ['required', 'in:in_service,out_of_service'], 'notes' => ['nullable', 'string']]);
 
         return response()->json(['data' => $this->operations->updateMaintenance($this->company($request), $request->user(), $record, $data)]);
     }

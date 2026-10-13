@@ -48,6 +48,7 @@ Next action: Continue the Phase 2/3 product-correction pass only. Do not start P
 | XAMPP license | Fully offline after activation. No periodic online check |
 | Draft documents | No stock and no journal |
 | Approved documents | Stock + journal + audit, once, in a transaction |
+| Purchase value and stock quantity | Value/unit price use factory weight; stock quantity follows the saved company policy. New companies default to actual weight; legacy companies with no policy retain factory weight. No automatic historical conversion. |
 | v1 payments | Manual by Super Admin |
 | Mobile app | Out of v1; REST API must be ready |
 | Velzon | Integrate when licensed files exist, preferably Phase 4 |
@@ -565,3 +566,19 @@ Verification:
 - `git diff --check HEAD` — clean.
 
 Operational note: password recovery sends through the configured Laravel mailer. With the default local `MAIL_MAILER=log`, the reset URL is written to the Laravel log; production requires SMTP or the hosting provider's mail settings.
+
+### Accounting, inventory, security and fleet remediation — 2026-10-13
+
+Implemented against the audit findings without rewriting historical journals, bill payment records, stock movements, or tenant data:
+
+- Party balances and credit-limit checks now use company-scoped control-account balances. New receipt/voucher settlement uses explicit or FIFO invoice allocation, retains overpayment as unapplied party credit, records source-aware reversals, and exposes the unapplied amount in the accounting UI. Legacy payments are represented virtually in aging; there is no automatic allocation backfill.
+- Balance-sheet reports add cumulative unclosed earnings as a virtual equity line and show the reconciliation difference. Fiscal posting and period closure lock/recheck the period inside transactions.
+- Stock transfers carry weighted-average value as well as quantity, persist line unit cost/value, provide request idempotency and source-aware reversal, and reject reversal after destination stock is consumed.
+- Fleet expense/maintenance postings require explicit cash, bank, or postable liability settlement at approval. Branch performance now assigns operating expenses once to the vehicle branch and trip operating cost to the trip branch.
+- Local license checks bind signature, company, configured installation/customer identity, status, and expiration; stateful API sessions enforce session-version revocation while bearer tokens remain unaffected. CSP remains report-only.
+- Company settings uploads are staged and replaced only after database/audit success. Shared request errors are visible without blocking alerts. OpenAPI documents the new allocation and reversal endpoints.
+- Purchase policy was resolved without historical conversion: value follows factory weight; inventory quantity follows the saved company policy; newly provisioned companies default to actual weight, and legacy companies without a saved setting retain factory weight.
+
+Validation in this workspace: PHPUnit **114 tests / 1,376 assertions**, 0 failures, 2 environment-dependent skips; JavaScript **10/10**; Vite production build passed; Pint passed; Composer validation passed; OpenAPI lint passed (**17 paths / 19 operations**); production dependency audit reported **0 vulnerabilities**. Full details, exact commands, limitations, migration and rollback notes are in `remediation-results.md`.
+
+External acceptance remains open: the additive migration was exercised through isolated SQLite tests but not applied to MySQL; MySQL concurrency, authenticated browser walkthrough, production configuration, and deployment were not run. License signature tests requiring ephemeral OpenSSL key generation were skipped because the configured PHP CLI cannot create a keypair. Older offline-license rows must be reactivated with newly signed claims after identity configuration before protected use. No `.env` was read, no production database was accessed, and no deployment or push occurred.

@@ -44,14 +44,7 @@ final class FleetReportService
             'expenses-by-category' => $expenses->groupBy('category')->map(fn (Collection $items, string $category): array => ['id' => $category, 'label' => $category, 'count' => $items->count(), 'total' => (float) $items->sum('amount')])->values(),
             'maintenance-period' => $maintenance->groupBy('vehicle_id')->map(fn (Collection $items): array => ['id' => $items->first()->vehicle_id, 'label' => $items->first()->vehicle_plate, 'count' => $items->count(), 'total' => (float) $items->sum('cost')])->values(),
             'inactive-vehicles' => DB::table('vehicles')->where('company_id', $company->id)->where('status', 'inactive')->when($branchId, fn ($query) => $query->where('branch_id', $branchId))->orderBy('plate')->get()->map(fn ($vehicle): array => ['id' => $vehicle->id, 'label' => $vehicle->plate, 'type' => $vehicle->type, 'status' => $vehicle->status])->values(),
-            'branch-performance' => $trips->groupBy('branch_id')->map(function (Collection $items) use ($expenses, $maintenance): array {
-                $branchId = $items->first()->branch_id;
-                $tripCosts = (float) $items->sum(fn ($trip) => (float) $trip->fuel_cost + (float) $trip->road_fees + (float) $trip->loading_fees);
-                $other = (float) $expenses->whereIn('vehicle_id', $items->pluck('vehicle_id')->unique())->sum('amount') + (float) $maintenance->whereIn('vehicle_id', $items->pluck('vehicle_id')->unique())->sum('cost');
-                $revenue = (float) $items->sum('revenue');
-
-                return ['id' => $branchId ?: 'unassigned', 'label' => $items->first()->branch_name ?: 'Unassigned', 'trips' => $items->count(), 'revenue' => $revenue, 'cost' => round($tripCosts + $other, 2), 'profit' => round($revenue - $tripCosts - $other, 2)];
-            })->values(),
+            'branch-performance' => $this->branchPerformance($company, $trips, $expenses, $maintenance, $branchId),
         };
 
         return ['report' => $report, 'from' => $from, 'to' => $to, 'branch_id' => $branchId, 'rows' => $rows];
@@ -77,6 +70,32 @@ final class FleetReportService
         return DB::table('maintenance_records')->join('vehicles', 'vehicles.id', '=', 'maintenance_records.vehicle_id')->where('maintenance_records.company_id', $company->id)->where('maintenance_records.status', 'approved')
             ->when($from, fn ($query) => $query->whereDate('maintenance_records.starts_on', '>=', $from))->when($to, fn ($query) => $query->whereDate('maintenance_records.starts_on', '<=', $to))->when($branchId, fn ($query) => $query->where('vehicles.branch_id', $branchId))
             ->select('maintenance_records.*', 'vehicles.plate as vehicle_plate')->get();
+    }
+
+    private function branchPerformance(Company $company, Collection $trips, Collection $expenses, Collection $maintenance, ?int $branchId): Collection
+    {
+        $vehicles = DB::table('vehicles')->where('company_id', $company->id)->when($branchId, fn ($query) => $query->where('branch_id', $branchId))->get();
+        $vehicleGroups = $vehicles->groupBy('branch_id');
+        $branchIds = $vehicleGroups->keys()->merge($trips->pluck('branch_id')->unique())->unique();
+
+        return $branchIds->map(function ($vehicleBranchId) use ($company, $trips, $expenses, $maintenance, $vehicleGroups): array {
+            $branchTrips = $trips->where('branch_id', $vehicleBranchId);
+            $branchVehicles = $vehicleGroups->get($vehicleBranchId, collect());
+            $vehicleIds = $branchVehicles->pluck('id');
+            $tripCosts = (float) $branchTrips->sum(fn ($trip) => (float) $trip->fuel_cost + (float) $trip->road_fees + (float) $trip->loading_fees);
+            $otherCosts = (float) $expenses->whereIn('vehicle_id', $vehicleIds)->sum('amount') + (float) $maintenance->whereIn('vehicle_id', $vehicleIds)->sum('cost');
+            $revenue = (float) $branchTrips->sum('revenue');
+            $cost = round($tripCosts + $otherCosts, 2);
+
+            return [
+                'id' => $vehicleBranchId ?: 'unassigned',
+                'label' => $vehicleBranchId ? (DB::table('branches')->where('company_id', $company->id)->where('id', $vehicleBranchId)->value('name') ?? 'Unassigned') : 'Unassigned',
+                'trips' => $branchTrips->count(),
+                'revenue' => $revenue,
+                'cost' => $cost,
+                'profit' => round($revenue - $cost, 2),
+            ];
+        })->values();
     }
 
     private function vehicleProfitLoss(Company $company, Collection $trips, Collection $expenses, Collection $maintenance, ?int $branchId): Collection

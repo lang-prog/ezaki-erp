@@ -39,12 +39,14 @@ class SuperAdminLicenseController extends Controller
             'installation_id' => ['required', 'string', 'max:255'],
             'customer_binding' => ['required', 'string', 'max:255'],
             'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'license_key' => ['required', 'string', 'max:4096'],
         ]);
         $licenses->transfer(
             $license,
             $data['installation_id'],
             $data['customer_binding'],
             isset($data['company_id']) ? (int) $data['company_id'] : null,
+            $data['license_key'],
             $request->user()->id,
         );
 

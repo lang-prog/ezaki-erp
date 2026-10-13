@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { router } from '@inertiajs/react';
 import { csrfFetch } from './csrf';
 
 export function useCoreApi() {
@@ -17,16 +18,24 @@ export function useCoreApi() {
                 },
                 body: body === undefined ? undefined : JSON.stringify(body),
             });
-            const result = await response.json();
+            const responseBody = await response.text();
+            let result = {};
+            try {
+                result = responseBody ? JSON.parse(responseBody) : {};
+            } catch {
+                result = {};
+            }
             if (!response.ok) {
                 const validation = result.errors ? Object.values(result.errors).flat().join(' ') : '';
+                window.dispatchEvent(new CustomEvent('ezaki:request-error', { detail: { status: response.status, message: validation || result.message } }));
                 throw new Error(validation || result.message || 'Request failed.');
             }
             setNotice({ type: 'success', message: result.message ?? 'Saved.' });
-            window.location.reload();
+            router.reload({ preserveScroll: true });
             return result;
         } catch (error) {
-            setNotice({ type: 'error', message: error.message });
+            if (!error.response) window.dispatchEvent(new CustomEvent('ezaki:request-error', { detail: { message: error.message } }));
+            setNotice({ type: 'error', message: error.message || 'Request failed.' });
             return null;
         } finally {
             setProcessing(false);

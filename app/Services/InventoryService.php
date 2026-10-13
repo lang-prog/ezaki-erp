@@ -133,9 +133,24 @@ class InventoryService
     public function transfer(Company $company, User $actor, array $data): StockTransfer
     {
         return DB::transaction(function () use ($company, $actor, $data): StockTransfer {
+            $transferredAt = $data['transferred_at'] ?? now()->toDateTimeString();
+            app(AccountingFoundationService::class)->openPeriodFor($company, substr((string) $transferredAt, 0, 10));
             $from = Warehouse::query()->where('company_id', $company->id)->whereHas('branch', fn ($query) => $query->where('company_id', $company->id))->whereNull('archived_at')->findOrFail($data['from_warehouse_id']);
             $to = Warehouse::query()->where('company_id', $company->id)->whereHas('branch', fn ($query) => $query->where('company_id', $company->id))->whereNull('archived_at')->findOrFail($data['to_warehouse_id']);
             throw_if($from->is($to), ValidationException::withMessages(['to_warehouse_id' => 'Choose a different destination warehouse.']));
+            $requestHash = hash('sha256', json_encode([
+                'from' => (int) $from->id,
+                'to' => (int) $to->id,
+                'transfer_number' => (string) $data['transfer_number'],
+                'transferred_at' => $data['transferred_at'] ?? null,
+                'lines' => collect($data['lines'])->map(fn (array $line): array => ['product_id' => (int) $line['product_id'], 'quantity' => round((float) $line['quantity'], 3)])->values()->all(),
+            ], JSON_THROW_ON_ERROR));
+            $existing = StockTransfer::query()->where('company_id', $company->id)->where('transfer_number', $data['transfer_number'])->lockForUpdate()->first();
+            if ($existing) {
+                abort_unless($existing->request_hash && hash_equals($existing->request_hash, $requestHash), 409, 'Transfer number already belongs to a different request.');
+
+                return $existing->load('lines');
+            }
             $transfer = StockTransfer::query()->create([
                 'company_id' => $company->id,
                 'from_warehouse_id' => $from->id,
@@ -143,40 +158,144 @@ class InventoryService
                 'created_by' => $actor->id,
                 'status' => 'posted',
                 'transfer_number' => $data['transfer_number'],
+                'request_hash' => $requestHash,
                 'notes' => $data['notes'] ?? null,
-                'transferred_at' => $data['transferred_at'] ?? now(),
+                'transferred_at' => $transferredAt,
             ]);
 
             foreach ($data['lines'] as $line) {
                 $product = Product::query()->where('company_id', $company->id)->whereNull('archived_at')->findOrFail($line['product_id']);
-                $quantity = (float) $line['quantity'];
-                $sourceBalance = StockBalance::query()->where('company_id', $company->id)->where('warehouse_id', $from->id)->where('product_id', $product->id)->lockForUpdate()->first();
-                throw_if(! $sourceBalance || (float) $sourceBalance->quantity < $quantity, ValidationException::withMessages(['lines' => "Insufficient stock for {$product->sku}."]));
-                $sourceBalance->decrement('quantity', $quantity);
-                $destination = StockBalance::query()->firstOrCreate(
-                    ['warehouse_id' => $to->id, 'product_id' => $product->id],
-                    ['company_id' => $company->id, 'quantity' => 0, 'minimum_stock' => $product->minimum_stock],
-                );
-                $destination->increment('quantity', $quantity);
-                $transfer->lines()->create(['company_id' => $company->id, 'product_id' => $product->id, 'quantity' => $quantity]);
-                foreach ([[$from, -$quantity], [$to, $quantity]] as [$warehouse, $delta]) {
-                    StockMovement::query()->create([
-                        'company_id' => $company->id,
-                        'warehouse_id' => $warehouse->id,
-                        'product_id' => $product->id,
-                        'user_id' => $actor->id,
-                        'movement_type' => $delta < 0 ? 'transfer_out' : 'transfer_in',
-                        'quantity_delta' => $delta,
-                        'source_type' => StockTransfer::class,
-                        'source_id' => $transfer->id,
-                    ]);
-                }
+                $quantity = round((float) $line['quantity'], 3);
+                throw_if($quantity <= 0, ValidationException::withMessages(['lines' => 'Transfer quantity must be positive.']));
+                [$sourceBalance, $destinationBalance] = $this->lockTransferBalances($company, $from, $to, $product);
+                $sourceQuantity = (float) $sourceBalance->quantity;
+                $sourceValue = (float) $sourceBalance->inventory_value;
+                throw_if($sourceQuantity + 0.0005 < $quantity, ValidationException::withMessages(['lines' => "Insufficient stock for {$product->sku}."]));
+                throw_if($sourceValue < 0, ValidationException::withMessages(['lines' => "Negative stock value for {$product->sku} requires reconciliation."]));
+                $transferValue = abs($sourceQuantity - $quantity) < 0.0005
+                    ? round($sourceValue, 2)
+                    : round(($sourceValue / $sourceQuantity) * $quantity, 2);
+                throw_if($transferValue < 0 || $transferValue > $sourceValue, ValidationException::withMessages(['lines' => 'Transfer valuation exceeds the source inventory value.']));
+                $unitCost = $quantity > 0 ? round($transferValue / $quantity, 6) : 0.0;
+                $sourceBalance->forceFill([
+                    'quantity' => round($sourceQuantity - $quantity, 3),
+                    'inventory_value' => round($sourceValue - $transferValue, 2),
+                ])->save();
+                $destinationBalance->forceFill([
+                    'quantity' => round((float) $destinationBalance->quantity + $quantity, 3),
+                    'inventory_value' => round((float) $destinationBalance->inventory_value + $transferValue, 2),
+                ])->save();
+                $transferLine = $transfer->lines()->create([
+                    'company_id' => $company->id,
+                    'product_id' => $product->id,
+                    'quantity' => $quantity,
+                    'transferred_value' => $transferValue,
+                    'unit_cost' => $unitCost,
+                ]);
+                $this->recordTransferMovement($company, $actor, $from, $product, -$quantity, -$transferValue, $transfer, $transferLine, 'transfer_out');
+                $this->recordTransferMovement($company, $actor, $to, $product, $quantity, $transferValue, $transfer, $transferLine, 'transfer_in');
             }
 
             app(AuditRecorder::class)->record('inventory.transfer_posted', $transfer, $company->id, $actor->id, ['from_warehouse_id' => $from->id, 'to_warehouse_id' => $to->id]);
 
             return $transfer->load('lines');
         });
+    }
+
+    public function reverseTransfer(Company $company, User $actor, StockTransfer $transfer, string $date, string $reason): StockTransfer
+    {
+        return DB::transaction(function () use ($company, $actor, $transfer, $date, $reason): StockTransfer {
+            $transfer = StockTransfer::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($transfer->id);
+            if ($transfer->status === 'reversed') {
+                return StockTransfer::query()->where('company_id', $company->id)->where('reversal_of_id', $transfer->id)->with('lines')->firstOrFail();
+            }
+            abort_unless($transfer->status === 'posted' && $transfer->reversal_of_id === null, 409, 'Only original posted transfers can be reversed.');
+            app(AccountingFoundationService::class)->openPeriodFor($company, $date);
+            $transfer->load('lines');
+            $reverse = StockTransfer::query()->create([
+                'company_id' => $company->id,
+                'from_warehouse_id' => $transfer->to_warehouse_id,
+                'to_warehouse_id' => $transfer->from_warehouse_id,
+                'created_by' => $actor->id,
+                'status' => 'posted',
+                'transfer_number' => substr('REV-'.$transfer->transfer_number.'-'.$transfer->id, 0, 80),
+                'reversal_of_id' => $transfer->id,
+                'notes' => 'Reversal of '.$transfer->transfer_number,
+                'transferred_at' => $date,
+            ]);
+
+            foreach ($transfer->lines as $line) {
+                $product = Product::query()->where('company_id', $company->id)->findOrFail($line->product_id);
+                $reverseFrom = Warehouse::query()->where('company_id', $company->id)->findOrFail($transfer->to_warehouse_id);
+                $reverseTo = Warehouse::query()->where('company_id', $company->id)->findOrFail($transfer->from_warehouse_id);
+                [$sourceBalance, $destinationBalance] = $this->lockTransferBalances($company, $reverseFrom, $reverseTo, $product);
+                $quantity = (float) $line->quantity;
+                $value = (float) $line->transferred_value;
+                throw_if((float) $sourceBalance->quantity + 0.0005 < $quantity, ValidationException::withMessages(['lines' => 'The destination no longer holds enough stock to reverse this transfer.']));
+                throw_if((float) $sourceBalance->inventory_value + 0.01 < $value, ValidationException::withMessages(['lines' => 'The destination no longer holds enough inventory value to reverse this transfer.']));
+                $sourceBalance->forceFill([
+                    'quantity' => round((float) $sourceBalance->quantity - $quantity, 3),
+                    'inventory_value' => round((float) $sourceBalance->inventory_value - $value, 2),
+                ])->save();
+                $destinationBalance->forceFill([
+                    'quantity' => round((float) $destinationBalance->quantity + $quantity, 3),
+                    'inventory_value' => round((float) $destinationBalance->inventory_value + $value, 2),
+                ])->save();
+                $reverseLine = $reverse->lines()->create([
+                    'company_id' => $company->id,
+                    'product_id' => $product->id,
+                    'quantity' => $quantity,
+                    'transferred_value' => $value,
+                    'unit_cost' => (float) $line->unit_cost,
+                ]);
+                $this->recordTransferMovement($company, $actor, $reverseFrom, $product, -$quantity, -$value, $reverse, $reverseLine, 'transfer_reversal_out');
+                $this->recordTransferMovement($company, $actor, $reverseTo, $product, $quantity, $value, $reverse, $reverseLine, 'transfer_reversal_in');
+            }
+
+            $transfer->forceFill(['status' => 'reversed', 'reversed_by' => $actor->id, 'reversed_at' => now(), 'reversal_reason' => $reason])->save();
+            app(AuditRecorder::class)->record('inventory.transfer_reversed', $transfer, $company->id, $actor->id, ['reversal_transfer_id' => $reverse->id, 'reason' => $reason]);
+
+            return $reverse->load('lines');
+        });
+    }
+
+    private function lockTransferBalances(Company $company, Warehouse $from, Warehouse $to, Product $product): array
+    {
+        $balances = [];
+        foreach ([$from, $to] as $warehouse) {
+            $balance = StockBalance::query()
+                ->where('company_id', $company->id)
+                ->where('warehouse_id', $warehouse->id)
+                ->where('product_id', $product->id)
+                ->lockForUpdate()
+                ->first();
+            if (! $balance) {
+                $balance = StockBalance::query()->firstOrCreate(
+                    ['company_id' => $company->id, 'warehouse_id' => $warehouse->id, 'product_id' => $product->id],
+                    ['quantity' => 0, 'inventory_value' => 0, 'minimum_stock' => $product->minimum_stock],
+                );
+                $balance = StockBalance::query()->whereKey($balance->id)->lockForUpdate()->firstOrFail();
+            }
+            $balances[$warehouse->id] = $balance;
+        }
+
+        return [$balances[$from->id], $balances[$to->id]];
+    }
+
+    private function recordTransferMovement(Company $company, User $actor, Warehouse $warehouse, Product $product, float $quantity, float $value, StockTransfer $transfer, mixed $line, string $movementType): void
+    {
+        StockMovement::query()->create([
+            'company_id' => $company->id,
+            'warehouse_id' => $warehouse->id,
+            'product_id' => $product->id,
+            'user_id' => $actor->id,
+            'movement_type' => $movementType,
+            'quantity_delta' => $quantity,
+            'value_delta' => $value,
+            'source_type' => StockTransfer::class,
+            'source_id' => $transfer->id,
+            'source_key' => 'transfer:'.$transfer->id.':line:'.$line->id.':'.$movementType,
+        ]);
     }
 
     public function matrix(Company $company, ?int $warehouseId = null): array

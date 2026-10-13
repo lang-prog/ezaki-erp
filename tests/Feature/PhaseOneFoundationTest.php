@@ -231,6 +231,7 @@ class PhaseOneFoundationTest extends TestCase
         $subscription = $company->subscriptions()->with('plan')->firstOrFail();
 
         $this->assertSame('active', $company->status);
+        $this->assertSame('actual_weight', $company->settings['purchase_inventory_basis']);
         $this->assertNotNull($company->approved_at);
         $this->assertSame('Created directly by platform staff.', $company->notes);
         $this->assertSame($company->id, $owner->company_id);
@@ -606,16 +607,18 @@ class PhaseOneFoundationTest extends TestCase
         openssl_pkey_export($keyPair, $privateKey);
         $details = openssl_pkey_get_details($keyPair);
         $this->assertIsArray($details);
-        config(['licensing.public_key' => $details['key']]);
-        $payload = json_encode(['installation_id' => 'install-123', 'customer_binding' => 'customer-456'], JSON_THROW_ON_ERROR);
+        $company = Company::query()->create(['name' => 'Signed License Co', 'status' => 'active']);
+        config(['licensing.public_key' => $details['key'], 'licensing.installation_id' => 'install-123', 'licensing.customer_binding' => 'customer-456']);
+        $payload = json_encode(['installation_id' => 'install-123', 'customer_binding' => 'customer-456', 'company_id' => $company->id], JSON_THROW_ON_ERROR);
         openssl_sign($payload, $signature, $privateKey, OPENSSL_ALGO_SHA256);
         $licenseKey = base64_encode($payload).'.'.base64_encode($signature);
 
-        $license = app(LocalLicenseService::class)->activate($licenseKey, 'install-123', 'customer-456');
+        $license = app(LocalLicenseService::class)->activate($licenseKey, 'install-123', 'customer-456', $company->id);
 
         $this->assertNotSame($licenseKey, $license->key_hash);
         $this->assertSame(hash('sha256', $licenseKey), $license->key_hash);
         $this->assertSame(1, LocalLicense::query()->whereNotNull('activated_at')->count());
+        $this->assertSame($company->id, app(LocalLicenseService::class)->verifyForCompany($company)->company_id);
     }
 
     public function test_local_license_api_fails_closed_without_a_public_verification_key(): void

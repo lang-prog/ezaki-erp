@@ -29,17 +29,24 @@ function AccountTree({ accounts, showSystem, canEdit, onEdit, t }) {
     return <div className="account-tree">{roots.map((account) => render(account))}</div>;
 }
 
-function MoneyForm({ kind, parties, accounts, cashboxes, banks, send, processing, t }) {
+function MoneyForm({ kind, parties, accounts, cashboxes, banks, invoices, send, processing, t }) {
     const receipt = kind === 'receipt';
-    const [form, setForm] = useState({ counterparty_type: receipt ? 'customer' : 'supplier', party_id: '', other_account_id: '', cashbox_id: '', bank_id: '', [receipt ? 'receipt_date' : 'voucher_date']: new Date().toISOString().slice(0, 10), amount: '', notes: '' });
+    const [form, setForm] = useState({ counterparty_type: receipt ? 'customer' : 'supplier', party_id: '', other_account_id: '', bill_id: '', cashbox_id: '', bank_id: '', [receipt ? 'receipt_date' : 'voucher_date']: new Date().toISOString().slice(0, 10), amount: '', notes: '' });
+    const [unallocatedAmount, setUnallocatedAmount] = useState(0);
     const keyDate = receipt ? 'receipt_date' : 'voucher_date';
-    const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+    const set = (key, value) => setForm((current) => ({ ...current, [key]: value, ...(key === 'party_id' ? { bill_id: '' } : {}) }));
+    const availableInvoices = invoices.filter((invoice) => Number(invoice.party_id) === Number(form.party_id));
     const cashAccountId = cashboxes.find((item) => String(item.id) === String(form.cashbox_id))?.account_id ?? banks.find((item) => String(item.id) === String(form.bank_id))?.account_id;
     const postingAccounts = accounts.filter((account) => account.is_active !== false && !accounts.some((child) => Number(child.parent_id) === Number(account.id)) && Number(account.id) !== Number(cashAccountId));
-    const onSubmit = (event) => { event.preventDefault(); send(receipt ? 'receipts' : 'payment-vouchers', 'POST', form); };
+    const onSubmit = async (event) => {
+        event.preventDefault();
+        const result = await send(receipt ? 'receipts' : 'payment-vouchers', 'POST', form);
+        setUnallocatedAmount(Number(result?.data?.unallocated_amount ?? 0));
+    };
 
     return <form className={`posting-form posting-form--${receipt ? 'receipt' : 'voucher'}`} onSubmit={onSubmit}>
         <div className="posting-form__intro"><span className="posting-form__number">{receipt ? '01' : '02'}</span><div><h3>{receipt ? t('receipts') : t('vouchers')}</h3><p>{receipt ? t('receiptFormHint') : t('voucherFormHint')}</p></div></div>
+        {form.counterparty_type !== 'other' && <label className="field"><span>{t('allocateInvoice')}</span><select value={form.bill_id} onChange={(event) => set('bill_id', event.target.value)}><option value="">{t('allocateFifo')}</option>{availableInvoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.internal_number} · {invoice.bill_date} · {Number(invoice.outstanding).toFixed(2)} EGP</option>)}</select></label>}
         <div className="posting-form__grid">
             <label className="field"><span>{t('counterpartyType')}</span><select value={form.counterparty_type} onChange={(event) => setForm({ ...form, counterparty_type: event.target.value, party_id: '', other_account_id: '' })}><option value={receipt ? 'customer' : 'supplier'}>{receipt ? t('isCustomer') : t('isSupplier')}</option><option value="other">{t('otherAccount')}</option></select></label>
             {form.counterparty_type === (receipt ? 'customer' : 'supplier') ? <label className="field"><span>{receipt ? t('customer') : t('supplier')}</span><select required value={form.party_id} onChange={(event) => set('party_id', event.target.value)}><option value="">—</option>{parties.filter((party) => receipt ? party.is_customer : party.is_supplier).map((party) => <option key={party.id} value={party.id}>{party.name}</option>)}</select></label> : <label className="field"><span>{t('otherAccount')}</span><select required value={form.other_account_id} onChange={(event) => set('other_account_id', event.target.value)}><option value="">—</option>{postingAccounts.map((account) => <option key={account.id} value={account.id}>{account.code} · {account.name}</option>)}</select></label>}
@@ -50,10 +57,11 @@ function MoneyForm({ kind, parties, accounts, cashboxes, banks, send, processing
             <label className="field field--wide"><span>{t('notes')}</span><input value={form.notes} onChange={(event) => set('notes', event.target.value)} /></label>
         </div>
         <button disabled={processing} className={`erp-button ${receipt ? 'erp-button--primary' : 'erp-button--danger'}`}>{receipt ? t('postReceipt') : t('postVoucher')}</button>
+        {unallocatedAmount > 0 && <p role="status" className="text-sm text-amber-800">{t('unallocated')}: {unallocatedAmount.toFixed(2)} EGP</p>}
     </form>;
 }
 
-export default function Accounting({ accounts = [], cashboxes = [], banks = [], periods = [], parties = [], receipts = [], vouchers = [], capabilities = {} }) {
+export default function Accounting({ accounts = [], cashboxes = [], banks = [], periods = [], parties = [], receipts = [], vouchers = [], receivableBills = [], payableBills = [], capabilities = {} }) {
     const { locale } = usePage().props;
     const t = (key) => translate(locale, key);
     const { notice, processing, send } = useCoreApi();
@@ -97,6 +105,6 @@ export default function Accounting({ accounts = [], cashboxes = [], banks = [], 
         <section className="erp-section"><div className="erp-section__header"><div><h2>{t('fiscalPeriods')}</h2><p>{t('fiscalPeriodsHint')}</p></div></div><div className="erp-table-wrap"><table className="erp-table"><thead><tr><th>{t('periodName')}</th><th>{t('periodStart')}</th><th>{t('periodEnd')}</th><th>{t('status')}</th><th>{t('actions')}</th></tr></thead><tbody>{periods.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.starts_on}</td><td>{item.ends_on}</td><td><span className={`status-pill ${item.status === 'open' ? 'success' : 'muted-pill'}`}>{item.status}</span></td><td>{item.status === 'open' && capabilities['accounting.close_period'] && <button className="erp-link-button" onClick={() => window.confirm(`${t('closePeriod')} ${item.name}?`) && send(`fiscal-periods/${item.id}/close`, 'POST')}>{t('closePeriod')}</button>}</td></tr>)}</tbody></table></div>{canCreate && <form className="period-create-form" onSubmit={(event) => { event.preventDefault(); send('fiscal-periods', 'POST', period); }}><input value={period.name} onChange={(event) => setPeriod({ ...period, name: event.target.value })} placeholder={t('periodName')} /><input required type="date" value={period.starts_on} onChange={(event) => setPeriodStart(event.target.value)} /><input required type="date" value={period.ends_on} onChange={(event) => setPeriod({ ...period, ends_on: event.target.value })} /><button className="erp-button erp-button--primary">{t('createPeriod')}</button></form>}</section>
 
         <section className="erp-section split-section"><div><div className="erp-section__header"><div><h2>{t('receipts')}</h2><p>{t('recentReceipts')}</p></div></div><div className="erp-table-wrap"><table className="erp-table"><tbody>{receipts.map((item) => <tr key={item.id}><td>{item.receipt_number}</td><td>{item.receipt_date}</td><td>{item.amount} EGP</td><td>{item.status === 'posted' ? t('posted') : item.status}</td></tr>)}{receipts.length === 0 && <tr><td className="empty-cell">{t('noRecords')}</td></tr>}</tbody></table></div></div><div><div className="erp-section__header"><div><h2>{t('vouchers')}</h2><p>{t('recentVouchers')}</p></div></div><div className="erp-table-wrap"><table className="erp-table"><tbody>{vouchers.map((item) => <tr key={item.id}><td>{item.voucher_number}</td><td>{item.voucher_date}</td><td>{item.amount} EGP</td><td>{item.status === 'posted' ? t('posted') : item.status}</td></tr>)}{vouchers.length === 0 && <tr><td className="empty-cell">{t('noRecords')}</td></tr>}</tbody></table></div></div></section>
-        {canPost && <section className="posting-grid"><MoneyForm kind="receipt" parties={parties} accounts={accounts} cashboxes={cashboxes} banks={banks} send={send} processing={processing} t={t} /><MoneyForm kind="voucher" parties={parties} accounts={accounts} cashboxes={cashboxes} banks={banks} send={send} processing={processing} t={t} /></section>}
+        {canPost && <section className="posting-grid"><MoneyForm kind="receipt" parties={parties} accounts={accounts} cashboxes={cashboxes} banks={banks} invoices={receivableBills} send={send} processing={processing} t={t} /><MoneyForm kind="voucher" parties={parties} accounts={accounts} cashboxes={cashboxes} banks={banks} invoices={payableBills} send={send} processing={processing} t={t} /></section>}
     </CompanyLayout>;
 }

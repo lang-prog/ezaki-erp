@@ -105,7 +105,28 @@ class AccountingReportService
 
     public function balanceSheet(Company $company, ?string $to = null): array
     {
-        return ['rows' => $this->balancesByType($company, ['asset', 'liability', 'equity'], null, $to)];
+        $rows = $this->balancesByType($company, ['asset', 'liability', 'equity'], null, $to);
+        $profitAndLoss = $this->balancesByType($company, ['revenue', 'expense'], null, $to);
+        $currentEarnings = round(
+            (float) $profitAndLoss->where('account_type', 'revenue')->sum('balance')
+            - (float) $profitAndLoss->where('account_type', 'expense')->sum('balance'),
+            2,
+        );
+        $rows->push((object) [
+            'id' => null,
+            'code' => '3.CURRENT-EARNINGS',
+            'name' => 'current_period_earnings',
+            'account_type' => 'equity',
+            'debit_total' => $currentEarnings < 0 ? abs($currentEarnings) : 0.0,
+            'credit_total' => $currentEarnings > 0 ? $currentEarnings : 0.0,
+            'balance' => $currentEarnings,
+            'is_virtual' => true,
+        ]);
+        $assets = (float) $rows->where('account_type', 'asset')->sum('balance');
+        $liabilities = (float) $rows->where('account_type', 'liability')->sum('balance');
+        $equity = (float) $rows->where('account_type', 'equity')->sum('balance');
+
+        return ['rows' => $rows, 'current_earnings' => $currentEarnings, 'reconciliation_difference' => round($assets - $liabilities - $equity, 2)];
     }
 
     public function debtors(Company $company, float $threshold = 50, ?string $from = null, ?string $to = null): array
@@ -145,8 +166,10 @@ class AccountingReportService
         $receiptsBefore = $this->partyPaymentTotals($company, 'receipts', 'receipt_date', null, $before);
         $vouchersPeriod = $this->partyPaymentTotals($company, 'payment_vouchers', 'voucher_date', $from, $to);
         $vouchersBefore = $this->partyPaymentTotals($company, 'payment_vouchers', 'voucher_date', null, $before);
+        $openingByParty = $this->partyControlBalances($company, $parties, null, $before);
+        $movementByParty = $this->partyControlBalances($company, $parties, $from, $to);
 
-        $rows = $parties->map(function (CustomerSupplier $party) use ($kind, $salesPeriod, $salesBefore, $purchasesPeriod, $purchasesBefore, $receiptsPeriod, $receiptsBefore, $vouchersPeriod, $vouchersBefore): CustomerSupplier {
+        $rows = $parties->map(function (CustomerSupplier $party) use ($kind, $salesPeriod, $salesBefore, $purchasesPeriod, $purchasesBefore, $receiptsPeriod, $receiptsBefore, $vouchersPeriod, $vouchersBefore, $openingByParty, $movementByParty): CustomerSupplier {
             $customer = $kind === 'customer' || ($kind === null && (bool) $party->is_customer);
             $supplier = $kind === 'supplier' || ($kind === null && (bool) $party->is_supplier);
             $periodSales = $customer ? ($salesPeriod[(int) $party->id] ?? []) : [];
@@ -157,13 +180,12 @@ class AccountingReportService
             $beforeReceipts = $customer ? ($receiptsBefore[(int) $party->id] ?? []) : [];
             $periodVouchers = $supplier ? ($vouchersPeriod[(int) $party->id] ?? []) : [];
             $beforeVouchers = $supplier ? ($vouchersBefore[(int) $party->id] ?? []) : [];
-            $opening = $this->partyOpeningDue($party, $customer, $supplier)
-                + $this->dueFromTotals($beforeSales, $beforePurchases, $beforeReceipts, $beforeVouchers);
+            $opening = (float) ($openingByParty[$party->id] ?? 0);
             $invoiceTotal = $this->number($periodSales, 'invoice_total') + $this->number($periodPurchases, 'invoice_total');
             $goodsValue = $this->number($periodSales, 'goods_value') + $this->number($periodPurchases, 'goods_value');
             $weight = $this->number($periodSales, 'weight') + $this->number($periodPurchases, 'weight');
             $payments = $this->number($periodSales, 'bill_paid') + $this->number($periodPurchases, 'bill_paid') + $this->number($periodReceipts, 'amount') + $this->number($periodVouchers, 'amount');
-            $balance = $opening + $invoiceTotal - $payments;
+            $balance = $opening + (float) ($movementByParty[$party->id] ?? 0);
             $party->setAttribute('party_kind', $customer && $supplier ? 'both' : ($customer ? 'customer' : 'supplier'));
             $party->setAttribute('weight', round($weight, 3));
             $party->setAttribute('goods_value', round($goodsValue, 2));
@@ -211,30 +233,90 @@ class AccountingReportService
 
     private function partyPaymentTotals(Company $company, string $table, string $dateColumn, ?string $from, ?string $to): array
     {
-        return DB::table($table)->where('company_id', $company->id)->where('status', 'posted')
-            ->when($from, fn ($query) => $query->whereDate($dateColumn, '>=', $from))
-            ->when($to, fn ($query) => $query->whereDate($dateColumn, '<=', $to))
-            ->groupBy('party_id')->select('party_id')->selectRaw('SUM(amount) as amount')->get()->keyBy('party_id')->map(fn ($row) => (array) $row)->all();
+        $query = DB::table($table.' as payments')
+            ->leftJoin('journal_entries as reversals', 'reversals.id', '=', 'payments.reversal_journal_entry_id')
+            ->where('payments.company_id', $company->id)
+            ->whereIn('payments.status', ['posted', 'reversed']);
+        if ($from || $to) {
+            $query->where(function ($range) use ($dateColumn, $from, $to): void {
+                $range->where(function ($original) use ($dateColumn, $from, $to): void {
+                    if ($from) {
+                        $original->whereDate('payments.'.$dateColumn, '>=', $from);
+                    }
+                    if ($to) {
+                        $original->whereDate('payments.'.$dateColumn, '<=', $to);
+                    }
+                })->orWhere(function ($reversal) use ($from, $to): void {
+                    $reversal->whereNotNull('reversals.id');
+                    if ($from) {
+                        $reversal->whereDate('reversals.entry_date', '>=', $from);
+                    }
+                    if ($to) {
+                        $reversal->whereDate('reversals.entry_date', '<=', $to);
+                    }
+                });
+            });
+        }
+        $originalAmount = "CASE WHEN payments.status IN ('posted', 'reversed')";
+        $originalBindings = [];
+        if ($from) {
+            $originalAmount .= ' AND DATE(payments.'.$dateColumn.') >= ?';
+            $originalBindings[] = $from;
+        }
+        if ($to) {
+            $originalAmount .= ' AND DATE(payments.'.$dateColumn.') <= ?';
+            $originalBindings[] = $to;
+        }
+        $originalAmount .= ' THEN payments.amount ELSE 0 END';
+        $reversedAmount = 'CASE WHEN reversals.id IS NOT NULL';
+        $reversalBindings = [];
+        if ($from) {
+            $reversedAmount .= ' AND DATE(reversals.entry_date) >= ?';
+            $reversalBindings[] = $from;
+        }
+        if ($to) {
+            $reversedAmount .= ' AND DATE(reversals.entry_date) <= ?';
+            $reversalBindings[] = $to;
+        }
+        $reversedAmount .= ' THEN payments.amount ELSE 0 END';
+
+        return $query->groupBy('payments.party_id')
+            ->select('payments.party_id')
+            ->selectRaw('SUM('.$originalAmount.' - '.$reversedAmount.') as amount', [...$originalBindings, ...$reversalBindings])
+            ->get()->keyBy('party_id')->map(fn ($row) => (array) $row)->all();
     }
 
-    private function partyOpeningDue(CustomerSupplier $party, bool $customer, bool $supplier): float
+    private function partyControlBalances(Company $company, Collection $parties, ?string $from, ?string $to): array
     {
-        $opening = (float) ($party->opening_balance ?? 0);
-        $direction = $party->opening_balance_direction ?? ($customer ? 'debit' : 'credit');
-        $due = 0.0;
-        if ($customer) {
-            $due += $direction === 'debit' ? $opening : -$opening;
-        }
-        if ($supplier) {
-            $due += $direction === 'credit' ? $opening : -$opening;
+        $totals = DB::table('journal_lines as lines')
+            ->join('journal_entries as entries', 'entries.id', '=', 'lines.journal_entry_id')
+            ->where('lines.company_id', $company->id)
+            ->where('entries.company_id', $company->id)
+            ->whereIn('entries.status', ['posted', 'reversed'])
+            ->whereIn('lines.account_id', $parties->pluck('account_id')->all())
+            ->when($from, fn ($query) => $query->whereDate('entries.entry_date', '>=', $from))
+            ->when($to, fn ($query) => $query->whereDate('entries.entry_date', '<=', $to))
+            ->groupBy('lines.account_id')
+            ->select('lines.account_id')
+            ->selectRaw('SUM(lines.debit - lines.credit) as balance')
+            ->pluck('balance', 'account_id');
+
+        $balances = [];
+        foreach ($parties as $party) {
+            $balance = (float) ($totals[$party->account_id] ?? 0);
+            $openingDate = $party->opening_balance_date?->toDateString();
+            $openingIsInRange = ! $party->opening_balance_journal_entry_id
+                && $openingDate !== null
+                && (! $from || $openingDate >= $from)
+                && (! $to || $openingDate <= $to);
+            if ($openingIsInRange) {
+                $direction = $party->opening_balance_direction ?? ($party->is_customer ? 'debit' : 'credit');
+                $balance += $direction === 'debit' ? (float) $party->opening_balance : -(float) $party->opening_balance;
+            }
+            $balances[$party->id] = $balance;
         }
 
-        return $due;
-    }
-
-    private function dueFromTotals(array $sales, array $purchases, array $receipts, array $vouchers): float
-    {
-        return $this->number($sales, 'invoice_total') + $this->number($purchases, 'invoice_total') - $this->number($sales, 'bill_paid') - $this->number($purchases, 'bill_paid') - $this->number($receipts, 'amount') - $this->number($vouchers, 'amount');
+        return $balances;
     }
 
     private function number(array $values, string $key): float
@@ -244,41 +326,119 @@ class AccountingReportService
 
     private function partyAging(Company $company, bool $customer, float $threshold, ?string $from, ?string $to): array
     {
+        $parties = CustomerSupplier::query()
+            ->where('company_id', $company->id)
+            ->where($customer ? 'is_customer' : 'is_supplier', true)
+            ->where('status', 'active')
+            ->get(['id', 'account_id', 'name', 'opening_balance', 'opening_balance_direction', 'opening_balance_date', 'opening_balance_journal_entry_id']);
+        $asOf = $to ? Carbon::parse($to)->endOfDay() : now()->endOfDay();
+        $partyIds = $parties->modelKeys();
         $partyBalances = DB::table('journal_lines as lines')
             ->join('journal_entries as entries', 'entries.id', '=', 'lines.journal_entry_id')
             ->where('lines.company_id', $company->id)
             ->where('entries.company_id', $company->id)
             ->whereIn('entries.status', ['posted', 'reversed'])
-            ->whereNotNull('lines.party_id')
+            ->whereIn('lines.account_id', $parties->pluck('account_id')->all())
             ->when($to, fn ($query) => $query->whereDate('entries.entry_date', '<=', $to))
-            ->groupBy('lines.party_id')
-            ->select('lines.party_id')
+            ->groupBy('lines.account_id')
+            ->select('lines.account_id')
             ->selectRaw('SUM(lines.debit - lines.credit) as balance')
-            ->pluck('balance', 'party_id');
-        $opening = CustomerSupplier::query()
+            ->pluck('balance', 'account_id');
+        $billType = $customer ? 'sales' : 'purchase';
+        $billTable = $customer ? 'sales_bills' : 'purchase_bills';
+        $partyColumn = $customer ? 'customer_id' : 'supplier_id';
+        $billDateColumn = $customer ? 'bill_date' : 'supplier_bill_date';
+        $paymentType = $customer ? 'receipt' : 'voucher';
+        $paymentTable = $customer ? 'receipts' : 'payment_vouchers';
+        $paymentDateColumn = $customer ? 'receipt_date' : 'voucher_date';
+        $bills = DB::table($billTable)
             ->where('company_id', $company->id)
-            ->whereNull('opening_balance_journal_entry_id')
-            ->where($customer ? 'is_customer' : 'is_supplier', true)
-            ->pluck('opening_balance', 'id');
-        $direction = CustomerSupplier::query()->where('company_id', $company->id)->pluck('opening_balance_direction', 'id');
-        $parties = CustomerSupplier::query()
-            ->where('customer_suppliers.company_id', $company->id)
-            ->where('customer_suppliers.'.($customer ? 'is_customer' : 'is_supplier'), true)
-            ->where('customer_suppliers.status', 'active')
-            ->get(['id', 'name', 'opening_balance', 'opening_balance_direction', 'opening_balance_journal_entry_id'])
-            ->map(function (CustomerSupplier $party) use ($company, $partyBalances, $opening, $direction, $customer, $to): CustomerSupplier {
-                $balance = (float) ($partyBalances[$party->id] ?? 0);
-                if (isset($opening[$party->id]) && ! $party->opening_balance_journal_entry_id) {
-                    $value = (float) $opening[$party->id];
-                    $balance += ($direction[$party->id] ?? ($customer ? 'debit' : 'credit')) === 'debit' ? $value : -$value;
+            ->where('status', 'approved')
+            ->whereIn($partyColumn, $partyIds ?: [0])
+            ->whereDate($billDateColumn, '<=', $asOf->toDateString())
+            ->orderBy($billDateColumn)
+            ->orderBy('id')
+            ->get(['id', $partyColumn.' as party_id', 'total', 'paid_amount', 'due_date', $billDateColumn.' as bill_date']);
+        $billIds = $bills->pluck('id')->all();
+        $billAllocations = DB::table('party_payment_allocations')
+            ->where('company_id', $company->id)
+            ->where('bill_type', $billType)
+            ->where('status', 'posted')
+            ->whereIn('bill_id', $billIds ?: [0])
+            ->groupBy('bill_id')
+            ->select('bill_id')
+            ->selectRaw('SUM(amount) as amount')
+            ->pluck('amount', 'bill_id');
+        $payments = DB::table($paymentTable)
+            ->where('company_id', $company->id)
+            ->where('status', 'posted')
+            ->whereIn('party_id', $partyIds ?: [0])
+            ->whereDate($paymentDateColumn, '<=', $asOf->toDateString())
+            ->groupBy('party_id')
+            ->select('party_id')
+            ->selectRaw('SUM(amount) as amount')
+            ->pluck('amount', 'party_id');
+        $paymentIds = DB::table($paymentTable)
+            ->where('company_id', $company->id)
+            ->where('status', 'posted')
+            ->whereIn('party_id', $partyIds ?: [0])
+            ->whereDate($paymentDateColumn, '<=', $asOf->toDateString())
+            ->pluck('id');
+        $allocatedPayments = DB::table('party_payment_allocations')
+            ->where('company_id', $company->id)
+            ->where('payment_type', $paymentType)
+            ->where('status', 'posted')
+            ->whereIn('payment_id', $paymentIds->all() ?: [0])
+            ->groupBy('party_id')
+            ->select('party_id')
+            ->selectRaw('SUM(amount) as amount')
+            ->pluck('amount', 'party_id');
+        $billsByParty = $bills->groupBy('party_id');
+        $parties = $parties->map(function (CustomerSupplier $party) use ($partyBalances, $customer, $asOf, $payments, $allocatedPayments, $billsByParty, $billAllocations): CustomerSupplier {
+            $balance = (float) ($partyBalances[$party->account_id] ?? 0);
+            $openingDate = $party->opening_balance_date?->toDateString();
+            if (! $party->opening_balance_journal_entry_id && $openingDate && $openingDate <= $asOf->toDateString()) {
+                $direction = $party->opening_balance_direction ?? ($customer ? 'debit' : 'credit');
+                $balance += $direction === 'debit' ? (float) $party->opening_balance : -(float) $party->opening_balance;
+            }
+            $due = $customer ? $balance : -$balance;
+            $openInvoices = [];
+            foreach ($billsByParty->get($party->id, collect()) as $bill) {
+                $outstanding = round(max(0, (float) $bill->total - (float) $bill->paid_amount - (float) ($billAllocations[$bill->id] ?? 0)), 2);
+                if ($outstanding > 0) {
+                    $openInvoices[] = ['due' => $outstanding, 'date' => $bill->due_date ?? $bill->bill_date];
                 }
-                $due = $customer ? $balance : -$balance;
-                $party->setAttribute('balance_due', round(max($due, 0), 2));
-                $party->setAttribute('balance_signed', round($balance, 2));
-                $party->setAttribute('aging', $this->agingBuckets($company, $party->id, $customer, $to, (float) $party->balance_due));
+            }
+            $unallocated = round(max(0, (float) ($payments[$party->id] ?? 0) - (float) ($allocatedPayments[$party->id] ?? 0)), 2);
+            foreach ($openInvoices as &$invoice) {
+                if ($unallocated <= 0) {
+                    break;
+                }
+                $applied = min($invoice['due'], $unallocated);
+                $invoice['due'] = round($invoice['due'] - $applied, 2);
+                $unallocated = round($unallocated - $applied, 2);
+            }
+            unset($invoice);
+            $aging = ['current' => 0.0, '1_30' => 0.0, '31_60' => 0.0, '61_90' => 0.0, '90_plus' => 0.0];
+            foreach ($openInvoices as $invoice) {
+                if ($invoice['due'] <= 0) {
+                    continue;
+                }
+                $days = max(0, Carbon::parse($invoice['date'])->diffInDays($asOf, false));
+                $bucket = $days <= 0 ? 'current' : ($days <= 30 ? '1_30' : ($days <= 60 ? '31_60' : ($days <= 90 ? '61_90' : '90_plus')));
+                $aging[$bucket] += $invoice['due'];
+            }
+            $grossDue = array_sum($aging);
+            $aging['current'] = round($aging['current'] + $due - $grossDue, 2);
+            $aging['unallocated_credit'] = round(max(-$due, 0), 2);
+            $aging['total'] = round(array_sum(array_intersect_key($aging, array_flip(['current', '1_30', '31_60', '61_90', '90_plus']))), 2);
+            $party->setAttribute('balance_due', round(max($due, 0), 2));
+            $party->setAttribute('balance_signed', round($due, 2));
+            $party->setAttribute('unallocated_credit', round(max(-$due, 0), 2));
+            $party->setAttribute('aging', $aging);
 
-                return $party;
-            })
+            return $party;
+        })
             ->filter(fn (CustomerSupplier $party) => (float) $party->balance_due > 0)
             ->sortByDesc('balance_due')
             ->values();
@@ -366,32 +526,6 @@ class AccountingReportService
             })
             ->selectRaw('COALESCE(SUM(lines.debit - lines.credit), 0) as balance')
             ->value('balance');
-    }
-
-    private function agingBuckets(Company $company, int $partyId, bool $customer, ?string $to, float $balance): array
-    {
-        $asOf = $to ? Carbon::parse($to)->endOfDay() : now()->endOfDay();
-        $query = $customer
-            ? SalesBill::query()->where('company_id', $company->id)->where('customer_id', $partyId)->where('status', 'approved')
-            : PurchaseBill::query()->where('company_id', $company->id)->where('supplier_id', $partyId)->where('status', 'approved');
-        $query->whereDate($customer ? 'bill_date' : 'supplier_bill_date', '<=', $asOf->toDateString());
-        $buckets = ['current' => 0.0, '1_30' => 0.0, '31_60' => 0.0, '61_90' => 0.0, '90_plus' => 0.0];
-        foreach ($query->get(['total', 'paid_amount', 'due_date', $customer ? 'bill_date' : 'supplier_bill_date']) as $bill) {
-            $due = max((float) $bill->total - (float) $bill->paid_amount, 0);
-            if ($due <= 0) {
-                continue;
-            }
-            $date = $bill->due_date ?? $bill->{$customer ? 'bill_date' : 'supplier_bill_date'};
-            $days = max(0, Carbon::parse($date)->diffInDays($asOf, false));
-            $bucket = $days <= 0 ? 'current' : ($days <= 30 ? '1_30' : ($days <= 60 ? '31_60' : ($days <= 90 ? '61_90' : '90_plus')));
-            $buckets[$bucket] += $customer ? $due : $due;
-        }
-        $buckets['total'] = round(array_sum($buckets), 2);
-        if ($buckets['total'] < $balance) {
-            $buckets['current'] += $balance - $buckets['total'];
-        }
-
-        return array_map(fn (float $amount): float => round($amount, 2), $buckets);
     }
 
     private function attachSourceDetails(Company $company, LengthAwarePaginator $lines): void

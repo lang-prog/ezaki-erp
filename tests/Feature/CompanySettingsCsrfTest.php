@@ -48,6 +48,7 @@ final class CompanySettingsCsrfTest extends TestCase
 
         $this->assertContains($response->getStatusCode(), [302, 303]);
         $this->assertDatabaseHas('companies', ['id' => $company->id, 'name' => 'Saved Co', 'trade_name' => 'Saved Trade', 'tax_number' => 'T-9']);
+        $this->assertDatabaseHas('audit_logs', ['company_id' => $company->id, 'user_id' => $owner->id, 'event' => 'company.settings_updated']);
     }
 
     public function test_multipart_background_upload_is_stored_with_csrf_enforced(): void

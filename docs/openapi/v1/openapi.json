@@ -387,6 +387,56 @@
           }
         }
       }
+    },
+    "/receipts/{receipt}/allocate": {
+      "post": {
+        "tags": ["core"],
+        "operationId": "allocateReceipt",
+        "security": [{"bearerAuth": []}, {"sessionCookie": []}],
+        "parameters": [{"name": "receipt", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"$ref": "#/components/requestBodies/JsonObject"},
+        "responses": {"200": {"$ref": "#/components/responses/Data"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/ValidationError"}}
+      }
+    },
+    "/receipts/{receipt}/reverse": {
+      "post": {
+        "tags": ["core"],
+        "operationId": "reverseReceipt",
+        "security": [{"bearerAuth": []}, {"sessionCookie": []}],
+        "parameters": [{"name": "receipt", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"$ref": "#/components/requestBodies/JsonObject"},
+        "responses": {"200": {"$ref": "#/components/responses/Data"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "409": {"description": "Receipt cannot be reversed in its current state."}, "422": {"$ref": "#/components/responses/ValidationError"}}
+      }
+    },
+    "/payment-vouchers/{voucher}/allocate": {
+      "post": {
+        "tags": ["core"],
+        "operationId": "allocatePaymentVoucher",
+        "security": [{"bearerAuth": []}, {"sessionCookie": []}],
+        "parameters": [{"name": "voucher", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"$ref": "#/components/requestBodies/JsonObject"},
+        "responses": {"200": {"$ref": "#/components/responses/Data"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/ValidationError"}}
+      }
+    },
+    "/payment-vouchers/{voucher}/reverse": {
+      "post": {
+        "tags": ["core"],
+        "operationId": "reversePaymentVoucher",
+        "security": [{"bearerAuth": []}, {"sessionCookie": []}],
+        "parameters": [{"name": "voucher", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"$ref": "#/components/requestBodies/JsonObject"},
+        "responses": {"200": {"$ref": "#/components/responses/Data"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "409": {"description": "Voucher cannot be reversed in its current state."}, "422": {"$ref": "#/components/responses/ValidationError"}}
+      }
+    },
+    "/inventory/transfers/{transfer}/reverse": {
+      "post": {
+        "tags": ["core"],
+        "operationId": "reverseInventoryTransfer",
+        "security": [{"bearerAuth": []}, {"sessionCookie": []}],
+        "parameters": [{"name": "transfer", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"$ref": "#/components/requestBodies/JsonObject"},
+        "responses": {"200": {"$ref": "#/components/responses/Data"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "409": {"description": "Transfer cannot be reversed after destination stock is consumed."}, "422": {"$ref": "#/components/responses/ValidationError"}}
+      }
     }
   },
   "components": {

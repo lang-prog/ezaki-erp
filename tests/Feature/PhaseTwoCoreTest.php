@@ -320,8 +320,10 @@ class PhaseTwoCoreTest extends TestCase
         $this->assertSame(2, $reporting->accountStatement($company, Cashbox::query()->findOrFail($cashbox)->account)['lines']->total());
 
         $originalEntry = JournalEntry::query()->findOrFail($receipt['journal_entry_id']);
-        $this->postJson("/api/v1/journals/{$originalEntry->id}/reverse", ['date' => today()->toDateString()])->assertCreated();
+        $this->postJson("/api/v1/journals/{$originalEntry->id}/reverse", ['date' => today()->toDateString()])->assertStatus(409);
+        $this->postJson("/api/v1/receipts/{$receipt['id']}/reverse", ['date' => today()->toDateString(), 'reason' => 'Duplicate receipt'])->assertCreated();
         $this->assertSame('reversed', $originalEntry->fresh()->status);
+        $this->assertDatabaseHas('receipts', ['id' => $receipt['id'], 'status' => 'reversed', 'reversal_journal_entry_id' => JournalEntry::query()->where('reversal_of_id', $originalEntry->id)->value('id')]);
         $this->assertSame(4, JournalEntry::query()->where('company_id', $company->id)->count());
         $trialBalance = app(AccountingReportService::class)->trialBalance($company);
         $this->assertEquals($trialBalance['debit_total'], $trialBalance['credit_total']);
@@ -340,7 +342,7 @@ class PhaseTwoCoreTest extends TestCase
         $cashboxId = $this->postJson('/api/v1/cashboxes', ['name' => 'Voucher till'])->assertCreated()->json('data.id');
         $cashbox = Cashbox::query()->findOrFail($cashboxId);
         $income = Account::query()->where('company_id', $company->id)->where('code', '5.2')->firstOrFail();
-        $expense = Account::query()->where('company_id', $company->id)->where('code', '4.2')->firstOrFail();
+        $expense = Account::query()->where('company_id', $company->id)->where('system_key', 'fleet_expense')->firstOrFail();
         $receipt = $this->postJson('/api/v1/receipts', ['counterparty_type' => 'other', 'other_account_id' => (string) $income->id, 'cashbox_id' => (string) $cashboxId, 'receipt_date' => today()->toDateString(), 'amount' => 120])->assertCreated()->json('data');
         $payment = $this->postJson('/api/v1/payment-vouchers', ['counterparty_type' => 'other', 'other_account_id' => (string) $expense->id, 'cashbox_id' => (string) $cashboxId, 'voucher_date' => today()->toDateString(), 'amount' => 45])->assertCreated()->json('data');
 

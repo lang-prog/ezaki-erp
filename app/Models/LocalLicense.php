@@ -13,7 +13,7 @@ class LocalLicense extends Model
     protected $fillable = [
         'key_hash', 'installation_id', 'customer_binding', 'company_id', 'status',
         'activated_at', 'enabled_at', 'disabled_at', 'revoked_at', 'transferred_at',
-        'transfer_reference', 'last_verified_at', 'signed_payload',
+        'transfer_reference', 'last_verified_at', 'signed_payload', 'signed_payload_raw', 'signature',
     ];
 
     protected function casts(): array

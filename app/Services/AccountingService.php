@@ -175,6 +175,8 @@ class AccountingService
                 ['account_id' => $counterpartyAccount->id, 'party_id' => $party?->id, 'debit' => 0, 'credit' => $data['amount'], 'description' => $counterpartyType === 'other' ? 'Other account receipt' : 'Customer receipt'],
             ]);
             $receipt->forceFill(['journal_entry_id' => $entry->id])->save();
+            $allocation = app(PaymentAllocationService::class)->allocateReceipt($company, $actor, $receipt, isset($data['bill_id']) ? (int) $data['bill_id'] : null);
+            $receipt->setAttribute('unallocated_amount', $allocation['unallocated_amount']);
             app(AuditRecorder::class)->record('receipts.posted', $receipt, $company->id, $actor->id, ['journal_entry_id' => $entry->id]);
 
             return $receipt;
@@ -204,6 +206,8 @@ class AccountingService
                 ['account_id' => $sourceAccount->id, 'party_id' => $party?->id, 'debit' => 0, 'credit' => $data['amount'], 'description' => 'Payment from '.$sourceAccount->name],
             ]);
             $voucher->forceFill(['journal_entry_id' => $entry->id])->save();
+            $allocation = app(PaymentAllocationService::class)->allocateVoucher($company, $actor, $voucher, isset($data['bill_id']) ? (int) $data['bill_id'] : null);
+            $voucher->setAttribute('unallocated_amount', $allocation['unallocated_amount']);
             app(AuditRecorder::class)->record('payment_vouchers.posted', $voucher, $company->id, $actor->id, ['journal_entry_id' => $entry->id]);
 
             return $voucher;
@@ -270,7 +274,7 @@ class AccountingService
     {
         return DB::transaction(function () use ($company, $actor, $entry, $date, $fromSourceWorkflow): JournalEntry {
             $entry = JournalEntry::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($entry->id);
-            if (! $fromSourceWorkflow && in_array($entry->source_type, [PurchaseBill::class, SalesBill::class, FleetExpense::class, MaintenanceRecord::class], true)) {
+            if (! $fromSourceWorkflow && in_array($entry->source_type, [PurchaseBill::class, SalesBill::class, FleetExpense::class, MaintenanceRecord::class, Receipt::class, PaymentVoucher::class], true)) {
                 abort(409, 'Reverse the source document from its own workflow.');
             }
             abort_unless($entry->status === 'posted' && $entry->reversed_by_id === null, 409, 'Only an unreversed posted journal can be reversed.');
@@ -290,6 +294,38 @@ class AccountingService
         });
     }
 
+    public function reverseReceipt(Company $company, User $actor, Receipt $receipt, string $date, string $reason): Receipt
+    {
+        return DB::transaction(function () use ($company, $actor, $receipt, $date, $reason): Receipt {
+            $receipt = Receipt::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($receipt->id);
+            abort_if($receipt->status === 'reversed', 409, 'Receipt is already reversed.');
+            abort_unless($receipt->status === 'posted' && $receipt->journal_entry_id, 409, 'Only posted receipts can be reversed.');
+            $entry = JournalEntry::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($receipt->journal_entry_id);
+            $reversal = $this->reverseJournal($company, $actor, $entry, $date, true);
+            app(PaymentAllocationService::class)->reverseForPayment($company, 'receipt', $receipt->id, $actor, $reversal->id, $reason);
+            $receipt->forceFill(['status' => 'reversed', 'reversal_journal_entry_id' => $reversal->id, 'reversed_by' => $actor->id, 'reversed_at' => now(), 'reversal_reason' => $reason])->save();
+            app(AuditRecorder::class)->record('receipts.reversed', $receipt, $company->id, $actor->id, ['reversal_journal_entry_id' => $reversal->id, 'reason' => $reason]);
+
+            return $receipt->fresh();
+        });
+    }
+
+    public function reverseVoucher(Company $company, User $actor, PaymentVoucher $voucher, string $date, string $reason): PaymentVoucher
+    {
+        return DB::transaction(function () use ($company, $actor, $voucher, $date, $reason): PaymentVoucher {
+            $voucher = PaymentVoucher::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($voucher->id);
+            abort_if($voucher->status === 'reversed', 409, 'Payment voucher is already reversed.');
+            abort_unless($voucher->status === 'posted' && $voucher->journal_entry_id, 409, 'Only posted payment vouchers can be reversed.');
+            $entry = JournalEntry::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($voucher->journal_entry_id);
+            $reversal = $this->reverseJournal($company, $actor, $entry, $date, true);
+            app(PaymentAllocationService::class)->reverseForPayment($company, 'voucher', $voucher->id, $actor, $reversal->id, $reason);
+            $voucher->forceFill(['status' => 'reversed', 'reversal_journal_entry_id' => $reversal->id, 'reversed_by' => $actor->id, 'reversed_at' => now(), 'reversal_reason' => $reason])->save();
+            app(AuditRecorder::class)->record('payment_vouchers.reversed', $voucher, $company->id, $actor->id, ['reversal_journal_entry_id' => $reversal->id, 'reason' => $reason]);
+
+            return $voucher->fresh();
+        });
+    }
+
     public function postOperationalJournal(Company $company, User $actor, string $date, string $description, string $sourceType, int $sourceId, array $lines): JournalEntry
     {
         return DB::transaction(function () use ($company, $actor, $date, $description, $sourceType, $sourceId, $lines): JournalEntry {
@@ -302,11 +338,15 @@ class AccountingService
     public function closePeriod(Company $company, FiscalPeriod $period, User $actor): FiscalPeriod
     {
         abort_unless((int) $period->company_id === (int) $company->id, 404);
-        abort_if($period->status !== 'open', 409, 'Fiscal period is already closed.');
-        $period->forceFill(['status' => 'closed', 'closed_by' => $actor->id, 'closed_at' => now()])->save();
-        app(AuditRecorder::class)->record('fiscal_periods.closed', $period, $company->id, $actor->id);
 
-        return $period;
+        return DB::transaction(function () use ($company, $period, $actor): FiscalPeriod {
+            $period = FiscalPeriod::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($period->id);
+            abort_if($period->status !== 'open', 409, 'Fiscal period is already closed.');
+            $period->forceFill(['status' => 'closed', 'closed_by' => $actor->id, 'closed_at' => now()])->save();
+            app(AuditRecorder::class)->record('fiscal_periods.closed', $period, $company->id, $actor->id);
+
+            return $period->fresh();
+        });
     }
 
     public function paymentSourceAccount(Company $company, array $data): Account
@@ -337,6 +377,9 @@ class AccountingService
 
     private function postJournal(Company $company, User $actor, FiscalPeriod $period, string $date, string $description, string $sourceType, int $sourceId, array $lines, ?int $reversalOf = null): JournalEntry
     {
+        $period = FiscalPeriod::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($period->id);
+        abort_unless($period->status === 'open', 409, 'The fiscal period is closed.');
+        abort_unless($date >= $period->starts_on->toDateString() && $date <= $period->ends_on->toDateString(), 422, 'The journal date is outside the selected fiscal period.');
         $debits = round(array_sum(array_column($lines, 'debit')), 2);
         $credits = round(array_sum(array_column($lines, 'credit')), 2);
         throw_if($debits <= 0 || $debits !== $credits, ValidationException::withMessages(['amount' => 'Journal entries must balance to a positive amount.']));
