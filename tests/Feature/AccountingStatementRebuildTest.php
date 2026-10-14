@@ -865,6 +865,36 @@ class AccountingStatementRebuildTest extends TestCase
         ]);
     }
 
+    public function test_preview_full_view_and_print_routes_reject_another_companys_documents(): void
+    {
+        $contextA = $this->fullTenant('preview-a');
+        $contextB = $this->fullTenant('preview-b');
+
+        $bill = app(OperationsService::class)->saveSales($contextB['company'], $contextB['user'], [
+            'branch_id' => $contextB['branch']->id,
+            'warehouse_id' => $contextB['warehouse']->id,
+            'customer_id' => $contextB['customer']->id,
+            'customer_bill_number' => 'CUS-B-PREVIEW',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 1,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'lines' => [['product_id' => $contextB['product']->id, 'actual_weight' => 1, 'unit_price' => 100]],
+        ], true);
+        $receipt = app(AccountingService::class)->receive($contextB['company'], $contextB['user'], [
+            'party_id' => $contextB['customer']->id,
+            'cashbox_id' => $contextB['cashbox']->id,
+            'receipt_date' => '2026-06-02',
+            'amount' => 50,
+        ]);
+
+        $this->actingAs($contextA['user']);
+        $this->get(route('company.sales.show', ['bill' => $bill->id]))->assertNotFound();
+        $this->get(route('company.sales.print', ['bill' => $bill->id, 'mode' => 'invoice']))->assertNotFound();
+        $this->get(route('company.receipt.show', ['document' => $receipt->id]))->assertNotFound();
+        $this->get(route('company.receipt.print', ['document' => $receipt->id]))->assertNotFound();
+    }
+
     private function fullTenant(string $key = 'rebuild'): array
     {
         $company = Company::query()->create(['name' => "Statement Company {$key}", 'status' => 'active']);

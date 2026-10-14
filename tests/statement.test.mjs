@@ -105,3 +105,60 @@ test('all statement translation keys are localized in Arabic and English', () =>
         assert.notEqual(en, ar, `English and Arabic should not be identical for ${key}`);
     }
 });
+
+const css = readFileSync(new URL('../resources/css/navigation.css', import.meta.url), 'utf8');
+const rule = (selector) => css.match(new RegExp(`${selector.replace(/[.[\]]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[1] ?? '';
+
+test('both preview modals share one shell with header, scrolling body and footer regions', () => {
+    assert.match(statementSource, /function ModalShell/);
+    assert.equal((statementSource.match(/<ModalShell/g) || []).length, 2);
+    assert.match(statementSource, /className="statement-modal-body"/);
+    assert.match(statementSource, /className="modal-footer statement-modal-footer"/);
+    assert.match(statementSource, /aria-modal="true" aria-labelledby=\{titleId\}/);
+    assert.match(statementSource, /aria-label=\{closeLabel\}/);
+});
+
+test('dialog shell is viewport constrained and only the body scrolls', () => {
+    const shell = rule('.modal.statement-document-modal');
+    assert.match(shell, /max-height:\s*calc\(100vh/);
+    assert.match(shell, /display:\s*flex/);
+    assert.match(shell, /flex-direction:\s*column/);
+    assert.match(css, /@supports \(height: 100dvh\)/);
+    const body = rule('.statement-modal-body');
+    assert.match(body, /min-height:\s*0/);
+    assert.match(body, /overflow-y:\s*auto/);
+    assert.match(body, /overflow-x:\s*auto/);
+    assert.match(rule('.statement-modal-header'), /flex:\s*none/);
+    assert.match(rule('.statement-modal-footer'), /flex:\s*none/);
+    assert.match(rule('.statement-modal-footer'), /flex-wrap:\s*wrap/);
+});
+
+test('wide invoice tables scroll horizontally and mobile footer buttons wrap', () => {
+    assert.match(rule('.statement-document-modal .modal-table-wrap'), /overflow-x:\s*auto/);
+    assert.match(rule('.statement-document-modal .modal-table-wrap .erp-table'), /min-width:\s*640px/);
+    assert.match(css, /@media \(max-width: 760px\)[^@]*\.statement-modal-footer \.erp-button \{ flex: 1 1 140px/);
+});
+
+test('layout uses logical properties only so RTL and LTR do not reverse actions', () => {
+    const block = css.slice(css.indexOf('Statement document / revision preview dialogs'));
+    assert.doesNotMatch(block, /(margin|padding)-(left|right)|(?<![-\w])(left|right):/);
+});
+
+test('escape, focus restore and background scroll lock are handled by the shell', () => {
+    assert.match(statementSource, /event\.key === 'Escape'/);
+    assert.match(statementSource, /body\.style\.overflow = 'hidden'/);
+    assert.match(statementSource, /trigger\.focus\(\)/);
+    assert.match(statementSource, /event\.target === event\.currentTarget && onClose\(\)/);
+    assert.match(statementSource, /onMouseDown=\{\(event\) => event\.stopPropagation\(\)\}/);
+});
+
+test('full view and print buttons use the document own routes and stay hidden without permission', () => {
+    assert.match(statementSource, /window\.open\(document\.view_url/);
+    assert.match(statementSource, /window\.open\(document\.print_url/);
+    assert.match(statementSource, /document\.print_url && canPrint/);
+    assert.match(statementSource, /document\.view_url && canView/);
+});
+
+test('modal chrome is removed from print output', () => {
+    assert.match(css, /@media print \{ \.statement-modal-backdrop \{ display: none !important/);
+});

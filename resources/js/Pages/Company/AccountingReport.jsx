@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, usePage } from '@inertiajs/react';
 import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
@@ -40,6 +40,61 @@ function formatBalanceTag(balance, locale, t) {
     return num > 0 ? t('debitBalance') : t('creditBalanceTag');
 }
 
+const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// Overlay + flex-column shell: header and footer are fixed, only the body scrolls.
+function ModalShell({ titleId, eyebrow, title, subtitle, closeLabel, onClose, footer, children }) {
+    const shellRef = useRef(null);
+    const closeRef = useRef(onClose);
+    closeRef.current = onClose;
+
+    useEffect(() => {
+        const trigger = window.document.activeElement;
+        const previousOverflow = window.document.body.style.overflow;
+        window.document.body.style.overflow = 'hidden';
+        shellRef.current?.focus();
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                closeRef.current();
+                return;
+            }
+            if (event.key !== 'Tab' || !shellRef.current) return;
+            const items = [...shellRef.current.querySelectorAll(focusableSelector)];
+            if (items.length === 0) return;
+            const first = items[0];
+            const last = items[items.length - 1];
+            if (event.shiftKey && (window.document.activeElement === first || window.document.activeElement === shellRef.current)) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && window.document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+        window.document.addEventListener('keydown', onKeyDown);
+        return () => {
+            window.document.removeEventListener('keydown', onKeyDown);
+            window.document.body.style.overflow = previousOverflow;
+            if (trigger && typeof trigger.focus === 'function') trigger.focus();
+        };
+    }, []);
+
+    return <div className="modal-backdrop statement-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+        <section ref={shellRef} tabIndex={-1} className="modal statement-document-modal" role="dialog" aria-modal="true" aria-labelledby={titleId} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header statement-modal-header">
+                <div className="statement-modal-heading">
+                    <span className="eyebrow">{eyebrow}</span>
+                    <h2 id={titleId}>{title}</h2>
+                    <p>{subtitle}</p>
+                </div>
+                <button type="button" className="statement-modal-close" onClick={onClose} aria-label={closeLabel}>×</button>
+            </div>
+            <div className="statement-modal-body">{children}</div>
+            <div className="modal-footer statement-modal-footer">{footer}</div>
+        </section>
+    </div>;
+}
+
 function DocumentModal({ document, locale, t, onClose, capabilities = {} }) {
     if (!document) return null;
     const rows = document.details ?? [];
@@ -63,17 +118,19 @@ function DocumentModal({ document, locale, t, onClose, capabilities = {} }) {
     const fullPage = () => document.view_url && window.open(document.view_url, '_blank', 'noopener,noreferrer');
     const print = () => document.print_url && window.open(document.print_url, '_blank', 'noopener,noreferrer');
 
-    return <div className="modal-backdrop statement-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-        <section className="modal statement-document-modal" role="dialog" aria-modal="true" aria-labelledby="statement-document-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-header">
-                <div>
-                    <span className="eyebrow">{t(sourceLabels[document.kind] ?? 'source')}</span>
-                    <h2 id="statement-document-title">{document.title}</h2>
-                    <p>{document.date} · {document.party ?? '—'}</p>
-                </div>
-                <button type="button" onClick={onClose} aria-label={t('close')}>×</button>
-            </div>
-
+    return <ModalShell
+        titleId="statement-document-title"
+        eyebrow={t(sourceLabels[document.kind] ?? 'source')}
+        title={document.title}
+        subtitle={`${document.date} · ${document.party ?? '—'}`}
+        closeLabel={t('close')}
+        onClose={onClose}
+        footer={<>
+            <button type="button" className="erp-button erp-button--secondary" onClick={onClose}>{t('close')}</button>
+            {document.print_url && canPrint && <button type="button" className="erp-button erp-button--secondary" onClick={print}>{t('print')}</button>}
+            {document.view_url && canView && <button type="button" className="erp-button erp-button--primary" onClick={fullPage}>{t('openFullDocument')}</button>}
+        </>}
+    >
             <div className="statement-document-summary">
                 <div>
                     <span>{t('amount')}</span>
@@ -209,29 +266,21 @@ function DocumentModal({ document, locale, t, onClose, capabilities = {} }) {
                 </div>
             </div>}
 
-            <div className="modal-footer">
-                <button type="button" className="erp-button erp-button--secondary" onClick={onClose}>{t('close')}</button>
-                {document.print_url && canPrint && <button type="button" className="erp-button erp-button--secondary" onClick={print}>{t('print')}</button>}
-                {document.view_url && canView && <button type="button" className="erp-button erp-button--primary" onClick={fullPage}>{t('openFullDocument')}</button>}
-            </div>
-        </section>
-    </div>;
+    </ModalShell>;
 }
 
 function RevisionModal({ document, locale, t, onClose }) {
     if (!document) return null;
     const revisions = document.revisions ?? [];
-    return <div className="modal-backdrop statement-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-        <section className="modal statement-document-modal" role="dialog" aria-modal="true" aria-labelledby="revision-modal-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-header">
-                <div>
-                    <span className="eyebrow">{t('revisionHistory')}</span>
-                    <h2 id="revision-modal-title">{document.title ?? document.document_number}</h2>
-                    <p>{t('amended')} · {revisions.length} {t('revisions')}</p>
-                </div>
-                <button type="button" onClick={onClose} aria-label={t('close')}>×</button>
-            </div>
-
+    return <ModalShell
+        titleId="revision-modal-title"
+        eyebrow={t('revisionHistory')}
+        title={document.title ?? document.document_number}
+        subtitle={`${t('amended')} · ${revisions.length} ${t('revisions')}`}
+        closeLabel={t('close')}
+        onClose={onClose}
+        footer={<button type="button" className="erp-button erp-button--secondary" onClick={onClose}>{t('close')}</button>}
+    >
             <div className="revision-summary-cards">
                 <div>
                     <span>{t('originalAmount')}</span>
@@ -281,11 +330,7 @@ function RevisionModal({ document, locale, t, onClose }) {
                 </table>
             </div>
 
-            <div className="modal-footer">
-                <button type="button" className="erp-button erp-button--secondary" onClick={onClose}>{t('close')}</button>
-            </div>
-        </section>
-    </div>;
+    </ModalShell>;
 }
 
 function StatementView({
