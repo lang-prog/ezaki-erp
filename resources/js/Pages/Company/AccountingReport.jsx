@@ -44,6 +44,7 @@ function DocumentModal({ document, locale, t, onClose, capabilities = {} }) {
     if (!document) return null;
     const rows = document.details ?? [];
     const allocations = document.allocations ?? [];
+    const revisions = document.revisions ?? [];
     const isSales = document.kind === 'sales';
     const isPurchase = document.kind === 'purchase';
     const isReceipt = document.kind === 'receipt';
@@ -96,6 +97,10 @@ function DocumentModal({ document, locale, t, onClose, capabilities = {} }) {
                         {document.status === 'posted' ? t('posted') : document.status === 'approved' ? t('approved') : document.status === 'reversed' ? t('reversed') : document.status}
                     </strong>
                 </div>
+                {document.is_revised && <div>
+                    <span>{t('revisionChain')}</span>
+                    <strong className="text-amber-700">{t('amended')} ({document.revision_count ?? revisions.length})</strong>
+                </div>}
                 {document.reversal_reason && <div className="span-full text-red-700">
                     <span>{t('reversalReason')}</span>
                     <strong>{document.reversal_reason}</strong>
@@ -151,10 +156,133 @@ function DocumentModal({ document, locale, t, onClose, capabilities = {} }) {
                 </table>
             </div>}
 
+            {revisions.length > 0 && <div className="modal-revision-history">
+                <div className="modal-subheading">
+                    <h3>{t('revisionHistory')}</h3>
+                    <span className="revision-count-badge">{revisions.length} {t('amended')}</span>
+                </div>
+                <div className="revision-summary-cards">
+                    <div>
+                        <span>{t('originalAmount')}</span>
+                        <strong>{money(document.original_amount ?? document.amount, locale)} {t('currency')}</strong>
+                    </div>
+                    <div>
+                        <span>{t('revisedAmount')}</span>
+                        <strong>{money(document.current_amount ?? document.amount, locale)} {t('currency')}</strong>
+                    </div>
+                    <div>
+                        <span>{t('revisionDelta')}</span>
+                        <strong className={Number(document.revision_delta ?? 0) > 0 ? 'text-green-700' : Number(document.revision_delta ?? 0) < 0 ? 'text-red-700' : ''}>
+                            {money(document.revision_delta ?? 0, locale)} {t('currency')}
+                        </strong>
+                    </div>
+                </div>
+                <div className="erp-table-wrap modal-table-wrap">
+                    <table className="erp-table">
+                        <thead>
+                            <tr>
+                                <th>{t('revisionDate')}</th>
+                                <th>{t('revisedBy')}</th>
+                                <th>{t('reversalReason')}</th>
+                                <th>{t('originalAmount')}</th>
+                                <th>{t('revisedAmount')}</th>
+                                <th>{t('revisionDelta')}</th>
+                                <th>{t('reversalJournal')}</th>
+                                <th>{t('replacementJournal')}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {revisions.map((rev, index) => <tr key={rev.id ?? index}>
+                                <td>{rev.created_at || '—'}</td>
+                                <td><strong>{rev.user_name || '—'}</strong></td>
+                                <td>{rev.reason || '—'}</td>
+                                <td>{money(rev.original_amount, locale)}</td>
+                                <td>{money(rev.revised_amount, locale)}</td>
+                                <td className={rev.delta_amount > 0 ? 'text-green-700 font-bold' : rev.delta_amount < 0 ? 'text-red-700 font-bold' : ''}>
+                                    {money(rev.delta_amount, locale)}
+                                </td>
+                                <td>{rev.reversal_journal_number ? <span className="journal-tag">{rev.reversal_journal_number}</span> : '—'}</td>
+                                <td>{rev.replacement_journal_number ? <span className="journal-tag">{rev.replacement_journal_number}</span> : '—'}</td>
+                            </tr>)}
+                        </tbody>
+                    </table>
+                </div>
+            </div>}
+
             <div className="modal-footer">
                 <button type="button" className="erp-button erp-button--secondary" onClick={onClose}>{t('close')}</button>
                 {document.print_url && canPrint && <button type="button" className="erp-button erp-button--secondary" onClick={print}>{t('print')}</button>}
                 {document.view_url && canView && <button type="button" className="erp-button erp-button--primary" onClick={fullPage}>{t('openFullDocument')}</button>}
+            </div>
+        </section>
+    </div>;
+}
+
+function RevisionModal({ document, locale, t, onClose }) {
+    if (!document) return null;
+    const revisions = document.revisions ?? [];
+    return <div className="modal-backdrop statement-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+        <section className="modal statement-document-modal" role="dialog" aria-modal="true" aria-labelledby="revision-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+                <div>
+                    <span className="eyebrow">{t('revisionHistory')}</span>
+                    <h2 id="revision-modal-title">{document.title ?? document.document_number}</h2>
+                    <p>{t('amended')} · {revisions.length} {t('revisions')}</p>
+                </div>
+                <button type="button" onClick={onClose} aria-label={t('close')}>×</button>
+            </div>
+
+            <div className="revision-summary-cards">
+                <div>
+                    <span>{t('originalAmount')}</span>
+                    <strong>{money(document.original_amount ?? document.amount, locale)} {t('currency')}</strong>
+                </div>
+                <div>
+                    <span>{t('revisedAmount')}</span>
+                    <strong>{money(document.current_amount ?? document.amount, locale)} {t('currency')}</strong>
+                </div>
+                <div>
+                    <span>{t('revisionDelta')}</span>
+                    <strong className={Number(document.revision_delta ?? 0) > 0 ? 'text-green-700' : Number(document.revision_delta ?? 0) < 0 ? 'text-red-700' : ''}>
+                        {money(document.revision_delta ?? 0, locale)} {t('currency')}
+                    </strong>
+                </div>
+            </div>
+
+            <div className="erp-table-wrap modal-table-wrap">
+                <table className="erp-table">
+                    <thead>
+                        <tr>
+                            <th>{t('revisionDate')}</th>
+                            <th>{t('revisedBy')}</th>
+                            <th>{t('reversalReason')}</th>
+                            <th>{t('originalAmount')}</th>
+                            <th>{t('revisedAmount')}</th>
+                            <th>{t('revisionDelta')}</th>
+                            <th>{t('reversalJournal')}</th>
+                            <th>{t('replacementJournal')}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {revisions.map((rev, index) => <tr key={rev.id ?? index}>
+                            <td>{rev.created_at || '—'}</td>
+                            <td><strong>{rev.user_name || '—'}</strong></td>
+                            <td>{rev.reason || '—'}</td>
+                            <td>{money(rev.original_amount, locale)}</td>
+                            <td>{money(rev.revised_amount, locale)}</td>
+                            <td className={rev.delta_amount > 0 ? 'text-green-700 font-bold' : rev.delta_amount < 0 ? 'text-red-700 font-bold' : ''}>
+                                {money(rev.delta_amount, locale)}
+                            </td>
+                            <td>{rev.reversal_journal_number ? <span className="journal-tag">{rev.reversal_journal_number}</span> : '—'}</td>
+                            <td>{rev.replacement_journal_number ? <span className="journal-tag">{rev.replacement_journal_number}</span> : '—'}</td>
+                        </tr>)}
+                        {revisions.length === 0 && <tr><td colSpan="8" className="empty-cell">{t('noRevisions')}</td></tr>}
+                    </tbody>
+                </table>
+            </div>
+
+            <div className="modal-footer">
+                <button type="button" className="erp-button erp-button--secondary" onClick={onClose}>{t('close')}</button>
             </div>
         </section>
     </div>;
@@ -168,7 +296,9 @@ function StatementView({
     pagination,
     locale,
     t,
+    viewMode = 'operational',
     onSelectDocument,
+    onSelectRevision,
 }) {
     const openingBalance = Number(summary.opening_balance ?? 0);
     const periodDebit = Number(summary.period_debit ?? 0);
@@ -180,6 +310,22 @@ function StatementView({
     const paginationLabel = (label) => label.replace(/<[^>]*>/g, '').replace(/&laquo;/g, '«').replace(/&raquo;/g, '»').replace(/&hellip;/g, '…');
 
     return <div className="statement-workspace">
+        <div className="statement-view-toggle no-print">
+            <span className="statement-view-toggle__label">{t('viewMode')}:</span>
+            <Link
+                href={`/reports/account-statement?account_id=${account?.id ?? ''}&from_date=${meta.from || ''}&to_date=${meta.to || ''}&view=operational`}
+                className={`erp-button ${viewMode === 'operational' ? 'erp-button--primary' : 'erp-button--secondary'}`}
+            >
+                {t('operationalStatement')}
+            </Link>
+            <Link
+                href={`/reports/account-statement?account_id=${account?.id ?? ''}&from_date=${meta.from || ''}&to_date=${meta.to || ''}&view=detailed`}
+                className={`erp-button ${viewMode === 'detailed' ? 'erp-button--primary' : 'erp-button--secondary'}`}
+            >
+                {t('detailedLedger')}
+            </Link>
+        </div>
+
         <div className="statement-kpis">
             <div className="statement-kpi-card">
                 <span className="statement-kpi-label">{t('openingBalance')}</span>
@@ -223,7 +369,7 @@ function StatementView({
             </div>
             <div className="statement-meta-range">
                 <span>{meta.from && meta.to ? `${meta.from} — ${meta.to}` : meta.from ? `From ${meta.from}` : meta.to ? `Through ${meta.to}` : t('allActivity')}</span>
-                <small>{transactionCount} {t('movementRows')}</small>
+                <small>{transactionCount} {t('movementRows')} · {viewMode === 'detailed' ? t('detailedLedger') : t('operationalStatement')}</small>
             </div>
         </div>
 
@@ -250,6 +396,7 @@ function StatementView({
                         const settled = row.settled_amount != null ? Number(row.settled_amount) : null;
                         const particulars = locale === 'ar' && row.particulars_ar ? row.particulars_ar : (row.particulars || row.line_description || row.description || '—');
                         const docBadge = row.document_type || document?.kind;
+                        const isRevised = Boolean(row.is_revised || document?.is_revised);
 
                         return <tr key={row.id ?? `${row.entry_number}-${index}`} className={docBadge ? `statement-row statement-row--${docBadge}` : 'statement-row'}>
                             <td className="statement-date">{row.entry_date ?? row.date ?? '—'}</td>
@@ -259,6 +406,7 @@ function StatementView({
                             </td>
                             <td>
                                 {docBadge && <span className={`document-badge document-badge--${docBadge}`}>{t(sourceLabels[docBadge] ?? docBadge)}</span>}
+                                {isRevised && <span className="document-badge document-badge--revised">{t('amended')}</span>}
                                 {row.document_number && <span>{row.document_number}</span>}
                             </td>
                             <td className={`statement-number ${debit > 0 ? 'statement-debit-val' : ''}`}>
@@ -284,6 +432,13 @@ function StatementView({
                                     >
                                         {document ? t('previewDocument') : '—'}
                                     </button>
+                                    {isRevised && <button
+                                        type="button"
+                                        className="table-action table-action--revision"
+                                        onClick={() => onSelectRevision(document || row)}
+                                    >
+                                        {t('revisionHistory')}
+                                    </button>}
                                     {document?.view_url && <a href={document.view_url} target="_blank" rel="noreferrer" className="table-action">↗</a>}
                                 </div>
                             </td>
@@ -333,6 +488,7 @@ export default function AccountingReport({
     threshold,
     from = '',
     to = '',
+    view = 'operational',
     reconciliation_difference: reconciliationDifference,
     capabilities = {},
 }) {
@@ -340,6 +496,7 @@ export default function AccountingReport({
     const t = (key) => translate(locale, key);
     const { notice, send } = useCoreApi();
     const [selectedDocument, setSelectedDocument] = useState(null);
+    const [selectedRevision, setSelectedRevision] = useState(null);
 
     const statement = report === 'account-statement';
     const reportRows = statement
@@ -353,6 +510,7 @@ export default function AccountingReport({
         period_net: 0,
         closing_balance: reportRows.at(-1)?.running_balance ?? openingBalance ?? 0,
         transaction_count: reportRows.length,
+        view_mode: view,
     };
 
     const statementMeta = meta ?? {
@@ -361,7 +519,10 @@ export default function AccountingReport({
         account_id: account?.id,
         account_code: account?.code,
         account_name: account?.name,
+        view_mode: view,
     };
+
+    const currentViewMode = view || statementMeta.view_mode || 'operational';
 
     return <CompanyLayout title={t(titles[report] ?? 'reports')}>
         <div className="printable-report accounting-report-page">
@@ -393,6 +554,7 @@ export default function AccountingReport({
                     <span>{t('toDate')}</span>
                     <input type="date" name="to_date" defaultValue={to} />
                 </label>
+                {statement && <input type="hidden" name="view" value={currentViewMode} />}
                 <button className="erp-button erp-button--primary">{t('apply')}</button>
             </form>
 
@@ -408,7 +570,9 @@ export default function AccountingReport({
                 pagination={lines ?? rows}
                 locale={locale}
                 t={t}
+                viewMode={currentViewMode}
                 onSelectDocument={setSelectedDocument}
+                onSelectRevision={setSelectedRevision}
             /> : <div className="erp-table-wrap report-table-wrap">
                 <table className="erp-table">
                     <thead>
@@ -446,6 +610,13 @@ export default function AccountingReport({
             t={t}
             onClose={() => setSelectedDocument(null)}
             capabilities={capabilities}
+        />
+
+        <RevisionModal
+            document={selectedRevision}
+            locale={locale}
+            t={t}
+            onClose={() => setSelectedRevision(null)}
         />
     </CompanyLayout>;
 }

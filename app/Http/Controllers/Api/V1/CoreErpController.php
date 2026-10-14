@@ -468,15 +468,16 @@ class CoreErpController extends Controller
 
     public function report(Request $request, AccountingReportService $reports, string $report): JsonResponse
     {
-        $range = $request->validate(['from_date' => ['nullable', 'date'], 'to_date' => ['nullable', 'date'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date']]);
+        $range = $request->validate(['from_date' => ['nullable', 'date'], 'to_date' => ['nullable', 'date'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'view' => ['nullable', 'string', 'in:operational,detailed']]);
         $company = $this->company($request);
         $from = $range['from_date'] ?? $range['from'] ?? null;
         $to = $range['to_date'] ?? $range['to'] ?? null;
+        $view = $range['view'] ?? $request->query('view', 'operational');
 
         return response()->json(match ($report) {
             'journal' => $reports->journal($company, $from, $to),
             'ledger' => $reports->ledger($company, $from, $to),
-            'account-statement' => $reports->accountStatement($company, Account::query()->where('company_id', $company->id)->findOrFail($request->integer('account_id')), $from, $to),
+            'account-statement' => $reports->accountStatement($company, Account::query()->where('company_id', $company->id)->findOrFail($request->integer('account_id')), $from, $to, $view),
             'trial-balance' => $reports->trialBalance($company, $to),
             'income-statement' => $reports->incomeStatement($company, $from, $to),
             'balance-sheet' => $reports->balanceSheet($company, $to),
@@ -490,9 +491,9 @@ class CoreErpController extends Controller
 
     public function accountStatement(Request $request, Account $account, AccountingReportService $reports): JsonResponse
     {
-        $range = $request->validate(['from' => ['nullable', 'date'], 'to' => ['nullable', 'date']]);
+        $range = $request->validate(['from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'view' => ['nullable', 'string', 'in:operational,detailed']]);
 
-        return response()->json($reports->accountStatement($this->company($request), $account, $range['from'] ?? null, $range['to'] ?? null));
+        return response()->json($reports->accountStatement($this->company($request), $account, $range['from'] ?? null, $range['to'] ?? null, $range['view'] ?? 'operational'));
     }
 
     private function company(Request $request): Company

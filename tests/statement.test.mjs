@@ -46,6 +46,24 @@ test('filter bar preserves account_id, from_date, and to_date with apply button'
     assert.match(statementSource, /<button className="erp-button erp-button--primary">\{t\('apply'\)\}<\/button>/);
 });
 
+test('view mode switcher offers operational statement and detailed ledger options', () => {
+    assert.match(statementSource, /className="statement-view-toggle no-print"/);
+    assert.match(statementSource, /view=operational/);
+    assert.match(statementSource, /view=detailed/);
+    assert.match(statementSource, /\{t\('operationalStatement'\)\}/);
+    assert.match(statementSource, /\{t\('detailedLedger'\)\}/);
+});
+
+test('revised bills render amended badge and revision history modal action', () => {
+    assert.match(statementSource, /document-badge--revised/);
+    assert.match(statementSource, /\{t\('amended'\)\}/);
+    assert.match(statementSource, /table-action--revision/);
+    assert.match(statementSource, /\{t\('revisionHistory'\)\}/);
+    assert.match(statementSource, /function RevisionModal/);
+    assert.match(statementSource, /\{t\('reversalJournal'\)\}/);
+    assert.match(statementSource, /\{t\('replacementJournal'\)\}/);
+});
+
 test('all statement translation keys are localized in Arabic and English', () => {
     const keys = [
         'accountStatement',
@@ -65,6 +83,18 @@ test('all statement translation keys are localized in Arabic and English', () =>
         'creditBalanceTag',
         'zeroBalance',
         'particulars',
+        'operationalStatement',
+        'detailedLedger',
+        'viewMode',
+        'amended',
+        'revisionHistory',
+        'revisionChain',
+        'revised',
+        'originalAmount',
+        'revisedAmount',
+        'revisionDelta',
+        'replacementJournal',
+        'reversalJournal',
     ];
 
     for (const key of keys) {

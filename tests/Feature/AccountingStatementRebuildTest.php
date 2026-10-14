@@ -19,6 +19,7 @@ use App\Services\CompanyStructureService;
 use App\Services\InventoryService;
 use App\Services\OperationsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\PermissionRegistrar;
 use Symfony\Component\HttpKernel\Exception\HttpException;
@@ -542,6 +543,326 @@ class AccountingStatementRebuildTest extends TestCase
 
         $this->assertNull($row->source_document['view_url']);
         $this->assertNotSame($salesBillB->internal_number, $row->source_document['title']);
+    }
+
+    public function test_draft_bill_edit_updates_in_place_without_creating_journal_or_reversal(): void
+    {
+        $context = $this->fullTenant('draft-edit');
+        $this->actingAs($context['user']);
+
+        $operations = app(OperationsService::class);
+        $draft = $operations->saveSales($context['company'], $context['user'], [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-DRAFT-1',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 2,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 2, 'unit_price' => 100],
+            ],
+        ], false);
+
+        $this->assertSame('draft', $draft->status);
+        $this->assertNull($draft->journal_entry_id);
+        $this->assertDatabaseMissing('journal_entries', [
+            'company_id' => $context['company']->id,
+            'source_type' => SalesBill::class,
+            'source_id' => $draft->id,
+        ]);
+
+        // Edit the draft in place
+        $updated = $operations->saveSales($context['company'], $context['user'], [
+            'id' => $draft->id,
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-DRAFT-1-EDITED',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 4,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 4, 'unit_price' => 100],
+            ],
+        ], false);
+
+        $this->assertSame($draft->id, $updated->id);
+        $this->assertSame(400.0, (float) $updated->total);
+        $this->assertSame('draft', $updated->status);
+        $this->assertNull($updated->journal_entry_id);
+        $this->assertDatabaseMissing('journal_entries', [
+            'company_id' => $context['company']->id,
+            'source_type' => SalesBill::class,
+            'source_id' => $draft->id,
+        ]);
+    }
+
+    public function test_posted_bill_revision_creates_exact_reversal_and_replacement_linked_in_bill_revision(): void
+    {
+        $context = $this->fullTenant('bill-revision');
+        $this->actingAs($context['user']);
+
+        $operations = app(OperationsService::class);
+        $bill = $operations->saveSales($context['company'], $context['user'], [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-REV-1',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 10,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 10, 'unit_price' => 100],
+            ],
+        ], true);
+
+        $originalJournalId = $bill->journal_entry_id;
+        $this->assertNotNull($originalJournalId);
+
+        // Revise bill from 1000 to 1200
+        $revised = $operations->revise($context['company'], $context['user'], 'sales', $bill->id, [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-REV-1-MOD',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 12,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'revision_reason' => 'Quantity amended per weight slip',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 12, 'unit_price' => 100],
+            ],
+        ]);
+
+        $this->assertSame($bill->id, $revised->id);
+        $this->assertSame(1200.0, (float) $revised->total);
+        $this->assertTrue($revised->is_revised);
+        $this->assertSame(1, $revised->revision_count);
+        $this->assertNotSame($originalJournalId, $revised->journal_entry_id);
+
+        // Check original journal is reversed
+        $this->assertDatabaseHas('journal_entries', [
+            'id' => $originalJournalId,
+            'status' => 'reversed',
+        ]);
+
+        // Check BillRevision record
+        $revision = $revised->revisions()->first();
+        $this->assertNotNull($revision);
+        $this->assertSame($originalJournalId, $revision->original_journal_entry_id);
+        $this->assertSame($revised->journal_entry_id, $revision->replacement_journal_entry_id);
+        $this->assertNotNull($revision->reversal_journal_entry_id);
+        $this->assertSame(1000.0, (float) $revision->original_amount);
+        $this->assertSame(1200.0, (float) $revision->revised_amount);
+        $this->assertSame(200.0, (float) $revision->delta_amount);
+
+        // Multiple revisions: revise again to 1500
+        $secondRevisionJournal = $revised->journal_entry_id;
+        $revisedAgain = $operations->revise($context['company'], $context['user'], 'sales', $bill->id, [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-REV-1-MOD2',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 15,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'revision_reason' => 'Further adjustment to 15 tons',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 15, 'unit_price' => 100],
+            ],
+        ]);
+
+        $this->assertSame(2, $revisedAgain->revision_count);
+        $this->assertSame(2, $revisedAgain->revisions()->count());
+    }
+
+    public function test_closed_period_revision_is_rejected_without_accounting_changes(): void
+    {
+        $context = $this->fullTenant('closed-period-rev');
+        $this->actingAs($context['user']);
+
+        $operations = app(OperationsService::class);
+        $bill = $operations->saveSales($context['company'], $context['user'], [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-CLOSED-1',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 5,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 5, 'unit_price' => 100],
+            ],
+        ], true);
+
+        // Close the fiscal period
+        $period = app(AccountingFoundationService::class)->openPeriodFor($context['company'], '2026-06-01');
+        app(AccountingService::class)->closePeriod($context['company'], $period, $context['user']);
+
+        $this->expectException(HttpException::class);
+        $operations->revise($context['company'], $context['user'], 'sales', $bill->id, [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-CLOSED-1-MOD',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 10,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'revision_reason' => 'Attempting edit on closed period',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 10, 'unit_price' => 100],
+            ],
+        ]);
+    }
+
+    public function test_operational_statement_collapses_revision_chain_while_detailed_ledger_shows_all_entries(): void
+    {
+        $context = $this->fullTenant('statement-modes');
+        $this->actingAs($context['user']);
+
+        $operations = app(OperationsService::class);
+        $bill = $operations->saveSales($context['company'], $context['user'], [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-MODE-1',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 10,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 10, 'unit_price' => 100],
+            ],
+        ], true);
+
+        // Revise bill from 1000 to 1200
+        $operations->revise($context['company'], $context['user'], 'sales', $bill->id, [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-MODE-1',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 12,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'revision_reason' => 'Weight slip updated',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 12, 'unit_price' => 100],
+            ],
+        ]);
+
+        // Post receipt of 1200
+        $accounting = app(AccountingService::class);
+        $accounting->receive($context['company'], $context['user'], [
+            'party_id' => $context['customer']->id,
+            'cashbox_id' => $context['cashbox']->id,
+            'receipt_date' => '2026-06-05',
+            'amount' => 1200,
+        ]);
+
+        $reports = app(AccountingReportService::class);
+
+        // 1. OPERATIONAL STATEMENT (Default)
+        $operational = $reports->accountStatement($context['company'], $context['customer']->account, null, null, 'operational');
+        $opRows = $operational['lines']->getCollection();
+
+        // Exactly 2 rows: 1 effective amended sales invoice + 1 receipt
+        $this->assertCount(2, $opRows);
+        $firstRow = $opRows->first();
+        $this->assertTrue($firstRow->is_revised);
+        $this->assertSame(1200.0, (float) $firstRow->debit);
+        $this->assertStringContainsString('(Amended)', $firstRow->particulars);
+        $this->assertCount(1, $firstRow->revisions);
+        $this->assertSame(1000.0, (float) $firstRow->original_amount);
+        $this->assertSame(1200.0, (float) $firstRow->current_amount);
+        $this->assertSame(200.0, (float) $firstRow->revision_delta);
+
+        $secondRow = $opRows->last();
+        $this->assertSame('receipt', $secondRow->document_type);
+        $this->assertSame(1200.0, (float) $secondRow->credit);
+
+        // Running and closing balance are 0.00
+        $this->assertSame(0.0, (float) $operational['summary']['closing_balance']);
+        $this->assertSame(0.0, (float) $secondRow->running_balance);
+
+        // 2. DETAILED AUDIT LEDGER
+        $detailed = $reports->accountStatement($context['company'], $context['customer']->account, null, null, 'detailed');
+        $detRows = $detailed['lines']->getCollection();
+
+        // 4 rows: original bill (1000 debit), reversal (1000 credit), replacement (1200 debit), receipt (1200 credit)
+        $this->assertCount(4, $detRows);
+        // Closing balance in detailed mode matches operational statement to the penny
+        $this->assertSame(0.0, (float) $detailed['summary']['closing_balance']);
+        $this->assertSame(0.0, (float) $detRows->last()->running_balance);
+
+        // 3. TRIAL BALANCE, INCOME STATEMENT, BALANCE SHEET RECONCILIATION
+        $tb = $reports->trialBalance($context['company']);
+        $this->assertEqualsWithDelta(0.0, $tb['debit_total'] - $tb['credit_total'], 0.001);
+
+        $income = $reports->incomeStatement($context['company']);
+        $salesRev = $income['rows']->firstWhere('code', '5.1');
+        $this->assertNotNull($salesRev);
+        // Net sales revenue should be exactly 1200 (not 1000 + 1200)
+        $this->assertSame(1200.0, (float) $salesRev->balance);
+
+        $bs = $reports->balanceSheet($context['company']);
+        $this->assertSame(0.0, (float) $bs['reconciliation_difference']);
+    }
+
+    public function test_revised_bill_with_payment_allocations_rejects_reduction_below_allocated_amount(): void
+    {
+        $context = $this->fullTenant('alloc-guard');
+        $this->actingAs($context['user']);
+
+        $operations = app(OperationsService::class);
+        $bill = $operations->saveSales($context['company'], $context['user'], [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-ALLOC-1',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 10,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 10, 'unit_price' => 100],
+            ],
+        ], true);
+
+        // Allocate 700 to this bill
+        $accounting = app(AccountingService::class);
+        $receipt = $accounting->receive($context['company'], $context['user'], [
+            'party_id' => $context['customer']->id,
+            'cashbox_id' => $context['cashbox']->id,
+            'receipt_date' => '2026-06-02',
+            'amount' => 700,
+            'bill_id' => $bill->id,
+        ]);
+
+        // Attempting to revise the bill total to 500 (less than 700 allocated) must be rejected
+        $this->expectException(ValidationException::class);
+        $operations->revise($context['company'], $context['user'], 'sales', $bill->id, [
+            'branch_id' => $context['branch']->id,
+            'warehouse_id' => $context['warehouse']->id,
+            'customer_id' => $context['customer']->id,
+            'customer_bill_number' => 'CUS-ALLOC-1',
+            'bill_date' => '2026-06-01',
+            'total_actual_weight' => 5,
+            'payment_method' => 'credit',
+            'due_date' => '2026-07-01',
+            'revision_reason' => 'Trying to reduce below allocated payment',
+            'lines' => [
+                ['product_id' => $context['product']->id, 'actual_weight' => 5, 'unit_price' => 100],
+            ],
+        ]);
     }
 
     private function fullTenant(string $key = 'rebuild'): array

@@ -64,6 +64,9 @@ class OperationsService
                 'status' => 'draft',
             ]);
             $bill->save();
+            if (! $bill->revision_chain_id) {
+                $bill->forceFill(['revision_chain_id' => 'purchase:'.$bill->id])->save();
+            }
             $bill->lines()->delete();
             foreach ($lines as $line) {
                 $bill->lines()->create(['company_id' => $company->id, ...$line]);
@@ -107,6 +110,9 @@ class OperationsService
                 'status' => 'draft',
             ]);
             $bill->save();
+            if (! $bill->revision_chain_id) {
+                $bill->forceFill(['revision_chain_id' => 'sales:'.$bill->id])->save();
+            }
             $bill->lines()->delete();
             foreach ($lines as $line) {
                 $bill->lines()->create(['company_id' => $company->id, ...$line]);
@@ -331,13 +337,45 @@ class OperationsService
                 : SalesBill::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($id);
             $this->assertBill($company, $bill, 'approved');
             throw_if(empty(trim((string) ($data['revision_reason'] ?? ''))), ValidationException::withMessages(['revision_reason' => 'A revision reason is required.']));
+
+            $date = $type === 'purchase' ? $bill->supplier_bill_date->toDateString() : $bill->bill_date->toDateString();
+            $this->foundation->openPeriodFor($company, $date);
+
             $before = $bill->load('lines')->toArray();
-            $this->unpostBill($company, $actor, $bill, $type === 'purchase', $type === 'purchase' ? $bill->supplier_bill_date->toDateString() : $bill->bill_date->toDateString());
+            $originalJournalId = $bill->journal_entry_id;
+            $origTotal = (float) ($before['total'] ?? 0);
+
+            $reversal = $this->unpostBill($company, $actor, $bill, $type === 'purchase', $date);
             $bill->forceFill(['status' => 'draft', 'journal_entry_id' => null, 'approved_at' => null, 'approved_by' => null])->save();
+
             $payload = [...$data, 'id' => $bill->id];
             $updated = $type === 'purchase'
                 ? $this->savePurchase($company, $actor, $payload, true)
                 : $this->saveSales($company, $actor, $payload, true);
+
+            $revisedTotal = (float) $updated->total;
+            $delta = round($revisedTotal - $origTotal, 2);
+            $chainId = $bill->revision_chain_id ?: ($type.':'.$bill->id);
+
+            // Reconcile payment allocations: check if paid + allocations exceed new total
+            $activeAllocations = (float) DB::table('party_payment_allocations')
+                ->where('company_id', $company->id)
+                ->where('bill_type', $type)
+                ->where('bill_id', $bill->id)
+                ->where('status', 'posted')
+                ->sum('amount');
+            $maxAllowableOutstanding = round($revisedTotal - (float) $updated->paid_amount, 2);
+            throw_if(
+                $maxAllowableOutstanding < round($activeAllocations, 2),
+                ValidationException::withMessages(['total' => 'Revised bill total cannot be less than already allocated payments ('.number_format($activeAllocations, 2).' EGP). Adjust payment allocations first.'])
+            );
+
+            $updated->forceFill([
+                'revision_chain_id' => $chainId,
+                'is_revised' => true,
+                'revision_count' => (int) $bill->revision_count + 1,
+            ])->save();
+
             $revision = BillRevision::query()->create([
                 'company_id' => $company->id,
                 'document_type' => $type,
@@ -346,8 +384,25 @@ class OperationsService
                 'reason' => $data['revision_reason'],
                 'before_data' => $before,
                 'after_data' => $updated->load('lines')->toArray(),
+                'revision_chain_id' => $chainId,
+                'original_journal_entry_id' => $originalJournalId,
+                'reversal_journal_entry_id' => $reversal->id,
+                'replacement_journal_entry_id' => $updated->journal_entry_id,
+                'original_amount' => $origTotal,
+                'revised_amount' => $revisedTotal,
+                'delta_amount' => $delta,
             ]);
-            $this->audit->record('bills.revised', $revision, $company->id, $actor->id, ['document_type' => $type, 'document_id' => $id, 'reposted' => true]);
+
+            $this->audit->record('bills.revised', $revision, $company->id, $actor->id, [
+                'document_type' => $type,
+                'document_id' => $id,
+                'reposted' => true,
+                'revision_chain_id' => $chainId,
+                'original_journal_id' => $originalJournalId,
+                'reversal_journal_id' => $reversal->id,
+                'replacement_journal_id' => $updated->journal_entry_id,
+                'delta' => $delta,
+            ]);
 
             return $updated;
         });

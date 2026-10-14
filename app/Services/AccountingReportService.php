@@ -62,7 +62,7 @@ class AccountingReportService
         ];
     }
 
-    public function accountStatement(Company $company, Account $account, ?string $from = null, ?string $to = null): array
+    public function accountStatement(Company $company, Account $account, ?string $from = null, ?string $to = null, ?string $view = null): array
     {
         abort_unless((int) $account->company_id === (int) $company->id, 404);
         $accountIds = $this->descendantIds($company, $account->id);
@@ -71,6 +71,38 @@ class AccountingReportService
             ->where('company_id', $company->id)
             ->whereIn('account_id', $accountIds)
             ->first();
+
+        $viewMode = $view ?: (string) request()->query('view', 'operational');
+        $isOperational = ($viewMode !== 'detailed' && $viewMode !== 'audit' && $viewMode !== 'ledger');
+
+        $technicalRevisionEntryIds = [];
+        if ($isOperational) {
+            $revisions = DB::table('bill_revisions')
+                ->where('company_id', $company->id)
+                ->get(['id', 'original_journal_entry_id', 'reversal_journal_entry_id', 'before_data']);
+            foreach ($revisions as $rev) {
+                $origId = $rev->original_journal_entry_id;
+                $revId = $rev->reversal_journal_entry_id;
+                if (! $origId && $rev->before_data) {
+                    $before = is_string($rev->before_data) ? json_decode($rev->before_data, true) : (array) $rev->before_data;
+                    $origId = $before['journal_entry_id'] ?? null;
+                }
+                if ($origId) {
+                    $technicalRevisionEntryIds[] = (int) $origId;
+                    if (! $revId) {
+                        $revId = DB::table('journal_entries')
+                            ->where('company_id', $company->id)
+                            ->where('source_type', JournalEntry::class)
+                            ->where('source_id', $origId)
+                            ->value('id');
+                    }
+                }
+                if ($revId) {
+                    $technicalRevisionEntryIds[] = (int) $revId;
+                }
+            }
+            $technicalRevisionEntryIds = array_values(array_unique(array_filter($technicalRevisionEntryIds)));
+        }
 
         $legacyPartyOpening = 0.0;
         $legacyParties = CustomerSupplier::query()
@@ -99,6 +131,7 @@ class AccountingReportService
                 ->whereIn('entries.status', ['posted', 'reversed'])
                 ->where('lines.company_id', $company->id)
                 ->whereIn('lines.account_id', $accountIds)
+                ->when($isOperational && ! empty($technicalRevisionEntryIds), fn ($query) => $query->whereNotIn('entries.id', $technicalRevisionEntryIds))
                 ->whereDate('entries.entry_date', '<', $from)
                 ->selectRaw('COALESCE(SUM(lines.debit - lines.credit), 0) as balance')
                 ->value('balance');
@@ -112,6 +145,7 @@ class AccountingReportService
             ->whereIn('entries.status', ['posted', 'reversed'])
             ->where('lines.company_id', $company->id)
             ->whereIn('lines.account_id', $accountIds)
+            ->when($isOperational && ! empty($technicalRevisionEntryIds), fn ($query) => $query->whereNotIn('entries.id', $technicalRevisionEntryIds))
             ->when($from, fn ($query) => $query->whereDate('entries.entry_date', '>=', $from))
             ->when($to, fn ($query) => $query->whereDate('entries.entry_date', '<=', $to));
 
@@ -161,7 +195,15 @@ class AccountingReportService
 
         if ($lines->count()) {
             $first = $lines->first();
-            $priorMovement = $this->movementBeforeLine($company, $accountIds, $first->entry_date, (int) $first->journal_entry_id, (int) $first->id, $from);
+            $priorMovement = $this->movementBeforeLine(
+                $company,
+                $accountIds,
+                $first->entry_date,
+                (int) $first->journal_entry_id,
+                (int) $first->id,
+                $from,
+                $isOperational ? $technicalRevisionEntryIds : []
+            );
             $running = $openingBalance + (float) $priorMovement;
             $lines->setCollection($lines->getCollection()->map(function ($line) use (&$running) {
                 $running += (float) $line->debit - (float) $line->credit;
@@ -190,6 +232,8 @@ class AccountingReportService
                 'from' => $from,
                 'to' => $to,
                 'date_filter_mode' => $from ? 'filtered' : 'all_activity',
+                'view_mode' => $isOperational ? 'operational' : 'detailed',
+                'has_revisions' => ! empty($technicalRevisionEntryIds),
             ],
             'summary' => [
                 'opening_balance' => $openingBalance,
@@ -198,6 +242,8 @@ class AccountingReportService
                 'period_net' => $periodNet,
                 'closing_balance' => $closingBalance,
                 'transaction_count' => $transactionCount,
+                'view_mode' => $isOperational ? 'operational' : 'detailed',
+                'has_revisions' => ! empty($technicalRevisionEntryIds),
             ],
             'closing_balance' => $closingBalance,
             'period_debit' => $periodDebit,
@@ -662,10 +708,10 @@ class AccountingReportService
         $reversalIds = $lines->getCollection()->filter(fn ($line) => $line->source_type === JournalEntry::class)->pluck('source_id')->filter()->unique();
 
         $sales = $salesIds->isNotEmpty()
-            ? SalesBill::query()->where('company_id', $company->id)->whereIn('id', $salesIds)->with(['lines.product:id,name', 'customer:id,name', 'cashbox:id,name', 'bank:id,name'])->get()->keyBy('id')
+            ? SalesBill::query()->where('company_id', $company->id)->whereIn('id', $salesIds)->with(['lines.product:id,name', 'customer:id,name', 'cashbox:id,name', 'bank:id,name', 'revisions.user:id,name'])->get()->keyBy('id')
             : collect();
         $purchases = $purchaseIds->isNotEmpty()
-            ? PurchaseBill::query()->where('company_id', $company->id)->whereIn('id', $purchaseIds)->with(['lines.product:id,name', 'supplier:id,name', 'cashbox:id,name', 'bank:id,name'])->get()->keyBy('id')
+            ? PurchaseBill::query()->where('company_id', $company->id)->whereIn('id', $purchaseIds)->with(['lines.product:id,name', 'supplier:id,name', 'cashbox:id,name', 'bank:id,name', 'revisions.user:id,name'])->get()->keyBy('id')
             : collect();
         $receipts = $receiptIds->isNotEmpty()
             ? Receipt::query()->where('company_id', $company->id)->whereIn('id', $receiptIds)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->get()->keyBy('id')
@@ -721,7 +767,7 @@ class AccountingReportService
             ->groupBy('payment_id') : collect();
 
         $lines->setCollection($lines->getCollection()->map(function ($line) use (
-            $sales, $purchases, $receipts, $vouchers, $parties, $reversalEntries,
+            $company, $sales, $purchases, $receipts, $vouchers, $parties, $reversalEntries,
             $salesAllocations, $purchaseAllocations, $receiptAllocations, $voucherAllocations
         ) {
             $type = null;
@@ -742,6 +788,17 @@ class AccountingReportService
             $viewUrl = null;
             $printUrl = null;
 
+            $isRevised = false;
+            $revisionsList = [];
+            $firstRevision = null;
+            $originalDate = null;
+            $originalAmount = null;
+            $revisionDelta = 0.0;
+            $revisionChainId = null;
+            $sourceJournalId = $line->journal_entry_id;
+            $reversalJournalId = null;
+            $replacementJournalId = $line->journal_entry_id;
+
             if ($line->source_type === SalesBill::class) {
                 $document = $sales->get($line->source_id);
                 if ($document) {
@@ -758,8 +815,45 @@ class AccountingReportService
                     $paymentSource = $document->cashbox?->name ?? $document->bank?->name;
                     $status = $document->status;
                     $reversalReason = $document->reversal_reason ?? null;
-                    $particulars = 'Sales invoice · '.$docNumber.($partyName ? ' · '.$partyName : '');
-                    $particularsAr = 'فاتورة بيع · '.$docNumber.($partyName ? ' · '.$partyName : '');
+
+                    $isRevised = $document->revisions->isNotEmpty();
+                    if ($isRevised) {
+                        $firstRevision = $document->revisions->first();
+                        $revisionsList = $document->revisions->map(function ($rev) use ($company) {
+                            $before = is_string($rev->before_data) ? json_decode($rev->before_data, true) : (array) ($rev->before_data ?? []);
+                            $after = is_string($rev->after_data) ? json_decode($rev->after_data, true) : (array) ($rev->after_data ?? []);
+                            $origJournal = $rev->original_journal_entry_id ? DB::table('journal_entries')->where('company_id', $company->id)->where('id', $rev->original_journal_entry_id)->first(['id', 'entry_number', 'entry_date']) : null;
+                            $revJournal = $rev->reversal_journal_entry_id ? DB::table('journal_entries')->where('company_id', $company->id)->where('id', $rev->reversal_journal_entry_id)->first(['id', 'entry_number', 'entry_date']) : null;
+                            $replJournal = $rev->replacement_journal_entry_id ? DB::table('journal_entries')->where('company_id', $company->id)->where('id', $rev->replacement_journal_entry_id)->first(['id', 'entry_number', 'entry_date']) : null;
+
+                            $origAmt = (float) ($rev->original_amount ?? $before['total'] ?? 0);
+                            $revAmt = (float) ($rev->revised_amount ?? $after['total'] ?? 0);
+                            $delta = (float) ($rev->delta_amount ?? round($revAmt - $origAmt, 2));
+
+                            return [
+                                'id' => $rev->id,
+                                'revision_chain_id' => $rev->revision_chain_id,
+                                'reason' => $rev->reason,
+                                'created_at' => $rev->created_at?->toDateTimeString(),
+                                'user_name' => $rev->user?->name ?? '—',
+                                'original_amount' => $origAmt,
+                                'revised_amount' => $revAmt,
+                                'delta_amount' => $delta,
+                                'original_journal_number' => $origJournal?->entry_number,
+                                'reversal_journal_number' => $revJournal?->entry_number,
+                                'replacement_journal_number' => $replJournal?->entry_number,
+                            ];
+                        })->values()->all();
+
+                        $revisionChainId = $document->revision_chain_id ?: ('sales:'.$document->id);
+                        $originalAmount = (float) ($firstRevision->original_amount ?? ($firstRevision->before_data['total'] ?? $docAmount));
+                        $revisionDelta = round($docAmount - $originalAmount, 2);
+                        $originalDate = $firstRevision->before_data['bill_date'] ?? $date;
+                        $reversalJournalId = $document->revisions->last()?->reversal_journal_entry_id;
+                    }
+
+                    $particulars = ($isRevised ? 'Sales invoice (Amended) · ' : 'Sales invoice · ').$docNumber.($partyName ? ' · '.$partyName : '');
+                    $particularsAr = ($isRevised ? 'فاتورة بيع (معدلة) · ' : 'فاتورة بيع · ').$docNumber.($partyName ? ' · '.$partyName : '');
                     $viewUrl = route('company.sales.show', ['bill' => $document->id]);
                     $printUrl = route('company.sales.print', ['bill' => $document->id, 'mode' => 'invoice']);
 
@@ -792,8 +886,45 @@ class AccountingReportService
                     $paymentSource = $document->cashbox?->name ?? $document->bank?->name;
                     $status = $document->status;
                     $reversalReason = $document->reversal_reason ?? null;
-                    $particulars = 'Purchase bill · '.$docNumber.($partyName ? ' · '.$partyName : '');
-                    $particularsAr = 'فاتورة شراء · '.$docNumber.($partyName ? ' · '.$partyName : '');
+
+                    $isRevised = $document->revisions->isNotEmpty();
+                    if ($isRevised) {
+                        $firstRevision = $document->revisions->first();
+                        $revisionsList = $document->revisions->map(function ($rev) use ($company) {
+                            $before = is_string($rev->before_data) ? json_decode($rev->before_data, true) : (array) ($rev->before_data ?? []);
+                            $after = is_string($rev->after_data) ? json_decode($rev->after_data, true) : (array) ($rev->after_data ?? []);
+                            $origJournal = $rev->original_journal_entry_id ? DB::table('journal_entries')->where('company_id', $company->id)->where('id', $rev->original_journal_entry_id)->first(['id', 'entry_number', 'entry_date']) : null;
+                            $revJournal = $rev->reversal_journal_entry_id ? DB::table('journal_entries')->where('company_id', $company->id)->where('id', $rev->reversal_journal_entry_id)->first(['id', 'entry_number', 'entry_date']) : null;
+                            $replJournal = $rev->replacement_journal_entry_id ? DB::table('journal_entries')->where('company_id', $company->id)->where('id', $rev->replacement_journal_entry_id)->first(['id', 'entry_number', 'entry_date']) : null;
+
+                            $origAmt = (float) ($rev->original_amount ?? $before['total'] ?? 0);
+                            $revAmt = (float) ($rev->revised_amount ?? $after['total'] ?? 0);
+                            $delta = (float) ($rev->delta_amount ?? round($revAmt - $origAmt, 2));
+
+                            return [
+                                'id' => $rev->id,
+                                'revision_chain_id' => $rev->revision_chain_id,
+                                'reason' => $rev->reason,
+                                'created_at' => $rev->created_at?->toDateTimeString(),
+                                'user_name' => $rev->user?->name ?? '—',
+                                'original_amount' => $origAmt,
+                                'revised_amount' => $revAmt,
+                                'delta_amount' => $delta,
+                                'original_journal_number' => $origJournal?->entry_number,
+                                'reversal_journal_number' => $revJournal?->entry_number,
+                                'replacement_journal_number' => $replJournal?->entry_number,
+                            ];
+                        })->values()->all();
+
+                        $revisionChainId = $document->revision_chain_id ?: ('purchase:'.$document->id);
+                        $originalAmount = (float) ($firstRevision->original_amount ?? ($firstRevision->before_data['total'] ?? $docAmount));
+                        $revisionDelta = round($docAmount - $originalAmount, 2);
+                        $originalDate = $firstRevision->before_data['supplier_bill_date'] ?? $date;
+                        $reversalJournalId = $document->revisions->last()?->reversal_journal_entry_id;
+                    }
+
+                    $particulars = ($isRevised ? 'Purchase bill (Amended) · ' : 'Purchase bill · ').$docNumber.($partyName ? ' · '.$partyName : '');
+                    $particularsAr = ($isRevised ? 'فاتورة شراء (معدلة) · ' : 'فاتورة شراء · ').$docNumber.($partyName ? ' · '.$partyName : '');
                     $viewUrl = route('company.purchase.show', ['bill' => $document->id]);
                     $printUrl = route('company.purchase.print', ['bill' => $document->id, 'mode' => 'invoice']);
 
@@ -864,8 +995,20 @@ class AccountingReportService
                 $revDoc = $reversalEntries->get($line->source_id);
                 $type = 'reversal';
                 $docAmount = max((float) $line->debit, (float) $line->credit);
-                $particulars = (string) ($line->description ?: ('Reversal of '.($revDoc?->entry_number ?? 'journal')));
-                $particularsAr = 'عكس قيد · '.($line->description ?: ($revDoc?->entry_number ?? 'قيد'));
+                $revReason = null;
+                $linkedRev = DB::table('bill_revisions')
+                    ->where('company_id', $company->id)
+                    ->where('reversal_journal_entry_id', $line->journal_entry_id)
+                    ->first();
+                if ($linkedRev) {
+                    $revReason = $linkedRev->reason;
+                    $particulars = 'Reversal of '.($revDoc?->entry_number ?? 'journal').' (Amended: '.$linkedRev->reason.')';
+                    $particularsAr = 'عكس قيد '.($revDoc?->entry_number ?? 'قيد').' (تعديل: '.$linkedRev->reason.')';
+                } else {
+                    $particulars = (string) ($line->description ?: ('Reversal of '.($revDoc?->entry_number ?? 'journal')));
+                    $particularsAr = 'عكس قيد · '.($line->description ?: ($revDoc?->entry_number ?? 'قيد'));
+                }
+                $reversalReason = $revReason;
                 $line->value = $docAmount;
             } else {
                 $type = 'journal';
@@ -895,6 +1038,21 @@ class AccountingReportService
             $line->details = $details;
             $line->invoice_details = $details;
 
+            $line->is_revised = $isRevised;
+            $line->revision_chain_id = $revisionChainId;
+            $line->revision_count = count($revisionsList);
+            $line->original_amount = $originalAmount;
+            $line->current_amount = $docAmount;
+            $line->revision_delta = $revisionDelta;
+            $line->original_date = $originalDate;
+            $line->current_date = $date;
+            $line->revisions = $revisionsList;
+            $line->logical_document_id = $document ? ($type.':'.$document->id) : null;
+            $line->current_document_id = $document?->id;
+            $line->source_journal_id = $sourceJournalId;
+            $line->reversal_journal_id = $reversalJournalId;
+            $line->replacement_journal_id = $replacementJournalId;
+
             $line->source_document = [
                 'kind' => $type,
                 'title' => $docNumber,
@@ -914,6 +1072,20 @@ class AccountingReportService
                 'print_url' => $printUrl,
                 'details' => $details,
                 'allocations' => $allocations,
+                'is_revised' => $isRevised,
+                'revision_chain_id' => $revisionChainId,
+                'revision_count' => count($revisionsList),
+                'original_amount' => $originalAmount,
+                'current_amount' => $docAmount,
+                'revision_delta' => $revisionDelta,
+                'original_date' => $originalDate,
+                'current_date' => $date,
+                'revisions' => $revisionsList,
+                'logical_document_id' => $document ? ($type.':'.$document->id) : null,
+                'current_document_id' => $document?->id,
+                'source_journal_id' => $sourceJournalId,
+                'reversal_journal_id' => $reversalJournalId,
+                'replacement_journal_id' => $replacementJournalId,
             ];
 
             return $line;

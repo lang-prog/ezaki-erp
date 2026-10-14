@@ -258,13 +258,14 @@ class CoreErpPageController extends Controller
         $range = $request->validate(['from_date' => ['nullable', 'date'], 'to_date' => ['nullable', 'date'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'account_id' => ['nullable', 'integer', 'min:1']]);
         $from = $range['from_date'] ?? $range['from'] ?? null;
         $to = $range['to_date'] ?? $range['to'] ?? null;
+        $view = $request->query('view', 'operational');
         abort_unless(in_array($report, ['journal', 'account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'], true), 404);
         $statementAccount = $report === 'account-statement' && $request->filled('account_id')
             ? Account::query()->where('company_id', $company->id)->findOrFail($request->integer('account_id'))
             : null;
         $payload = match ($report) {
             'journal' => $reports->journal($company, $from, $to),
-            'account-statement' => $statementAccount ? $reports->accountStatement($company, $statementAccount, $from, $to) : ['account' => null, 'lines' => [], 'opening_balance' => 0],
+            'account-statement' => $statementAccount ? $reports->accountStatement($company, $statementAccount, $from, $to, $view) : ['account' => null, 'lines' => [], 'opening_balance' => 0],
             'ledger' => $reports->ledger($company, $from, $to),
             'trial-balance' => $reports->trialBalance($company, $to),
             'income-statement' => $reports->incomeStatement($company, $from, $to),
@@ -280,6 +281,7 @@ class CoreErpPageController extends Controller
             'availableAccounts' => $report === 'account-statement' ? Account::query()->where('company_id', $company->id)->orderBy('code')->get(['id', 'code', 'name']) : [],
             'from' => $from,
             'to' => $to,
+            'view' => $view,
             ...$payload,
             'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.reverse', 'reports.export', 'sales.view', 'sales.print', 'purchases.view', 'purchases.print']),
         ]);
