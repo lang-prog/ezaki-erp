@@ -68,6 +68,12 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/suppliers', [CoreErpPageController::class, 'suppliers'])->middleware('can:parties.view')->name('company.suppliers');
     Route::get('/suppliers/{party}', [CoreErpPageController::class, 'supplierProfile'])->middleware('can:parties.view')->name('company.supplier.profile');
     Route::get('/accounting', [CoreErpPageController::class, 'accounting'])->middleware('can:accounting.view')->name('company.accounting');
+    Route::get('/accounting/chart', [CoreErpPageController::class, 'chartOfAccounts'])->middleware('can:accounting.view')->name('company.accounting.chart');
+    Route::get('/accounting/periods', [CoreErpPageController::class, 'fiscalPeriods'])->middleware('can:accounting.view')->name('company.accounting.periods');
+    Route::get('/accounting/cashboxes', [CoreErpPageController::class, 'cashboxes'])->middleware('can:accounting.view')->name('company.accounting.cashboxes');
+    Route::get('/accounting/banks', [CoreErpPageController::class, 'banks'])->middleware('can:accounting.view')->name('company.accounting.banks');
+    Route::get('/accounting/receipts/export', [CoreErpPageController::class, 'exportReceipts'])->middleware(['can:accounting.view', 'throttle:api.exports'])->name('company.receipts.export');
+    Route::get('/accounting/payment-vouchers/export', [CoreErpPageController::class, 'exportVouchers'])->middleware(['can:accounting.view', 'throttle:api.exports'])->name('company.vouchers.export');
     Route::get('/accounting/receipts', [CoreErpPageController::class, 'receiptsList'])->middleware('can:accounting.view')->name('company.receipts.index');
     Route::get('/accounting/receipts/{document}', [CoreErpPageController::class, 'showReceipt'])->middleware('can:accounting.view')->whereNumber('document')->name('company.receipt.show');
     Route::get('/accounting/receipts/{document}/print', [CoreErpPageController::class, 'printReceipt'])->middleware('can:accounting.view')->whereNumber('document')->name('company.receipt.print');

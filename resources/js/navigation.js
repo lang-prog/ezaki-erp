@@ -24,6 +24,10 @@ export const companyNavigation = [
     ] },
     { id: 'accounting', label: 'accounting', icon: 'ledger', items: [
         { id: 'accounting-main', label: 'accountingWorkspace', href: '/accounting', permission: 'accounting.view', icon: 'ledger' },
+        { id: 'accounting-chart', label: 'chart', href: '/accounting/chart', permission: 'accounting.view', icon: 'list' },
+        { id: 'accounting-periods', label: 'fiscalPeriods', href: '/accounting/periods', permission: 'accounting.view', icon: 'document' },
+        { id: 'accounting-cashboxes', label: 'cashboxes', href: '/accounting/cashboxes', permission: 'accounting.view', icon: 'document' },
+        { id: 'accounting-banks', label: 'banks', href: '/accounting/banks', permission: 'accounting.view', icon: 'document' },
         { id: 'accounting-receipts', label: 'receipts', href: '/accounting/receipts', permission: 'accounting.view', icon: 'document' },
         { id: 'accounting-vouchers', label: 'vouchers', href: '/accounting/payment-vouchers', permission: 'accounting.view', icon: 'document' },
     ] },
@@ -37,7 +41,6 @@ export const companyNavigation = [
         { id: 'report-debtors', label: 'debtors', href: '/reports/debtors', permission: 'reports.view', icon: 'people' },
         { id: 'report-receivables', label: 'receivablesReport', href: '/reports/receivables', permission: 'reports.view', icon: 'people' },
         { id: 'report-payables', label: 'payablesReport', href: '/reports/payables', permission: 'reports.view', icon: 'people' },
-        { id: 'report-creditors', label: 'creditorsReport', href: '/reports/creditors', permission: 'reports.view', icon: 'people' },
         { id: 'report-invoice-settlements', label: 'invoiceSettlements', href: '/reports/invoice-settlements', permission: 'reports.view', icon: 'chart' },
     ] },
     { id: 'fleet', label: 'fleet', icon: 'truck', items: [

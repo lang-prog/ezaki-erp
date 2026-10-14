@@ -398,6 +398,28 @@
         "responses": {"200": {"$ref": "#/components/responses/Data"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/ValidationError"}}
       }
     },
+    "/receipts/{receipt}/details": {
+      "put": {
+        "tags": ["core"],
+        "operationId": "updateReceiptDetails",
+        "summary": "Edit descriptive fields (delivered by, received by, location, notes) of a posted receipt. Amount, date and accounts are immutable.",
+        "security": [{"bearerAuth": []}, {"sessionCookie": []}],
+        "parameters": [{"name": "receipt", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"$ref": "#/components/requestBodies/JsonObject"},
+        "responses": {"200": {"$ref": "#/components/responses/Data"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "404": {"description": "Receipt not found in this company."}, "422": {"$ref": "#/components/responses/ValidationError"}}
+      }
+    },
+    "/payment-vouchers/{voucher}/details": {
+      "put": {
+        "tags": ["core"],
+        "operationId": "updatePaymentVoucherDetails",
+        "summary": "Edit descriptive fields (paid by, received by, location, notes) of a posted payment voucher. Amount, date and accounts are immutable.",
+        "security": [{"bearerAuth": []}, {"sessionCookie": []}],
+        "parameters": [{"name": "voucher", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"$ref": "#/components/requestBodies/JsonObject"},
+        "responses": {"200": {"$ref": "#/components/responses/Data"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "404": {"description": "Voucher not found in this company."}, "422": {"$ref": "#/components/responses/ValidationError"}}
+      }
+    },
     "/receipts/{receipt}/reverse": {
       "post": {
         "tags": ["core"],

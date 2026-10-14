@@ -1,3 +1,5 @@
+import { accountingAr, accountingEn } from './i18n-accounting.js';
+
 const strings = {
     en: {
         sessionExpired: 'Your session expired. Refresh the page and sign in again.', permissionDenied: 'You do not have permission to complete this action.', requestInvalid: 'Some submitted data is invalid. Review the highlighted fields.', tooManyRequests: 'Too many requests. Wait a moment and try again.', serverError: 'The server could not complete the request. Try again later.', networkError: 'A network error prevented the request from completing.', confirmApproval: 'Approve this verified registration?',
@@ -112,6 +114,11 @@ const strings = {
         accessPageIntro: 'أدر المستخدمين والأدوار دون إظهار صلاحية لا تملكها.', usersTableHint: 'تظهر كل صلاحية مع القسم والإجراء وشرح مختصر عند الوقوف عليها.', createUserHint: 'أنشئ المستخدم، عيّن الأدوار، ثم أضف الصلاحيات المباشرة التي يحتاجها فقط.', customRoleHint: 'أنشئ دورًا قابلًا لإعادة الاستخدام لوظيفة محددة داخل الشركة.', permissionHelp: 'ضع المؤشر على الصلاحية لمعرفة وظيفتها. يظهر الكود للمرجعية التقنية.', directPermissions: 'صلاحيات مباشرة', directPermissionsHint: 'تُطبّق هذه الصلاحيات على المستخدم مباشرة بالإضافة إلى صلاحيات أدواره.', multiSelectHint: 'اضغط Ctrl أو Command لاختيار أكثر من دور.', ownerPermissionHint: 'يمكن للمالك مراجعة وتعديل صلاحياته، وتتم مزامنة الصلاحيات الجديدة تلقائيًا.', editUserHint: 'حدّث بيانات المستخدم وأدواره وصلاحياته المباشرة.', manageMyPermissions: 'إدارة صلاحياتي', active: 'نشط', disabled: 'معطل', receiptForCustomer: 'إيصال تحصيل من العميل', voucherForSupplier: 'سند دفعة للمورد', receiptModalHint: 'سجّل التحصيل دون مغادرة ملف العميل.', voucherModalHint: 'سجّل دفعة المورد دون مغادرة ملفه.', receiptDetails: 'تفاصيل إيصال القبض', voucherDetails: 'تفاصيل سند الصرف', backToAccounting: 'العودة إلى المحاسبة', documentNumber: 'رقم المستند', createdBy: 'أنشأه', deliveredBy: 'سلّمه', paidBy: 'دفعه', receivedBy: 'استلمه', location: 'الموقع', previewDocument: 'معاينة المستند', openFullDocument: 'فتح التفاصيل الكاملة', statementEmptyHint: 'لا توجد حركة مرحّلة لهذا الحساب في الفترة المحددة.', movementRows: 'عدد الحركات', inventoryPageIntro: 'أدر الأرصدة والبيانات الأساسية وتقارير الحركة من مساحة واحدة.', editableMasterDataHint: 'تُسجل التعديلات في سجل التدقيق وتظل محمية بعزل الشركة.', inventoryProfile: 'رصيد المخزون الافتتاحي', inventoryProfileHint: 'أنشئ تركيبة افتتاحية للصنف والنوع والقطر داخل المخزن.', editType: 'تعديل النوع', editDiameter: 'تعديل القطر', allTypes: 'كل الأنواع', allDiameters: 'كل الأقطار', salesByTypeDiameter: 'مبيعات حسب النوع والقطر', purchasesByTypeDiameter: 'مشتريات حسب النوع والقطر', productMovementReportHint: 'حلّل الحركات المعتمدة حسب نوع الصنف والقطر.', documentCount: 'المستندات', printBackground: 'خلفية طباعة A4', printBackgroundHint: 'نموذج شركة اختياري يظهر عند طباعة المستندات فقط.', printBackgroundFormats: 'المسموح: JPG وPNG وWEBP — بحد أقصى 5 ميجابايت.', printBackgroundPreview: 'معاينة خلفية الطباعة', uploadPrintBackground: 'رفع الخلفية', removePrintBackground: 'إزالة الخلفية الحالية', downloadDemoBackground: 'فتح الخلفية التجريبية',
     },
 };
+
+Object.assign(strings.en, accountingEn);
+Object.assign(strings.ar, accountingAr);
+
+export const catalog = strings;
 
 export function translate(locale, key) {
     return strings[locale]?.[key] ?? strings.en[key] ?? key;

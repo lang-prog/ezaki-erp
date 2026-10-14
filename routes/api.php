@@ -77,10 +77,12 @@ Route::prefix('v1')->group(function (): void {
         Route::middleware('can:accounting.view')->get('/receipts', [CoreErpController::class, 'receipts'])->middleware('throttle:api.read');
         Route::middleware('can:accounting.post')->post('/receipts', [CoreErpController::class, 'createReceipt'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.post')->post('/receipts/{receipt}/allocate', [CoreErpController::class, 'allocateReceipt'])->middleware('throttle:api.write');
+        Route::middleware('can:accounting.post')->put('/receipts/{receipt}/details', [CoreErpController::class, 'updateReceiptDetails'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.reverse')->post('/receipts/{receipt}/reverse', [CoreErpController::class, 'reverseReceipt'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.view')->get('/payment-vouchers', [CoreErpController::class, 'vouchers'])->middleware('throttle:api.read');
         Route::middleware('can:accounting.post')->post('/payment-vouchers', [CoreErpController::class, 'createVoucher'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.post')->post('/payment-vouchers/{voucher}/allocate', [CoreErpController::class, 'allocateVoucher'])->middleware('throttle:api.write');
+        Route::middleware('can:accounting.post')->put('/payment-vouchers/{voucher}/details', [CoreErpController::class, 'updateVoucherDetails'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.reverse')->post('/payment-vouchers/{voucher}/reverse', [CoreErpController::class, 'reverseVoucher'])->middleware('throttle:api.write');
         Route::middleware('can:accounting.view')->get('/journals', [CoreErpController::class, 'report'])->defaults('report', 'journal')->middleware('throttle:api.read');
         Route::middleware('can:accounting.view')->get('/reports/{report}', [CoreErpController::class, 'report'])->whereIn('report', ['account-statement', 'ledger', 'trial-balance', 'income-statement', 'balance-sheet', 'debtors', 'receivables', 'payables', 'creditors'])->middleware('throttle:api.reports');

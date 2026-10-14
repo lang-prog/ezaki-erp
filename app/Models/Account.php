@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Account extends Model
 {
-    protected $fillable = ['company_id', 'parent_id', 'code', 'name', 'account_type', 'system_key', 'is_system', 'is_active'];
+    protected $fillable = ['company_id', 'parent_id', 'code', 'name', 'name_ar', 'name_en', 'account_type', 'system_key', 'is_system', 'is_active'];
 
     protected function casts(): array
     {

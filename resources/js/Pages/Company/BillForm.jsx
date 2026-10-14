@@ -5,6 +5,9 @@ import { translate } from '../../i18n';
 import { csrfFetch } from '../../csrf';
 
 const number = (value) => Number(value || 0);
+// Compared as integers at three decimals so 0.1 + 0.2 never produces a false mismatch.
+const scaled = (value) => Math.round(number(value) * 1000);
+const isEntered = (value) => value !== '' && value !== null && value !== undefined;
 const dateInput = (value) => value ? String(value).slice(0, 10) : '';
 
 export default function BillForm({ type, document, branches, warehouses, parties, products = [], productTypes = [], diameters = [], vehicles = [], cashboxes = [], banks = [], accountingPolicy = {}, capabilities = {} }) {
@@ -17,8 +20,8 @@ export default function BillForm({ type, document, branches, warehouses, parties
         ? { product_id: '', product_type_id: '', diameter_id: '', factory_weight: '', actual_weight: '', packages: '', unit_price: '', notes: '' }
         : { product_id: '', product_type_id: '', diameter_id: '', actual_weight: '', packages: '', unit_price: '', notes: '' };
     const empty = purchase
-        ? { branch_id: '', warehouse_id: '', supplier_id: '', supplier_bill_number: '', supplier_bill_date: '', warehouse_entry_date: '', total_actual_weight: '', transport_cost: '', loading_cost: '', extra_cost: '', discount: '', payment_method: 'credit', paid_amount: '', cashbox_id: '', bank_id: '', due_date: '', vehicle_id: '', external_vehicle_plate: '', external_driver_name: '', notes: '', lines: [{ ...emptyLine }] }
-        : { branch_id: '', warehouse_id: '', customer_id: '', customer_bill_number: '', bill_date: '', transport_cost: '', loading_cost: '', extra_cost: '', discount: '', payment_method: 'cash', paid_amount: '', cashbox_id: '', bank_id: '', due_date: '', vehicle_id: '', external_vehicle_plate: '', external_driver_name: '', notes: '', lines: [{ ...emptyLine }] };
+        ? { branch_id: '', warehouse_id: '', supplier_id: '', supplier_bill_number: '', supplier_bill_date: '', warehouse_entry_date: '', total_factory_weight: '', total_packages: '', total_actual_weight: '', transport_cost: '', loading_cost: '', extra_cost: '', discount: '', payment_method: 'credit', paid_amount: '', cashbox_id: '', bank_id: '', due_date: '', vehicle_id: '', external_vehicle_plate: '', external_driver_name: '', notes: '', lines: [{ ...emptyLine }] }
+        : { branch_id: '', warehouse_id: '', customer_id: '', customer_bill_number: '', bill_date: '', total_actual_weight: '', total_packages: '', transport_cost: '', loading_cost: '', extra_cost: '', discount: '', payment_method: 'cash', paid_amount: '', cashbox_id: '', bank_id: '', due_date: '', vehicle_id: '', external_vehicle_plate: '', external_driver_name: '', notes: '', lines: [{ ...emptyLine }] };
     const [form, setForm] = useState(() => {
         if (!document) return { ...empty, lines: [{ ...emptyLine }] };
 
@@ -42,15 +45,32 @@ export default function BillForm({ type, document, branches, warehouses, parties
 
     const totals = useMemo(() => {
         const subtotal = form.lines.reduce((sum, line) => sum + number(purchase ? line.factory_weight : line.actual_weight) * number(line.unit_price), 0);
-        const factoryWeight = form.lines.reduce((sum, line) => sum + number(line.factory_weight), 0);
-        const actualWeight = form.lines.reduce((sum, line) => sum + number(line.actual_weight), 0);
-        const packages = form.lines.reduce((sum, line) => sum + number(line.packages), 0);
+        const scaledSum = (key) => form.lines.reduce((sum, line) => sum + scaled(line[key]), 0) / 1000;
+        const factoryWeight = scaledSum('factory_weight');
+        const actualWeight = scaledSum('actual_weight');
+        const packages = scaledSum('packages');
         const extras = number(form.transport_cost) + number(form.loading_cost) + number(form.extra_cost);
         const base = Math.max(0, subtotal - number(form.discount) + extras);
         const vatRate = accountingPolicy.vat_enabled ? number(accountingPolicy.vat_rate) : 0;
         const vat = base * vatRate / 100;
         return { subtotal, factoryWeight, actualWeight, packages, vatRate, vat, total: base + vat };
     }, [form, purchase, accountingPolicy]);
+
+    // Header totals are entered by the user and must equal the line sums (server re-checks authoritatively).
+    const headerFields = useMemo(() => {
+        const fields = purchase
+            ? [{ key: 'total_factory_weight', label: 'totalFactoryWeight', calculated: totals.factoryWeight, required: true }, { key: 'total_packages', label: 'totalPackages', calculated: totals.packages, required: true }, ...(usesActualPurchaseWeight ? [{ key: 'total_actual_weight', label: 'totalActualWeight', calculated: totals.actualWeight, required: true }] : [])]
+            : [{ key: 'total_actual_weight', label: 'totalActualWeight', calculated: totals.actualWeight, required: true }, { key: 'total_packages', label: 'totalPackages', calculated: totals.packages, required: false }];
+
+        return fields.map((field) => {
+            const value = form[field.key];
+            const entered = isEntered(value);
+            const matches = entered ? scaled(value) === scaled(field.calculated) : !field.required;
+
+            return { ...field, entered, matches };
+        });
+    }, [form, totals, purchase, usesActualPurchaseWeight]);
+    const headerMismatch = headerFields.some((field) => !field.matches);
 
     const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
     const setLine = (index, key, value) => setForm((current) => ({ ...current, lines: current.lines.map((line, lineIndex) => lineIndex === index ? { ...line, [key]: value } : line) }));
@@ -88,9 +108,9 @@ export default function BillForm({ type, document, branches, warehouses, parties
         return {
             ...form,
             lines,
-            total_factory_weight: purchase ? totals.factoryWeight : undefined,
-            total_actual_weight: purchase ? (usesActualPurchaseWeight ? totals.actualWeight : number(form.total_actual_weight)) : totals.actualWeight,
-            total_packages: purchase ? totals.packages : undefined,
+            total_factory_weight: purchase ? number(form.total_factory_weight) : undefined,
+            total_actual_weight: number(form.total_actual_weight),
+            total_packages: purchase ? number(form.total_packages) : (isEntered(form.total_packages) ? number(form.total_packages) : undefined),
             vat_rate: totals.vatRate,
         };
     }
@@ -107,6 +127,10 @@ export default function BillForm({ type, document, branches, warehouses, parties
 
     async function submit(event, approve = false) {
         event.preventDefault();
+        if (headerMismatch) {
+            setNotice({ type: 'error', message: t('totalsMismatchBlocked') });
+            return;
+        }
         const matches = await checkWarnings();
         if (matches.length && !window.confirm(text('عُثر على فواتير مشابهة. هل تريد المتابعة؟', 'Similar bills were found. Continue?'))) return;
         const revision = document?.status === 'approved';
@@ -167,6 +191,16 @@ export default function BillForm({ type, document, branches, warehouses, parties
                         <label className="field line-notes"><span>{text('ملاحظات السطر', 'Line notes')}</span><input value={line.notes ?? ''} onChange={(e) => setLine(index, 'notes', e.target.value)} /></label>
                         {form.lines.length > 1 && <button type="button" onClick={() => removeLine(index)} className="danger-link">{t('remove')}</button>}
                     </div></fieldset>)}</div>
+                    <fieldset className="header-totals" aria-describedby="header-totals-hint">
+                        <legend>{t('headerTotals')}</legend>
+                        <p id="header-totals-hint" className="permission-note">{t('headerTotalsHint')}</p>
+                        <div className="form-grid">{headerFields.map((field) => <div key={field.key} className={`field header-total ${field.matches ? 'is-valid' : 'is-invalid'}`}>
+                            <label htmlFor={`header-${field.key}`}><span>{t(field.label)}</span></label>
+                            <input id={`header-${field.key}`} required={field.required} type="number" min="0" step="0.001" inputMode="decimal" aria-invalid={!field.matches} aria-describedby={`header-${field.key}-status`} value={form[field.key] ?? ''} onChange={(e) => set(field.key, e.target.value)} />
+                            <small id={`header-${field.key}-status`} role={field.matches ? undefined : 'alert'}>{t('calculatedFromLines')}: <strong>{field.calculated.toFixed(3)}</strong> · {field.matches ? t('totalsMatch') : t('totalsMismatch')}</small>
+                            {!field.matches && <button type="button" className="erp-link-button" onClick={() => set(field.key, field.calculated.toFixed(3))}>{t('useCalculated')}</button>}
+                        </div>)}</div>
+                    </fieldset>
                 </section>
 
                 <section className="panel form-section"><div className="section-title"><span>03</span><div><h2>{text('التكاليف والدفع', 'Costs and payment')}</h2><p>{text('تُطبّق الضريبة من إعدادات الشركة ولا يمكن تجاوزها من الفاتورة.', 'VAT is enforced from company settings and cannot be overridden here.')}</p></div></div><div className="form-grid">
@@ -187,7 +221,7 @@ export default function BillForm({ type, document, branches, warehouses, parties
             <aside className="bill-summary panel"><h2>{text('ملخص الفاتورة', 'Bill summary')}</h2><dl><div><dt>{text('الإجمالي الفرعي', 'Subtotal')}</dt><dd>{totals.subtotal.toFixed(2)}</dd></div>{purchase && <div><dt>{t('totalFactoryWeight')}</dt><dd>{totals.factoryWeight.toFixed(3)}</dd></div>}<div><dt>{t('totalActualWeight')}</dt><dd>{(purchase && !usesActualPurchaseWeight ? number(form.total_actual_weight) : totals.actualWeight).toFixed(3)}</dd></div>{purchase && <div><dt>{t('totalPackages')}</dt><dd>{totals.packages.toFixed(3)}</dd></div>}<div><dt>{text('ضريبة القيمة المضافة', 'VAT')} ({totals.vatRate}%)</dt><dd>{totals.vat.toFixed(2)}</dd></div><div className="summary-total"><dt>{text('الإجمالي النهائي', 'Grand total')}</dt><dd>{totals.total.toFixed(2)} EGP</dd></div></dl>
                 {accountingPolicy.weight_policy_locked && <p className="summary-note">{text('سياسة الوزن مقفلة لحماية الأرصدة.', 'Weight policy is locked to protect balances.')}</p>}
                 {document?.status === 'approved' && <label className="field"><span>{t('revisionReason')}</span><textarea required rows="3" value={revisionReason} onChange={(e) => setRevisionReason(e.target.value)} /></label>}
-                <div className="bill-actions">{document?.status === 'approved' ? <>{capabilities[purchase ? 'purchases.update_approved' : 'sales.update_approved'] && <button disabled={processing} className="primary-button">{t('saveRevision')}</button>}{capabilities[purchase ? 'purchases.reverse' : 'sales.reverse'] && <button type="button" disabled={processing} onClick={reverse} className="danger-button">{t('reverse')}</button>}{id && <button type="button" disabled={processing} onClick={loadAllocation} className="secondary-button">{t('allocateExtras')}</button>}</> : <><button disabled={processing} className="secondary-button">{t('saveDraft')}</button>{capabilities[purchase ? 'purchases.approve' : 'sales.approve'] && <button disabled={processing} type="button" onClick={(event) => submit(event, true)} className="primary-button">{t('saveApprove')}</button>}{id && capabilities[purchase ? 'purchases.approve' : 'sales.approve'] && <button disabled={processing} type="button" onClick={approveDraft} className="primary-button">{t('approve')}</button>}</>}</div>
+                <div className="bill-actions">{document?.status === 'approved' ? <>{capabilities[purchase ? 'purchases.update_approved' : 'sales.update_approved'] && <button disabled={processing || headerMismatch} className="primary-button">{t('saveRevision')}</button>}{capabilities[purchase ? 'purchases.reverse' : 'sales.reverse'] && <button type="button" disabled={processing} onClick={reverse} className="danger-button">{t('reverse')}</button>}{id && <button type="button" disabled={processing} onClick={loadAllocation} className="secondary-button">{t('allocateExtras')}</button>}</> : <><button disabled={processing || headerMismatch} className="secondary-button">{t('saveDraft')}</button>{capabilities[purchase ? 'purchases.approve' : 'sales.approve'] && <button disabled={processing || headerMismatch} type="button" onClick={(event) => submit(event, true)} className="primary-button">{t('saveApprove')}</button>}{id && capabilities[purchase ? 'purchases.approve' : 'sales.approve'] && <button disabled={processing} type="button" onClick={approveDraft} className="primary-button">{t('approve')}</button>}</>}</div>
             </aside>
         </form>
         {allocation && <section className="panel allocation-panel"><h2>{t('allocationByTon')}</h2>{allocation.lines.map((line) => <p key={line.line_id}>{t('line')} {line.line_id}: {line.allocated_extra_cost} EGP</p>)}</section>}

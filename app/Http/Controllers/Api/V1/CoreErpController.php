@@ -31,6 +31,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class CoreErpController extends Controller
 {
@@ -321,10 +322,14 @@ class CoreErpController extends Controller
 
     public function createAccount(Request $request, AccountingFoundationService $foundation, AuditRecorder $audit): JsonResponse
     {
-        $data = $request->validate(['parent_id' => ['required', 'integer'], 'name' => ['required', 'string', 'max:255']]);
-        $parent = Account::query()->where('company_id', $this->company($request)->id)->findOrFail((int) $data['parent_id']);
+        $data = $request->validate(['parent_id' => ['required', 'integer'], 'name' => ['required_without:name_en', 'nullable', 'string', 'max:255'], 'name_ar' => ['nullable', 'string', 'max:255'], 'name_en' => ['nullable', 'string', 'max:255']]);
+        $company = $this->company($request);
+        $parent = Account::query()->where('company_id', $company->id)->findOrFail((int) $data['parent_id']);
+        $nameEn = $this->cleanName($data['name_en'] ?? $data['name'] ?? null);
+        $nameAr = $this->cleanName($data['name_ar'] ?? null);
+        $this->assertAccountNamesAvailable($company->id, null, $nameAr, $nameEn);
 
-        $account = $foundation->createChild($this->company($request), $parent, $data['name']);
+        $account = $foundation->createChild($company, $parent, $nameEn ?? (string) $nameAr, $nameAr, $nameEn);
         $audit->record('accounts.created', $account, $account->company_id, $request->user()->id, ['code' => $account->code], $request);
 
         return response()->json(['data' => $account], 201);
@@ -333,15 +338,49 @@ class CoreErpController extends Controller
     public function updateAccount(Request $request, Account $account, AuditRecorder $audit): JsonResponse
     {
         abort_unless((int) $account->company_id === (int) $this->company($request)->id, 404);
-        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'parent_id' => ['nullable', 'integer']]);
-        if (array_key_exists('parent_id', $data) && (int) $account->parent_id !== (int) $data['parent_id']) {
+        $data = $request->validate(['name' => ['nullable', 'string', 'max:255'], 'name_ar' => ['nullable', 'string', 'max:255'], 'name_en' => ['nullable', 'string', 'max:255'], 'parent_id' => ['nullable', 'integer']]);
+        $parentChanges = array_key_exists('parent_id', $data) && (int) $account->parent_id !== (int) $data['parent_id'];
+        if ($account->is_system && $parentChanges) {
+            throw ValidationException::withMessages(['parent_id' => 'System accounts keep their code, type and parent; only display names can be edited.']);
+        }
+        $nameEn = array_key_exists('name_en', $data) || array_key_exists('name', $data) ? $this->cleanName($data['name_en'] ?? $data['name'] ?? null) : $account->name_en;
+        $nameAr = array_key_exists('name_ar', $data) ? $this->cleanName($data['name_ar']) : $account->name_ar;
+        if ($nameEn === null && $nameAr === null) {
+            throw ValidationException::withMessages(['name_en' => 'At least one display name is required.']);
+        }
+        $this->assertAccountNamesAvailable((int) $account->company_id, (int) $account->id, $nameAr, $nameEn);
+        $before = ['name_ar' => $account->name_ar, 'name_en' => $account->name_en];
+        if ($parentChanges) {
             $parent = $data['parent_id'] === null ? null : Account::query()->where('company_id', $account->company_id)->findOrFail((int) $data['parent_id']);
             app(AccountingFoundationService::class)->moveAccount($this->company($request), $account, $parent);
         }
-        $account->forceFill(['name' => $data['name']])->save();
-        $audit->record('accounts.updated', $account, $account->company_id, $request->user()->id, ['code' => $account->code, 'parent_id' => $account->parent_id], $request);
+        $update = ['name_ar' => $nameAr, 'name_en' => $nameEn];
+        if (! $account->is_system) {
+            $update['name'] = $nameEn ?? (string) $nameAr;
+        }
+        $account->forceFill($update)->save();
+        $audit->record('accounts.updated', $account, $account->company_id, $request->user()->id, ['code' => $account->code, 'parent_id' => $account->parent_id, 'before' => $before, 'after' => ['name_ar' => $nameAr, 'name_en' => $nameEn]], $request);
 
-        return response()->json(['data' => $account]);
+        return response()->json(['data' => $account->fresh()]);
+    }
+
+    private function cleanName(?string $value): ?string
+    {
+        $value = trim(strip_tags((string) $value));
+
+        return $value === '' ? null : preg_replace('/\s+/u', ' ', $value);
+    }
+
+    private function assertAccountNamesAvailable(int $companyId, ?int $ignoreId, ?string $nameAr, ?string $nameEn): void
+    {
+        $others = Account::query()->where('company_id', $companyId)->when($ignoreId, fn ($query) => $query->whereKeyNot($ignoreId))->get(['name', 'name_ar', 'name_en']);
+        $same = fn (?string $a, ?string $b): bool => $a !== null && $b !== null && mb_strtolower($a) === mb_strtolower($b);
+        if ($nameAr !== null && $others->contains(fn ($row) => $same($nameAr, $row->name_ar))) {
+            throw ValidationException::withMessages(['name_ar' => 'Another account already uses this Arabic name.']);
+        }
+        if ($nameEn !== null && $others->contains(fn ($row) => $same($nameEn, $row->name_en) || $same($nameEn, $row->name))) {
+            throw ValidationException::withMessages(['name_en' => 'Another account already uses this English name.']);
+        }
     }
 
     public function cashboxes(Request $request): JsonResponse
@@ -378,7 +417,7 @@ class CoreErpController extends Controller
         $data = $request->validate([
             'counterparty_type' => ['nullable', 'in:customer,other'], 'party_id' => ['required_without:other_account_id', 'nullable', 'integer'], 'other_account_id' => ['required_if:counterparty_type,other', 'nullable', 'integer'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'bill_id' => ['nullable', 'integer'],
             'receipt_date' => ['required', 'date'], 'amount' => ['required', 'numeric', 'gt:0'], 'bill_id' => ['nullable', 'integer'],
-            'delivered_by' => ['nullable', 'string', 'max:255'], 'received_by' => ['nullable', 'string', 'max:255'],
+            'delivered_by' => ['nullable', 'string', 'max:255', 'regex:/^[^<>]*$/u'], 'received_by' => ['nullable', 'string', 'max:255', 'regex:/^[^<>]*$/u'],
             'location' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string', 'max:2000'],
         ]);
 
@@ -395,7 +434,7 @@ class CoreErpController extends Controller
         $data = $request->validate([
             'counterparty_type' => ['nullable', 'in:supplier,other'], 'party_id' => ['required_without:other_account_id', 'nullable', 'integer'], 'other_account_id' => ['required_if:counterparty_type,other', 'nullable', 'integer'], 'cashbox_id' => ['nullable', 'integer'], 'bank_id' => ['nullable', 'integer'], 'bill_id' => ['nullable', 'integer'],
             'voucher_date' => ['required', 'date'], 'amount' => ['required', 'numeric', 'gt:0'], 'bill_id' => ['nullable', 'integer'],
-            'paid_by' => ['nullable', 'string', 'max:255'], 'received_by' => ['nullable', 'string', 'max:255'],
+            'paid_by' => ['nullable', 'string', 'max:255', 'regex:/^[^<>]*$/u'], 'received_by' => ['nullable', 'string', 'max:255', 'regex:/^[^<>]*$/u'],
             'location' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string', 'max:2000'],
         ]);
 
@@ -446,6 +485,26 @@ class CoreErpController extends Controller
         $voucher = PaymentVoucher::query()->where('company_id', $company->id)->findOrFail($voucher->id);
 
         return response()->json(['data' => $allocations->allocateVoucher($company, $request->user(), $voucher, isset($data['bill_id']) ? (int) $data['bill_id'] : null)]);
+    }
+
+    public function updateReceiptDetails(Request $request, Receipt $receipt, AuditRecorder $audit): JsonResponse
+    {
+        $data = $request->validate(['delivered_by' => ['nullable', 'string', 'max:255', 'regex:/^[^<>]*$/u'], 'received_by' => ['nullable', 'string', 'max:255', 'regex:/^[^<>]*$/u'], 'location' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string', 'max:2000']]);
+        $receipt = Receipt::query()->where('company_id', $this->company($request)->id)->findOrFail($receipt->id);
+        $receipt->forceFill($data)->save();
+        $audit->record('receipts.details_updated', $receipt, $receipt->company_id, $request->user()->id, array_keys($data), $request);
+
+        return response()->json(['data' => $receipt->fresh()]);
+    }
+
+    public function updateVoucherDetails(Request $request, PaymentVoucher $voucher, AuditRecorder $audit): JsonResponse
+    {
+        $data = $request->validate(['paid_by' => ['nullable', 'string', 'max:255', 'regex:/^[^<>]*$/u'], 'received_by' => ['nullable', 'string', 'max:255', 'regex:/^[^<>]*$/u'], 'location' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string', 'max:2000']]);
+        $voucher = PaymentVoucher::query()->where('company_id', $this->company($request)->id)->findOrFail($voucher->id);
+        $voucher->forceFill($data)->save();
+        $audit->record('payment_vouchers.details_updated', $voucher, $voucher->company_id, $request->user()->id, array_keys($data), $request);
+
+        return response()->json(['data' => $voucher->fresh()]);
     }
 
     public function reverseReceipt(Request $request, Receipt $receipt, AccountingService $accounting): JsonResponse

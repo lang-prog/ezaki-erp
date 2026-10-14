@@ -132,6 +132,7 @@ class OperationsService
             }
             $this->assertBill($company, $bill, 'draft');
             $bill->load('lines', 'supplier');
+            $this->assertHeaderReconciles($company, $bill, true);
             $inventoryTotal = round((float) $bill->total - (float) $bill->vat_amount, 2);
             $allocated = 0.0;
             foreach ($bill->lines as $index => $line) {
@@ -163,6 +164,7 @@ class OperationsService
             }
             $this->assertBill($company, $bill, 'draft');
             $bill->load('lines', 'customer');
+            $this->assertHeaderReconciles($company, $bill, false);
             $cost = 0.0;
             foreach ($bill->lines as $line) {
                 $lineCost = $this->valuation->issue($company, $actor, $bill->warehouse_id, $line->product_id, (float) $line->actual_weight, SalesBill::class, $bill->id, 'sale_out');
@@ -539,6 +541,7 @@ class OperationsService
         return collect($lines)->map(function (array $line) use ($company, $usesActual): array {
             $product = $this->lineProduct($company, $line);
             $factory = (float) $line['factory_weight'];
+            throw_if($factory <= 0, ValidationException::withMessages(['lines' => 'Every purchase line needs a factory weight greater than zero.']));
             $actual = $usesActual ? (float) ($line['actual_weight'] ?? 0) : null;
             if ($usesActual && $actual <= 0) {
                 throw ValidationException::withMessages(['lines' => 'Actual weight is required for every purchase line under the selected company policy.']);
@@ -554,6 +557,7 @@ class OperationsService
         return collect($lines)->map(function (array $line) use ($company): array {
             $product = $this->lineProduct($company, $line);
             $weight = (float) $line['actual_weight'];
+            throw_if($weight <= 0, ValidationException::withMessages(['lines' => 'Every sales line needs a weight greater than zero.']));
             $price = (float) $line['unit_price'];
 
             return ['product_id' => $product->id, 'actual_weight' => $weight, 'packages' => isset($line['packages']) && $line['packages'] !== '' ? (float) $line['packages'] : null, 'unit_price' => $price, 'line_total' => round($weight * $price, 2), 'notes' => $line['notes'] ?? null];
@@ -563,10 +567,10 @@ class OperationsService
     private function purchaseTotals(Company $company, array $lines, array $data): array
     {
         $subtotal = round(array_sum(array_column($lines, 'line_total')), 2);
-        $this->match($data, 'total_factory_weight', array_sum(array_column($lines, 'factory_weight')));
-        $this->match($data, 'total_packages', array_sum(array_column($lines, 'packages')));
+        $this->match($data, 'total_factory_weight', array_column($lines, 'factory_weight'));
+        $this->match($data, 'total_packages', array_column($lines, 'packages'));
         if ($this->policies->purchaseInventoryBasis($company) === CompanyAccountingPolicyService::ACTUAL_WEIGHT) {
-            $this->match($data, 'total_actual_weight', array_sum(array_column($lines, 'actual_weight')));
+            $this->match($data, 'total_actual_weight', array_column($lines, 'actual_weight'));
         }
 
         return $this->totals($company, $data, $subtotal) + ['total_factory_weight' => (float) $data['total_factory_weight'], 'total_actual_weight' => isset($data['total_actual_weight']) ? (float) $data['total_actual_weight'] : null, 'total_packages' => (float) $data['total_packages']];
@@ -575,9 +579,14 @@ class OperationsService
     private function salesTotals(Company $company, array $lines, array $data): array
     {
         $subtotal = round(array_sum(array_column($lines, 'line_total')), 2);
-        $this->match($data, 'total_actual_weight', array_sum(array_column($lines, 'actual_weight')));
+        $this->match($data, 'total_actual_weight', array_column($lines, 'actual_weight'));
+        $packages = array_column($lines, 'packages');
+        $hasHeaderPackages = isset($data['total_packages']) && $data['total_packages'] !== '';
+        if ($hasHeaderPackages) {
+            $this->match($data, 'total_packages', $packages);
+        }
 
-        return $this->totals($company, $data, $subtotal) + ['total_actual_weight' => (float) $data['total_actual_weight']];
+        return $this->totals($company, $data, $subtotal) + ['total_actual_weight' => (float) $data['total_actual_weight'], 'total_packages' => $hasHeaderPackages ? (float) $data['total_packages'] : $this->fromScaled($this->sumScaled($packages))];
     }
 
     private function totals(Company $company, array $data, float $subtotal): array
@@ -591,9 +600,53 @@ class OperationsService
         return ['subtotal' => $subtotal, 'discount' => $discount, 'transport_cost' => (float) ($data['transport_cost'] ?? 0), 'loading_cost' => (float) ($data['loading_cost'] ?? 0), 'extra_cost' => (float) ($data['extra_cost'] ?? 0), 'vat_rate' => $vatRate > 0 ? $vatRate : null, 'vat_amount' => $vat, 'total' => round($base + $vat, 2)];
     }
 
-    private function match(array $data, string $field, float $expected): void
+    /** Compares at three decimals using integers, never float equality. */
+    private function match(array $data, string $field, array $lineValues): void
     {
-        throw_if(abs((float) ($data[$field] ?? 0) - $expected) > 0.001, ValidationException::withMessages([$field => 'Header total does not match line totals.']));
+        $expected = $this->sumScaled($lineValues);
+        $entered = $this->scaled($data[$field] ?? 0);
+        throw_if($entered !== $expected, ValidationException::withMessages([$field => sprintf('Header total does not match the lines: calculated %s, entered %s.', number_format($this->fromScaled($expected), 3, '.', ''), number_format($this->fromScaled($entered), 3, '.', ''))]));
+    }
+
+    private function scaled(mixed $value): int
+    {
+        return (int) round(((float) $value) * 1000);
+    }
+
+    private function sumScaled(array $values): int
+    {
+        return array_sum(array_map(fn ($value): int => $this->scaled($value), $values));
+    }
+
+    private function fromScaled(int $value): float
+    {
+        return $value / 1000;
+    }
+
+    private function assertHeaderReconciles(Company $company, mixed $bill, bool $purchase): void
+    {
+        $lines = $bill->lines;
+        $errors = [];
+        $check = function (string $field, mixed $header, iterable $values) use (&$errors): void {
+            $expected = $this->sumScaled(collect($values)->all());
+            $entered = $this->scaled($header);
+            if ($expected !== $entered) {
+                $errors[$field] = sprintf('Header total does not match the lines: calculated %s, entered %s.', number_format($this->fromScaled($expected), 3, '.', ''), number_format($this->fromScaled($entered), 3, '.', ''));
+            }
+        };
+        if ($purchase) {
+            $check('total_factory_weight', $bill->total_factory_weight, $lines->pluck('factory_weight'));
+            $check('total_packages', $bill->total_packages, $lines->pluck('packages'));
+            if ($this->policies->purchaseInventoryBasis($company) === CompanyAccountingPolicyService::ACTUAL_WEIGHT) {
+                $check('total_actual_weight', $bill->total_actual_weight, $lines->pluck('actual_weight'));
+            }
+        } else {
+            $check('total_actual_weight', $bill->total_actual_weight, $lines->pluck('actual_weight'));
+            if ($bill->total_packages !== null) {
+                $check('total_packages', $bill->total_packages, $lines->pluck('packages'));
+            }
+        }
+        throw_if($errors !== [], ValidationException::withMessages($errors));
     }
 
     private function duplicateCheck(Company $company, string $type, array $data, mixed $ignore): void

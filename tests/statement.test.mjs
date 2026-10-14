@@ -4,6 +4,7 @@ import test from 'node:test';
 import { translate } from '../resources/js/i18n.js';
 
 const statementSource = readFileSync(new URL('../resources/js/Pages/Company/AccountingReport.jsx', import.meta.url), 'utf8');
+const modalShellSource = readFileSync(new URL('../resources/js/Components/ModalShell.jsx', import.meta.url), 'utf8');
 
 test('statement renders opening balance and metrics in summary KPI cards separately from table rows', () => {
     assert.match(statementSource, /className="statement-kpis"/);
@@ -110,12 +111,13 @@ const css = readFileSync(new URL('../resources/css/navigation.css', import.meta.
 const rule = (selector) => css.match(new RegExp(`${selector.replace(/[.[\]]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[1] ?? '';
 
 test('both preview modals share one shell with header, scrolling body and footer regions', () => {
-    assert.match(statementSource, /function ModalShell/);
+    assert.match(modalShellSource, /export default function ModalShell/);
+    assert.match(statementSource, /import ModalShell from '\.\.\/\.\.\/Components\/ModalShell'/);
     assert.equal((statementSource.match(/<ModalShell/g) || []).length, 2);
-    assert.match(statementSource, /className="statement-modal-body"/);
-    assert.match(statementSource, /className="modal-footer statement-modal-footer"/);
-    assert.match(statementSource, /aria-modal="true" aria-labelledby=\{titleId\}/);
-    assert.match(statementSource, /aria-label=\{closeLabel\}/);
+    assert.match(modalShellSource, /className="statement-modal-body"/);
+    assert.match(modalShellSource, /className="modal-footer statement-modal-footer"/);
+    assert.match(modalShellSource, /aria-modal="true" aria-labelledby=\{titleId\}/);
+    assert.match(modalShellSource, /aria-label=\{closeLabel\}/);
 });
 
 test('dialog shell is viewport constrained and only the body scrolls', () => {
@@ -145,11 +147,11 @@ test('layout uses logical properties only so RTL and LTR do not reverse actions'
 });
 
 test('escape, focus restore and background scroll lock are handled by the shell', () => {
-    assert.match(statementSource, /event\.key === 'Escape'/);
-    assert.match(statementSource, /body\.style\.overflow = 'hidden'/);
-    assert.match(statementSource, /trigger\.focus\(\)/);
-    assert.match(statementSource, /event\.target === event\.currentTarget && onClose\(\)/);
-    assert.match(statementSource, /onMouseDown=\{\(event\) => event\.stopPropagation\(\)\}/);
+    assert.match(modalShellSource, /event\.key === 'Escape'/);
+    assert.match(modalShellSource, /body\.style\.overflow = 'hidden'/);
+    assert.match(modalShellSource, /trigger\.focus\(\)/);
+    assert.match(modalShellSource, /event\.target === event\.currentTarget && onClose\(\)/);
+    assert.match(modalShellSource, /onMouseDown=\{\(event\) => event\.stopPropagation\(\)\}/);
 });
 
 test('full view and print buttons use the document own routes and stay hidden without permission', () => {

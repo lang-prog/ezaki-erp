@@ -29,7 +29,10 @@ use App\Services\AccountingReportService;
 use App\Services\CompanyAccountingPolicyService;
 use App\Services\FleetReportService;
 use App\Services\InventoryService;
+use App\Services\InvoiceSettlementService;
 use App\Services\PaymentAllocationService;
+use App\Support\SystemAccountCatalog;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -184,63 +187,160 @@ class CoreErpPageController extends Controller
         ]);
     }
 
-    public function accounting(Request $request, AccountingFoundationService $foundation, PaymentAllocationService $allocations): Response
+    public function accounting(Request $request): Response
+    {
+        $companyId = (int) $request->attributes->get('company')->id;
+
+        return Inertia::render('Company/Accounting', [
+            'stats' => [
+                'accounts' => Account::query()->where('company_id', $companyId)->count(),
+                'cashboxes' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->count(),
+                'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->count(),
+                'open_periods' => FiscalPeriod::query()->where('company_id', $companyId)->where('status', 'open')->count(),
+                'receipts' => Receipt::query()->where('company_id', $companyId)->count(),
+                'vouchers' => PaymentVoucher::query()->where('company_id', $companyId)->count(),
+            ],
+            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.create', 'accounting.post', 'reports.view']),
+        ]);
+    }
+
+    public function chartOfAccounts(Request $request): Response
+    {
+        $companyId = (int) $request->attributes->get('company')->id;
+
+        return Inertia::render('Company/ChartOfAccounts', [
+            'accounts' => Account::query()->where('company_id', $companyId)->orderBy('code')->get(['id', 'parent_id', 'code', 'name', 'name_ar', 'name_en', 'account_type', 'system_key', 'is_system', 'is_active'])
+                ->map(fn (Account $account): array => $account->toArray() + ['description' => SystemAccountCatalog::forCode((string) $account->code)]),
+            'capabilities' => $this->capabilities($request, ['accounting.create', 'reports.view']),
+        ]);
+    }
+
+    public function fiscalPeriods(Request $request): Response
+    {
+        $companyId = (int) $request->attributes->get('company')->id;
+
+        return Inertia::render('Company/FiscalPeriods', [
+            'periods' => FiscalPeriod::query()->where('company_id', $companyId)->orderByDesc('starts_on')->get(),
+            'capabilities' => $this->capabilities($request, ['accounting.create', 'accounting.close_period']),
+        ]);
+    }
+
+    public function cashboxes(Request $request): Response
+    {
+        $companyId = (int) $request->attributes->get('company')->id;
+
+        return Inertia::render('Company/Cashboxes', [
+            'cashboxes' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->with('account:id,code')->orderBy('name')->get(),
+            'capabilities' => $this->capabilities($request, ['accounting.create']),
+        ]);
+    }
+
+    public function banks(Request $request): Response
+    {
+        $companyId = (int) $request->attributes->get('company')->id;
+
+        return Inertia::render('Company/Banks', [
+            'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->with('account:id,code')->orderBy('name')->get(),
+            'capabilities' => $this->capabilities($request, ['accounting.create']),
+        ]);
+    }
+
+    public function receiptsList(Request $request, PaymentAllocationService $allocations): Response
+    {
+        return $this->moneyList($request, 'receipt', $allocations);
+    }
+
+    public function paymentVouchersList(Request $request, PaymentAllocationService $allocations): Response
+    {
+        return $this->moneyList($request, 'voucher', $allocations);
+    }
+
+    public function exportReceipts(Request $request): StreamedResponse
+    {
+        return $this->exportMoney($request, 'receipt');
+    }
+
+    public function exportVouchers(Request $request): StreamedResponse
+    {
+        return $this->exportMoney($request, 'voucher');
+    }
+
+    private function moneyQuery(Request $request, string $kind)
+    {
+        $filters = $request->validate(['q' => ['nullable', 'string', 'max:100'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'status' => ['nullable', 'in:posted,reversed']]);
+        $receipt = $kind === 'receipt';
+        $model = $receipt ? Receipt::class : PaymentVoucher::class;
+        $number = $receipt ? 'receipt_number' : 'voucher_number';
+        $date = $receipt ? 'receipt_date' : 'voucher_date';
+        $term = isset($filters['q']) ? addcslashes((string) $filters['q'], '%_\\') : null;
+
+        return $model::query()->where('company_id', (int) $request->attributes->get('company')->id)
+            ->with(['party:id,name', 'otherAccount:id,code,name,name_ar,name_en', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])
+            ->when($term, fn ($query) => $query->where(fn ($inner) => $inner->where($number, 'like', "%{$term}%")->orWhereHas('party', fn ($party) => $party->where('name', 'like', "%{$term}%"))->orWhereHas('otherAccount', fn ($account) => $account->where('name', 'like', "%{$term}%")->orWhere('name_ar', 'like', "%{$term}%")->orWhere('code', 'like', "%{$term}%"))))
+            ->when($filters['from'] ?? null, fn ($query, $value) => $query->whereDate($date, '>=', $value))
+            ->when($filters['to'] ?? null, fn ($query, $value) => $query->whereDate($date, '<=', $value))
+            ->when($filters['status'] ?? null, fn ($query, $value) => $query->where('status', $value))
+            ->orderByDesc($date)->orderByDesc('id');
+    }
+
+    private function moneyList(Request $request, string $kind, PaymentAllocationService $allocations): Response
     {
         $company = $request->attributes->get('company');
         $companyId = (int) $company->id;
+        $receipt = $kind === 'receipt';
+        $canPost = $request->user()->can('accounting.post');
+        $filters = $request->only(['q', 'from', 'to', 'status']);
 
-        return Inertia::render('Company/Accounting', [
-            'accounts' => Account::query()->where('company_id', $companyId)->with('parent:id,code,name')->orderBy('code')->get(),
-            'cashboxes' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->with('account:id,code')->get(),
-            'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->with('account:id,code')->get(),
-            'periods' => FiscalPeriod::query()->where('company_id', $companyId)->orderByDesc('starts_on')->get(),
-            'parties' => CustomerSupplier::query()->where('company_id', $companyId)->where('status', 'active')->orderBy('name')->get(['id', 'name', 'is_customer', 'is_supplier']),
-            'receivableBills' => $allocations->openInvoices($company, 'sales'),
-            'payableBills' => $allocations->openInvoices($company, 'purchase'),
-            'receipts' => DB::table('receipts')->where('company_id', $companyId)->orderByDesc('receipt_date')->limit(20)->get(),
-            'vouchers' => DB::table('payment_vouchers')->where('company_id', $companyId)->orderByDesc('voucher_date')->limit(20)->get(),
-            'capabilities' => $this->capabilities($request, ['accounting.create', 'accounting.post', 'accounting.close_period', 'accounting.reverse']),
-        ]);
-    }
-
-    public function receiptsList(Request $request): Response
-    {
-        $companyId = (int) $request->attributes->get('company')->id;
-
-        return Inertia::render('Company/ReceiptsList', [
-            'documents' => Receipt::query()->where('company_id', $companyId)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->orderByDesc('receipt_date')->orderByDesc('id')->paginate(25),
+        return Inertia::render($receipt ? 'Company/ReceiptsList' : 'Company/PaymentVouchersList', [
+            'documents' => $this->moneyQuery($request, $kind)->paginate(25)->withQueryString(),
+            'filters' => $filters,
+            'form' => $canPost ? [
+                'parties' => CustomerSupplier::query()->where('company_id', $companyId)->where('status', 'active')->where($receipt ? 'is_customer' : 'is_supplier', true)->orderBy('name')->get(['id', 'name']),
+                'accounts' => Account::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('code')->get(['id', 'parent_id', 'code', 'name', 'name_ar', 'name_en']),
+                'cashboxes' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name', 'account_id']),
+                'banks' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name', 'account_id']),
+                'invoices' => $allocations->openInvoices($company, $receipt ? 'sales' : 'purchase'),
+            ] : null,
             'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.post', 'accounting.reverse']),
         ]);
     }
 
-    public function paymentVouchersList(Request $request): Response
+    private function exportMoney(Request $request, string $kind): StreamedResponse
     {
-        $companyId = (int) $request->attributes->get('company')->id;
+        $receipt = $kind === 'receipt';
+        $rows = $this->moneyQuery($request, $kind)->limit(5000)->get();
+        $arabic = app()->getLocale() === 'ar';
 
-        return Inertia::render('Company/PaymentVouchersList', [
-            'documents' => PaymentVoucher::query()->where('company_id', $companyId)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->orderByDesc('voucher_date')->orderByDesc('id')->paginate(25),
-            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.post', 'accounting.reverse']),
-        ]);
+        return response()->streamDownload(function () use ($rows, $receipt, $arabic): void {
+            $output = fopen('php://output', 'wb');
+            fputcsv($output, [$arabic ? 'الرقم' : 'Number', $arabic ? 'التاريخ' : 'Date', $arabic ? 'الطرف / الحساب' : 'Counterparty / Account', $arabic ? 'المبلغ' : 'Amount', $arabic ? 'الحالة' : 'Status', $receipt ? ($arabic ? 'سلّم بواسطة' : 'Delivered by') : ($arabic ? 'دفع بواسطة' : 'Paid by'), $arabic ? 'استلم بواسطة' : 'Received by']);
+            foreach ($rows as $row) {
+                $account = $row->otherAccount ? $row->otherAccount->code.' · '.($arabic ? ($row->otherAccount->name_ar ?: $row->otherAccount->name) : ($row->otherAccount->name_en ?: $row->otherAccount->name)) : null;
+                fputcsv($output, [$receipt ? $row->receipt_number : $row->voucher_number, ($receipt ? $row->receipt_date : $row->voucher_date)?->toDateString(), $row->party?->name ?? $account ?? '', $row->amount, $row->status, $receipt ? $row->delivered_by : $row->paid_by, $row->received_by]);
+            }
+            fclose($output);
+        }, ($receipt ? 'receipts' : 'payment-vouchers').'.csv', ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 
-    public function invoiceSettlementReport(Request $request, PaymentAllocationService $allocations, AccountingReportService $reports): Response
+    public function invoiceSettlementReport(Request $request, InvoiceSettlementService $settlements): Response
     {
         $company = $request->attributes->get('company');
-        $from = $request->query('from', now()->startOfMonth()->toDateString());
-        $to = $request->query('to', now()->endOfMonth()->toDateString());
-        $customerSummary = $reports->receivables($company, 0, $from, $to);
-        $supplierSummary = $reports->payables($company, 0, $from, $to);
+        $filters = $request->validate([
+            'tab' => ['nullable', 'in:receivables,payables'], 'party_id' => ['nullable', 'integer'], 'q' => ['nullable', 'string', 'max:100'],
+            'from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'due_from' => ['nullable', 'date'], 'due_to' => ['nullable', 'date'],
+            'state' => ['nullable', 'in:all,unpaid,partial,paid,overdue,reversed'], 'overdue_only' => ['nullable', 'boolean'], 'branch_id' => ['nullable', 'integer'], 'as_of' => ['nullable', 'date'],
+        ]);
+        $tab = $filters['tab'] ?? 'receivables';
+        $kind = $tab === 'payables' ? 'purchase' : 'sales';
+        $companyId = (int) $company->id;
 
         return Inertia::render('Company/InvoiceSettlementReport', [
-            'from' => $from,
-            'to' => $to,
-            'customerRows' => $customerSummary['rows'],
-            'supplierRows' => $supplierSummary['rows'],
-            'customerTotal' => $customerSummary['total_outstanding'] ?? 0,
-            'supplierTotal' => $supplierSummary['total_outstanding'] ?? 0,
-            'openSales' => $allocations->openInvoices($company, 'sales'),
-            'openPurchases' => $allocations->openInvoices($company, 'purchase'),
-            'capabilities' => $this->capabilities($request, ['reports.view', 'accounting.view']),
+            'tab' => $tab,
+            'filters' => $filters,
+            'report' => $settlements->report($company, $kind, $filters),
+            'parties' => CustomerSupplier::query()->where('company_id', $companyId)->where($kind === 'sales' ? 'is_customer' : 'is_supplier', true)->orderBy('name')->get(['id', 'name']),
+            'branches' => Branch::query()->where('company_id', $companyId)->whereNull('archived_at')->orderBy('name')->get(['id', 'name']),
+            'capabilities' => $this->capabilities($request, ['reports.view', 'accounting.view', 'sales.view', 'sales.print', 'purchases.view', 'purchases.print']),
         ]);
     }
 
@@ -252,8 +352,12 @@ class CoreErpPageController extends Controller
         return Inertia::render('Company/AccountingSettings', ['policy' => $policies->get($company)]);
     }
 
-    public function report(Request $request, AccountingReportService $reports, string $report): Response
+    public function report(Request $request, AccountingReportService $reports, string $report): Response|RedirectResponse
     {
+        // Creditors and payables were the same calculation; one canonical page remains.
+        if ($report === 'creditors') {
+            return redirect()->route('company.accounting.report', ['report' => 'payables'] + $request->query(), 301);
+        }
         $company = $request->attributes->get('company');
         $range = $request->validate(['from_date' => ['nullable', 'date'], 'to_date' => ['nullable', 'date'], 'from' => ['nullable', 'date'], 'to' => ['nullable', 'date'], 'account_id' => ['nullable', 'integer', 'min:1']]);
         $from = $range['from_date'] ?? $range['from'] ?? null;
@@ -424,13 +528,22 @@ class CoreErpPageController extends Controller
         abort_unless(in_array($kind, ['receipt', 'voucher'], true), 404);
         $companyId = (int) $request->attributes->get('company')->id;
         $model = $kind === 'receipt' ? Receipt::class : PaymentVoucher::class;
-        $query = $model::query()->where('company_id', $companyId)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name']);
+        $query = $model::query()->where('company_id', $companyId)->with(['party:id,name', 'otherAccount:id,code,name,name_ar,name_en', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name']);
         $record = $query->findOrFail((int) $document);
+        $paymentType = $kind === 'receipt' ? 'receipt' : 'voucher';
+        $billTable = $kind === 'receipt' ? 'sales_bills' : 'purchase_bills';
+        $allocations = DB::table('party_payment_allocations as allocations')
+            ->join($billTable.' as bills', fn ($join) => $join->on('bills.id', '=', 'allocations.bill_id')->on('bills.company_id', '=', 'allocations.company_id'))
+            ->where('allocations.company_id', $companyId)->where('allocations.payment_type', $paymentType)->where('allocations.payment_id', $record->id)
+            ->orderBy('allocations.id')
+            ->get(['allocations.bill_id', 'allocations.amount', 'allocations.status', 'allocations.reversal_reason', 'bills.internal_number as invoice_number'])
+            ->map(fn ($row): array => ['invoice_number' => $row->invoice_number, 'amount' => round((float) $row->amount, 2), 'status' => $row->status, 'reversal_reason' => $row->reversal_reason, 'view_url' => route($kind === 'receipt' ? 'company.sales.show' : 'company.purchase.show', ['bill' => $row->bill_id])]);
 
         return Inertia::render('Company/MoneyDocumentView', [
             'kind' => $kind,
             'document' => $record,
-            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.reverse']),
+            'allocations' => $allocations,
+            'capabilities' => $this->capabilities($request, ['accounting.view', 'accounting.post', 'accounting.reverse', $kind === 'receipt' ? 'sales.view' : 'purchases.view']),
         ]);
     }
 
@@ -449,7 +562,7 @@ class CoreErpPageController extends Controller
         abort_unless(in_array($kind, ['receipt', 'voucher'], true), 404);
         $company = $request->attributes->get('company');
         $model = $kind === 'receipt' ? Receipt::class : PaymentVoucher::class;
-        $record = $model::query()->where('company_id', $company->id)->with(['party:id,name', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->findOrFail((int) $document);
+        $record = $model::query()->where('company_id', $company->id)->with(['party:id,name', 'otherAccount:id,code,name,name_ar,name_en', 'cashbox:id,name', 'bank:id,name', 'createdBy:id,name'])->findOrFail((int) $document);
 
         return response()->view('operations.money-document-print', ['kind' => $kind, 'document' => $record, 'company' => $company, 'locale' => app()->getLocale(), 'printBackgroundUrl' => $company->print_background_path ? Storage::disk('public')->url($company->print_background_path) : null]);
     }

@@ -35,4 +35,9 @@ class Receipt extends Model
     {
         return $this->belongsTo(Bank::class);
     }
+
+    public function otherAccount(): BelongsTo
+    {
+        return $this->belongsTo(Account::class, 'other_account_id');
+    }
 }

@@ -8,6 +8,7 @@ use App\Models\Account;
 use App\Models\Company;
 use App\Models\FiscalPeriod;
 use App\Models\User;
+use App\Support\SystemAccountCatalog;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
@@ -78,6 +79,26 @@ class AccountingFoundationService
                 ['company_id' => $company->id, 'name' => (string) $year],
                 ['starts_on' => "$year-01-01", 'ends_on' => "$year-12-31", 'status' => 'open'],
             );
+
+            $this->fillSystemNames($company);
+        });
+    }
+
+    // Fills blanks only, so provisioning is idempotent and never overwrites a company's own display names.
+    public function fillSystemNames(Company $company): void
+    {
+        Account::query()->where('company_id', $company->id)->where('is_system', true)->get()->each(function (Account $account): void {
+            $labels = SystemAccountCatalog::forCode((string) $account->code);
+            $update = [];
+            if ($account->name_en === null) {
+                $update['name_en'] = $account->name;
+            }
+            if ($account->name_ar === null && $labels) {
+                $update['name_ar'] = $labels['ar'];
+            }
+            if ($update) {
+                $account->forceFill($update)->save();
+            }
         });
     }
 
@@ -105,9 +126,9 @@ class AccountingFoundationService
         return $parent->code.'.'.($lastSuffix + 1);
     }
 
-    public function createChild(Company $company, Account $parent, string $name): Account
+    public function createChild(Company $company, Account $parent, string $name, ?string $nameAr = null, ?string $nameEn = null): Account
     {
-        return DB::transaction(function () use ($company, $parent, $name): Account {
+        return DB::transaction(function () use ($company, $parent, $name, $nameAr, $nameEn): Account {
             $parent = Account::query()->where('company_id', $company->id)->lockForUpdate()->findOrFail($parent->id);
             $code = $this->nextChildCode($company, $parent);
 
@@ -116,6 +137,8 @@ class AccountingFoundationService
                 'parent_id' => $parent->id,
                 'code' => $code,
                 'name' => $name,
+                'name_ar' => $nameAr,
+                'name_en' => $nameEn ?? $name,
                 'account_type' => $parent->account_type,
                 'is_system' => false,
                 'is_active' => true,
