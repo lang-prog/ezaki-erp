@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Company;
 use App\Models\LocalLicense;
 use App\Models\LocalLicenseAudit;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class LocalLicenseService
@@ -72,7 +73,10 @@ class LocalLicenseService
         abort_unless(hash_equals($customer, (string) ($claims['customer_binding'] ?? '')), 402, 'Local license signed customer binding is invalid.');
         abort_unless((int) ($claims['company_id'] ?? 0) === (int) $company->id && (int) $license->company_id === (int) $company->id, 402, 'Local license company binding is invalid.');
         $this->assertNotExpired($claims);
-        $license->forceFill(['last_verified_at' => now()])->save();
+        $interval = max(0, (int) config('security.license.verify_write_interval_minutes', 10));
+        if ($license->last_verified_at === null || $license->last_verified_at->lt(now()->subMinutes($interval))) {
+            $license->forceFill(['last_verified_at' => now()])->save();
+        }
 
         return $license;
     }
@@ -191,7 +195,13 @@ class LocalLicenseService
     private function assertNotExpired(array $claims): void
     {
         if (isset($claims['expires_at'])) {
-            abort_unless(now()->lessThanOrEqualTo($claims['expires_at']), 402, 'Local license has expired.');
+            try {
+                $expires = Carbon::parse((string) $claims['expires_at']);
+            } catch (\Throwable) {
+                // Fail closed on a malformed expiry instead of surfacing a 500.
+                abort(402, __('platform.license_expiry_invalid'));
+            }
+            abort_unless(now()->lessThanOrEqualTo($expires), 402, 'Local license has expired.');
         }
     }
 

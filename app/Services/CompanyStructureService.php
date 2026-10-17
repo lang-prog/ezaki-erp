@@ -18,7 +18,7 @@ class CompanyStructureService
     public function createBranch(Company $company, User $actor, array $data): Branch
     {
         return DB::transaction(function () use ($company, $actor, $data): Branch {
-            $subscription = $company->subscriptions()->latest('starts_at')->firstOrFail();
+            $subscription = $company->subscriptions()->current()->firstOrFail();
             $subscription = $this->limits->lockAndAssertCanAdd($company, $subscription->id, 'branches');
             $this->limits->assertCanAdd($company, $subscription, 'warehouses');
 

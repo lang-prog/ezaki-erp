@@ -1,10 +1,15 @@
 <?php
 
+use App\Http\Middleware\AssignRequestId;
 use App\Http\Middleware\CheckAccountType;
 use App\Http\Middleware\CheckSubscriptionStatus;
 use App\Http\Middleware\EnsureLocalLicense;
 use App\Http\Middleware\EnsureSessionVersion;
 use App\Http\Middleware\HandleInertiaRequests;
+use App\Http\Middleware\PlatformCan;
+use App\Http\Middleware\PlatformMfa;
+use App\Http\Middleware\PlatformStepUp;
+use App\Http\Middleware\RequireCompanyApiAbility;
 use App\Http\Middleware\ScopeSessionCookie;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\SetLocale;
@@ -13,6 +18,8 @@ use App\Http\Middleware\TrustProxies;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Laravel\Sanctum\Http\Middleware\CheckAbilities;
+use Laravel\Sanctum\Http\Middleware\CheckForAnyAbility;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -24,14 +31,20 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
-        $middleware->web(prepend: [TrustProxies::class, ScopeSessionCookie::class], append: [SetLocale::class, HandleInertiaRequests::class]);
-        $middleware->api(prepend: [TrustProxies::class, ScopeSessionCookie::class]);
+        $middleware->web(prepend: [TrustProxies::class, AssignRequestId::class, ScopeSessionCookie::class], append: [SetLocale::class, HandleInertiaRequests::class]);
+        $middleware->api(prepend: [TrustProxies::class, AssignRequestId::class, ScopeSessionCookie::class]);
         $middleware->alias([
             'account.type' => CheckAccountType::class,
             'tenant' => SetTenantContext::class,
             'subscription' => CheckSubscriptionStatus::class,
             'local.license' => EnsureLocalLicense::class,
             'session.version' => EnsureSessionVersion::class,
+            'platform.can' => PlatformCan::class,
+            'platform.mfa' => PlatformMfa::class,
+            'platform.stepup' => PlatformStepUp::class,
+            'abilities' => CheckAbilities::class,
+            'company.api' => RequireCompanyApiAbility::class,
+            'ability' => CheckForAnyAbility::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

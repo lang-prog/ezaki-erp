@@ -34,7 +34,20 @@ class SubscriptionLifecycle
 
     public function currentFor(Company $company): ?Subscription
     {
-        return $company->subscriptions()->with('plan')->latest('starts_at')->first();
+        return $company->subscriptions()->with('plan')->current()->first();
+    }
+
+    /**
+     * Effective access state. Administrative company suspension/archival always wins, so no edition or
+     * subscription date can bypass it; otherwise the subscription dates/status decide.
+     */
+    public function accessState(Company $company, ?Subscription $subscription, ?CarbonImmutable $now = null): string
+    {
+        if (in_array($company->status, ['suspended', 'archived'], true)) {
+            return $company->status;
+        }
+
+        return $subscription ? $this->status($subscription, $now) : 'none';
     }
 
     public function expiryFor(Plan $plan, ?CarbonImmutable $startsAt = null): ?CarbonImmutable

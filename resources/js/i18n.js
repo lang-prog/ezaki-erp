@@ -1,4 +1,5 @@
 import { accountingAr, accountingEn } from './i18n-accounting.js';
+import { platformAr, platformEn } from './i18n-platform.js';
 
 const strings = {
     en: {
@@ -115,8 +116,8 @@ const strings = {
     },
 };
 
-Object.assign(strings.en, accountingEn);
-Object.assign(strings.ar, accountingAr);
+Object.assign(strings.en, accountingEn, platformEn);
+Object.assign(strings.ar, accountingAr, platformAr);
 
 export const catalog = strings;
 

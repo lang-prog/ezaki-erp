@@ -11,6 +11,7 @@ use App\Models\RegistrationRequest;
 use App\Models\Subscription;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\PermissionRegistrar;
@@ -107,7 +108,7 @@ class CompanyProvisioningService
                 'owner_verified_at' => now(),
             ], $approver, $plan, $coupon);
 
-            app(AuditRecorder::class)->record('company.created_manually', $company, null, $approver->id, [
+            app(AuditRecorder::class)->record('company.created_manually', $company, $company->id, $approver->id, [
                 'owner_user_id' => $company->users()->where('account_type', 'company')->value('id'),
                 'plan_id' => $plan->id,
                 'coupon_id' => $coupon?->id,
@@ -121,6 +122,9 @@ class CompanyProvisioningService
     {
         $plan = Plan::query()->lockForUpdate()->findOrFail($plan->id);
         abort_unless($plan->is_active, 409, 'The selected plan is no longer active.');
+        if (! empty($data['tax_number']) && Company::query()->where('tax_number', $data['tax_number'])->exists()) {
+            throw ValidationException::withMessages(['tax_number' => __('platform.tax_number_taken')]);
+        }
         $company = Company::query()->create([
             'name' => $data['name'],
             'trade_name' => $data['trade_name'] ?? null,
@@ -132,7 +136,7 @@ class CompanyProvisioningService
             'notes' => $data['notes'] ?? null,
             'status' => 'active',
             'settings' => [
-                'purchase_inventory_basis' => CompanyAccountingPolicyService::ACTUAL_WEIGHT,
+                'purchase_inventory_basis' => CompanyAccountingPolicyService::FACTORY_WEIGHT,
                 'vat_enabled' => false,
                 'vat_rate' => 0,
             ],

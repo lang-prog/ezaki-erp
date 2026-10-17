@@ -72,7 +72,7 @@ class PhaseTwoCoreTest extends TestCase
 
     private function createBranch(User $user, string $code): array
     {
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $response = $this->postJson('/api/v1/branches', [
             'code' => $code,
             'name' => "Branch {$code}",
@@ -85,7 +85,7 @@ class PhaseTwoCoreTest extends TestCase
     public function test_branch_creates_warehouse_and_branch_warehouse_quotas_are_enforced(): void
     {
         ['company' => $company, 'user' => $user] = $this->tenant('branch-limit', ['branches' => 1, 'warehouses' => 1]);
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $first = $this->postJson('/api/v1/branches', ['code' => 'HQ', 'name' => 'Head Office'])->assertCreated();
         $this->assertDatabaseHas('warehouses', [
             'company_id' => $company->id,
@@ -98,7 +98,7 @@ class PhaseTwoCoreTest extends TestCase
     public function test_warehouse_quota_is_checked_separately_from_branch_quota(): void
     {
         ['user' => $user] = $this->tenant('warehouse-limit', ['branches' => 5, 'warehouses' => 1]);
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->postJson('/api/v1/branches', ['code' => 'WH1', 'name' => 'Warehouse One'])->assertCreated();
         $this->postJson('/api/v1/branches', ['code' => 'WH2', 'name' => 'Warehouse Two'])->assertForbidden();
     }
@@ -109,7 +109,7 @@ class PhaseTwoCoreTest extends TestCase
         ['user' => $secondOwner] = $this->tenant('tenant-b');
         [$branch] = $this->createBranch($firstOwner, 'A1');
 
-        Sanctum::actingAs($secondOwner);
+        Sanctum::actingAs($secondOwner, ['company-api']);
         $this->getJson('/api/v1/branches')->assertOk()->assertJsonMissing(['name' => 'Branch A1']);
         $this->putJson("/api/v1/branches/{$branch->id}", ['name' => 'Leaked'])->assertNotFound();
     }
@@ -119,7 +119,7 @@ class PhaseTwoCoreTest extends TestCase
         ['company' => $company, 'user' => $user] = $this->tenant('archive-stock');
         [$branch, $warehouse] = $this->createBranch($user, 'STOCK');
         $type = DB::table('product_types')->insertGetId(['company_id' => $company->id, 'name' => 'Rebar', 'kind' => 'steel', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $product = $this->postJson('/api/v1/products', [
             'warehouse_id' => $warehouse->id,
             'product_type_id' => $type,
@@ -135,7 +135,7 @@ class PhaseTwoCoreTest extends TestCase
     {
         ['company' => $company, 'user' => $user] = $this->tenant('archive-empty');
         [$branch, $warehouse] = $this->createBranch($user, 'EMPTY');
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
 
         $this->postJson("/api/v1/branches/{$branch->id}/archive")->assertOk();
 
@@ -151,7 +151,7 @@ class PhaseTwoCoreTest extends TestCase
         [, $source] = $this->createBranch($user, 'SRC');
         [, $destination] = $this->createBranch($user, 'DST');
         $type = DB::table('product_types')->insertGetId(['company_id' => $company->id, 'name' => 'Mesh', 'kind' => 'steel', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $product = $this->postJson('/api/v1/products', [
             'warehouse_id' => $source->id, 'product_type_id' => $type,
             'sku' => 'MESH-1', 'name' => 'Mesh', 'unit' => 'ton', 'opening_balance' => 10,
@@ -163,7 +163,7 @@ class PhaseTwoCoreTest extends TestCase
 
         $this->assertDatabaseHas('stock_balances', ['company_id' => $company->id, 'warehouse_id' => $source->id, 'product_id' => $product, 'quantity' => 7]);
         $this->assertDatabaseHas('stock_balances', ['company_id' => $company->id, 'warehouse_id' => $destination->id, 'product_id' => $product, 'quantity' => 3]);
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->getJson('/api/v1/inventory/matrix')->assertOk()->assertJsonPath('total_quantity', 10);
         $this->getJson('/api/v1/inventory/matrix?warehouse_id='.$source->id)->assertOk()->assertJsonPath('total_quantity', 7);
         $this->getJson('/api/v1/inventory/matrix?warehouse_id='.$destination->id)->assertOk()->assertJsonPath('total_quantity', 3);
@@ -177,7 +177,7 @@ class PhaseTwoCoreTest extends TestCase
         $this->postJson('/api/v1/diameters', ['millimeters' => 12])->assertCreated();
         $diameter =
             Diameter::query()->where('company_id', $company->id)->where('millimeters', 12)->firstOrFail();
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $productId = $this->postJson('/api/v1/products', [
             'warehouse_id' => $warehouse->id, 'product_type_id' => $type, 'diameter_id' => $diameter->id,
             'sku' => 'BSH-12', 'name' => 'Beshay 12mm', 'unit' => 'ton', 'minimum_stock' => 1.5, 'opening_balance' => 8,
@@ -199,7 +199,7 @@ class PhaseTwoCoreTest extends TestCase
     public function test_owner_can_add_type_and_diameter_without_a_product_sku(): void
     {
         ['user' => $user] = $this->tenant('master-data-actions');
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->postJson('/api/v1/product-types', ['name' => 'حديد عز'])->assertCreated();
         $this->postJson('/api/v1/diameters', ['millimeters' => 10])->assertCreated();
         $this->actingAs($user)->get('/inventory')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Inventory')->where('diameter_columns.0', '10')->where('productTypes.0.name', 'حديد عز'));
@@ -210,7 +210,7 @@ class PhaseTwoCoreTest extends TestCase
     {
         ['company' => $company, 'user' => $user] = $this->tenant('type-diameter-profile');
         [, $warehouse] = $this->createBranch($user, 'PROFILE');
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $type = $this->postJson('/api/v1/product-types', ['name' => 'Profile steel'])->assertCreated()->json('data.id');
         $diameter = $this->postJson('/api/v1/diameters', ['millimeters' => 16])->assertCreated()->json('data.id');
         $product = $this->postJson('/api/v1/inventory/type-diameter-profile', ['warehouse_id' => $warehouse->id, 'product_type_id' => $type, 'diameter_id' => $diameter, 'opening_balance' => 6, 'minimum_stock' => 2.5])->assertCreated()->json('data.id');
@@ -224,7 +224,7 @@ class PhaseTwoCoreTest extends TestCase
     {
         ['company' => $company, 'user' => $user] = $this->tenant('party-code');
         $parent = Account::query()->where('company_id', $company->id)->where('code', '1.2')->firstOrFail();
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $response = $this->postJson('/api/v1/parties', [
             'name' => 'Both Customer And Supplier', 'parent_account_id' => $parent->id,
             'is_customer' => true, 'is_supplier' => true, 'opening_balance' => 100,
@@ -239,7 +239,7 @@ class PhaseTwoCoreTest extends TestCase
 
     public function test_super_admin_company_provisioning_starts_with_empty_chart_until_owner_initializes_it(): void
     {
-        $admin = User::query()->create(['name' => 'Setup Admin', 'email' => 'phase2-setup-admin@example.test', 'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'status' => 'active']);
+        $admin = User::query()->create(['name' => 'Setup Admin', 'email' => 'phase2-setup-admin@example.test', 'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active']);
         $plan = Plan::query()->create(['code' => 'setup-plan', 'name' => 'Setup Plan', 'duration' => 'yearly', 'price' => 10, 'is_active' => true]);
         $company = app(CompanyProvisioningService::class)->createManually([
             'name' => 'Seeded Company', 'owner_name' => 'Setup Owner', 'owner_email' => 'phase2-setup-owner@example.test',
@@ -249,7 +249,7 @@ class PhaseTwoCoreTest extends TestCase
         $this->assertDatabaseMissing('accounts', ['company_id' => $company->id]);
         $this->assertDatabaseMissing('fiscal_periods', ['company_id' => $company->id]);
         $owner = User::query()->where('company_id', $company->id)->where('account_type', 'company')->firstOrFail();
-        Sanctum::actingAs($owner);
+        Sanctum::actingAs($owner, ['company-api']);
         $this->postJson('/api/v1/accounts/initialize')->assertOk();
         $this->assertDatabaseHas('accounts', ['company_id' => $company->id, 'code' => '1', 'name' => 'Assets']);
         $this->assertDatabaseHas('accounts', ['company_id' => $company->id, 'code' => '1.1', 'name' => 'Fixed assets']);
@@ -261,7 +261,7 @@ class PhaseTwoCoreTest extends TestCase
     public function test_phase_two_company_pages_render_with_available_dashboard_metrics(): void
     {
         ['company' => $company, 'user' => $user] = $this->tenant('pages');
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->actingAs($user)->get('/dashboard')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Dashboard')->has('metrics.stock_quantity'));
         $this->get('/branches')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Branches'));
         $this->get('/inventory')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Inventory')->has('diameter_columns'));
@@ -275,7 +275,7 @@ class PhaseTwoCoreTest extends TestCase
         $this->get('/accounting/receipts')->assertOk()->assertInertia(fn ($page) => $page->component('Company/ReceiptsList'));
         $this->get('/accounting/payment-vouchers')->assertOk()->assertInertia(fn ($page) => $page->component('Company/PaymentVouchersList'));
         $this->get('/reports/invoice-settlements')->assertOk()->assertInertia(fn ($page) => $page->component('Company/InvoiceSettlementReport'));
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $cashbox = $this->postJson('/api/v1/cashboxes', ['name' => 'Main till'])->assertCreated()->json('data.id');
         $this->assertDatabaseHas('cashboxes', ['id' => $cashbox]);
         $this->actingAs($user)->get('/accounting')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Accounting'));
@@ -289,7 +289,7 @@ class PhaseTwoCoreTest extends TestCase
         $parent = Account::query()->where('company_id', $company->id)->where('code', '1.2')->firstOrFail();
         $customer = app(AccountingService::class)->createParty($company, $user, ['name' => 'Customer', 'parent_account_id' => $parent->id, 'is_customer' => true, 'is_supplier' => false]);
         $supplier = app(AccountingService::class)->createParty($company, $user, ['name' => 'Supplier', 'parent_account_id' => $parent->id, 'is_customer' => false, 'is_supplier' => true]);
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $cashbox = $this->postJson('/api/v1/cashboxes', ['name' => 'Main till'])->assertCreated()->json('data.id');
         $bank = $this->postJson('/api/v1/banks', ['name' => 'Company bank', 'account_number' => 'TEST-0001'])->assertCreated()->json('data.id');
         $receipt = $this->postJson('/api/v1/receipts', [
@@ -341,7 +341,7 @@ class PhaseTwoCoreTest extends TestCase
     public function test_other_account_receipt_and_payment_appear_in_journal_ledger_and_account_statements(): void
     {
         ['company' => $company, 'user' => $user] = $this->tenant('other-account-vouchers');
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $cashboxId = $this->postJson('/api/v1/cashboxes', ['name' => 'Voucher till'])->assertCreated()->json('data.id');
         $cashbox = Cashbox::query()->findOrFail($cashboxId);
         $income = Account::query()->where('company_id', $company->id)->where('code', '5.2')->firstOrFail();
@@ -385,7 +385,7 @@ class PhaseTwoCoreTest extends TestCase
     public function test_fiscal_periods_cannot_overlap(): void
     {
         ['company' => $company, 'user' => $user] = $this->tenant('periods');
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->postJson('/api/v1/fiscal-periods', ['name' => '2027-H1', 'starts_on' => '2027-01-01', 'ends_on' => '2027-06-30'])->assertCreated();
         $this->postJson('/api/v1/fiscal-periods', ['name' => '2027-H1-overlap', 'starts_on' => '2027-06-30', 'ends_on' => '2027-12-31'])->assertStatus(409);
         $this->assertSame(2, FiscalPeriod::query()->where('company_id', $company->id)->count());
@@ -394,7 +394,7 @@ class PhaseTwoCoreTest extends TestCase
     public function test_fiscal_period_name_defaults_to_start_year_and_duplicate_names_are_rejected_cleanly(): void
     {
         ['company' => $company, 'user' => $user] = $this->tenant('period-name');
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->postJson('/api/v1/fiscal-periods', ['starts_on' => '2027-01-01', 'ends_on' => '2027-12-31'])->assertCreated()->assertJsonPath('data.name', '2027');
         $this->postJson('/api/v1/fiscal-periods', ['name' => '2027', 'starts_on' => '2028-01-01', 'ends_on' => '2028-12-31'])->assertStatus(409)->assertJsonPath('message', fn ($message): bool => str_contains($message, 'already exists'));
         $this->assertDatabaseCount('fiscal_periods', 2);
@@ -418,7 +418,7 @@ class PhaseTwoCoreTest extends TestCase
         $this->assertDatabaseHas('customer_suppliers', ['id' => $below->id, 'opening_balance' => 49.99]);
         $this->assertSame(1, DB::table('customer_suppliers')->where('company_id', $company->id)->where('is_customer', true)->where('status', 'active')->where('opening_balance', '>=', 50)->count());
         $this->assertSame(2, app(AccountingReportService::class)->debtors($company)['rows']->total());
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->getJson('/api/v1/reports/debtors')->assertOk()->assertJsonFragment(['name' => 'At threshold'])->assertJsonFragment(['name' => 'Moving customer'])->assertJsonMissing(['name' => 'Below threshold']);
         $this->getJson('/api/v1/reports/debtors?from_date='.today()->toDateString().'&to_date='.today()->toDateString())->assertOk()->assertJsonFragment(['name' => 'Moving customer']);
         $this->getJson('/api/v1/reports/debtors?from_date='.today()->addDay()->toDateString().'&to_date='.today()->addDays(2)->toDateString())
@@ -434,7 +434,7 @@ class PhaseTwoCoreTest extends TestCase
         [, $warehouseA1] = $this->createBranch($userA, 'A1');
         [, $warehouseA2] = $this->createBranch($userA, 'A2');
         [, $warehouseB1] = $this->createBranch($userB, 'B1');
-        Sanctum::actingAs($userA);
+        Sanctum::actingAs($userA, ['company-api']);
         $typeA = $this->postJson('/api/v1/product-types', ['name' => 'Shared type'])->assertCreated()->json('data.id');
         $diameterA = $this->postJson('/api/v1/diameters', ['millimeters' => 20])->assertCreated()->json('data.id');
         $payload = ['warehouse_id' => $warehouseA1->id, 'product_type_id' => $typeA, 'diameter_id' => $diameterA, 'opening_balance' => 6, 'minimum_stock' => 2];
@@ -449,7 +449,7 @@ class PhaseTwoCoreTest extends TestCase
         $this->assertDatabaseHas('stock_balances', ['warehouse_id' => $warehouseA2->id, 'product_id' => $productId, 'quantity' => 4, 'minimum_stock' => 5]);
         $this->assertSame(1, DB::table('stock_movements')->where('company_id', $companyA->id)->where('source_type', 'inventory_opening')->where('source_key', 'warehouse:'.$warehouseA1->id.':product:'.$productId)->count());
 
-        Sanctum::actingAs($userB);
+        Sanctum::actingAs($userB, ['company-api']);
         $this->postJson('/api/v1/inventory/type-diameter-profile', ['warehouse_id' => $warehouseA1->id, 'product_type_id' => $typeA, 'diameter_id' => $diameterA, 'opening_balance' => 1])->assertNotFound();
         $this->assertSame(0, Product::query()->where('company_id', $companyB->id)->count());
         $this->assertDatabaseMissing('stock_balances', ['warehouse_id' => $warehouseB1->id, 'product_id' => $productId]);

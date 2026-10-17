@@ -88,7 +88,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_draft_purchase_and_sale_do_not_change_stock_or_gl_and_approval_posts_once(): void
     {
         $context = $this->tenant('lifecycle');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $beforeJournals = JournalEntry::query()->count();
         $purchase = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context))->assertCreated()->json('data.id');
         $this->assertSame(0.0, (float) $context['product']->fresh()->stockBalances()->sum('quantity'));
@@ -113,7 +113,7 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $context = $this->tenant('vat-partial');
         $context['company']->forceFill(['settings' => ['purchase_inventory_basis' => 'factory_weight', 'vat_enabled' => true, 'vat_rate' => 14]])->save();
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
 
         $purchaseId = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'VAT-P'))->assertCreated()->json('data.id');
         $this->postJson("/api/v1/purchase-bills/{$purchaseId}/approve")->assertOk();
@@ -150,7 +150,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_default_purchase_policy_uses_factory_weight_for_value_and_inventory(): void
     {
         $context = $this->tenant('weights');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $payload = $this->purchasePayload($context, 'DUP-1');
         $payload['total_factory_weight'] = 9;
         $this->postJson('/api/v1/purchase-bills', $payload)->assertUnprocessable();
@@ -167,7 +167,7 @@ class PhaseThreeOperationsTest extends TestCase
         Role::query()->where('company_id', $context['company']->id)->firstOrFail()->forceFill(['name' => 'Company Owner'])->save();
         app(PermissionRegistrar::class)->forgetCachedPermissions();
         $context['company']->forceFill(['settings' => ['purchase_inventory_basis' => 'actual_weight']])->save();
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'ACTUAL-1'))->assertCreated()->json('data.id');
         $this->postJson("/api/v1/purchase-bills/{$bill}/approve")->assertOk();
         $this->assertSame(9.0, (float) $context['product']->fresh()->stockBalances()->sum('quantity'));
@@ -187,7 +187,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_type_diameter_purchase_line_uses_factory_weight_and_actual_header_is_review_only(): void
     {
         $context = $this->tenant('type-diameter');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $type = $this->postJson('/api/v1/product-types', ['name' => 'حديد عز', 'kind' => 'steel'])->assertCreated()->json('data.id');
         $diameter = $this->postJson('/api/v1/diameters', ['millimeters' => 18])->assertCreated()->json('data.id');
         $payload = $this->purchasePayload($context, 'TYPE-1');
@@ -202,7 +202,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_type_diameter_sales_draft_and_approval_use_line_weight_without_product_sku(): void
     {
         $context = $this->tenant('typed-sales');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $type = $this->postJson('/api/v1/product-types', ['name' => 'حديد السويس'])->assertCreated()->json('data.id');
         $diameter = $this->postJson('/api/v1/diameters', ['millimeters' => 22])->assertCreated()->json('data.id');
         $purchase = $this->purchasePayload($context, 'TYPE-SEED');
@@ -225,7 +225,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_purchase_and_sales_accept_string_ids_from_browser_forms(): void
     {
         $context = $this->tenant('string-ids');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $purchase = $this->purchasePayload($context, 'STRING-P');
         foreach (['branch_id', 'warehouse_id', 'supplier_id'] as $key) {
             $purchase[$key] = (string) $purchase[$key];
@@ -245,7 +245,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_saved_drafts_can_be_approved_explicitly_and_sales_packages_are_optional(): void
     {
         $context = $this->tenant('explicit-approve');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $purchaseId = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'APPROVE-P'))->assertCreated()->json('data.id');
         $this->postJson("/api/v1/purchase-bills/{$purchaseId}/approve")->assertOk();
         $sales = $this->salesPayload($context, 'APPROVE-S');
@@ -261,7 +261,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_party_and_chart_parent_changes_recode_without_changing_account_ids(): void
     {
         $context = $this->tenant('parent-moves');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $party = $context['supplier'];
         $oldAccountId = $party->account_id;
         $newParent = Account::query()->where('company_id', $context['company']->id)->where('code', '2.2')->firstOrFail();
@@ -274,7 +274,7 @@ class PhaseThreeOperationsTest extends TestCase
         $this->putJson('/api/v1/accounts/'.$child, ['name' => 'Nested updated', 'parent_id' => (string) $newParent->id])->assertOk();
         $this->putJson('/api/v1/accounts/'.$newParent->id, ['name' => 'Invalid root move', 'parent_id' => $child])->assertUnprocessable();
         $other = $this->tenant('parent-moves-other');
-        Sanctum::actingAs($other['user']);
+        Sanctum::actingAs($other['user'], ['company-api']);
         $this->putJson('/api/v1/accounts/'.$newParent->id, ['name' => 'Cross tenant', 'parent_id' => null])->assertNotFound();
     }
 
@@ -282,7 +282,7 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $context = $this->tenant('limits', 100);
         app(InventoryService::class)->createProduct($context['company'], $context['user'], ['warehouse_id' => $context['warehouse']->id, 'sku' => 'STOCK', 'name' => 'Stock', 'unit' => 'ton', 'opening_balance' => 1]);
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $oversell = $this->salesPayload($context, 'OVER');
         $oversell['total_actual_weight'] = 2;
         $oversell['lines'][0]['actual_weight'] = 2;
@@ -301,7 +301,7 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $context = $this->tenant('party-control', 2000);
         $product = app(InventoryService::class)->createProduct($context['company'], $context['user'], ['warehouse_id' => $context['warehouse']->id, 'sku' => 'PARTY-STOCK', 'name' => 'Party stock', 'unit' => 'ton', 'opening_balance' => 20]);
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $sale = $this->salesPayload($context, 'PARTY-CONTROL');
         $sale['customer_id'] = $context['customer']->id;
         $sale['payment_method'] = 'credit';
@@ -334,7 +334,7 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $context = $this->tenant('payment-allocation', 5000);
         $product = app(InventoryService::class)->createProduct($context['company'], $context['user'], ['warehouse_id' => $context['warehouse']->id, 'sku' => 'ALLOC-STOCK', 'name' => 'Allocation stock', 'unit' => 'ton', 'opening_balance' => 20]);
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $makeCreditSale = function (string $number) use ($context, $product): int {
             $payload = $this->salesPayload($context, $number);
             $payload['payment_method'] = 'credit';
@@ -378,7 +378,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_stock_transfer_preserves_weighted_average_value_and_destination_cogs(): void
     {
         $context = $this->tenant('transfer-value');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $purchase = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'TRANSFER-VALUE'))->assertCreated()->json('data.id');
         $this->postJson("/api/v1/purchase-bills/{$purchase}/approve")->assertOk();
         $destinationBranch = app(CompanyStructureService::class)->createBranch($context['company'], $context['user'], ['code' => 'DST', 'name' => 'Destination']);
@@ -446,7 +446,7 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $context = $this->tenant('fleet');
         $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'ABC-1', 'ownership' => 'company', 'status' => 'active']);
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $payload = $this->purchasePayload($context, 'TRIP-1');
         $payload['vehicle_id'] = $vehicle->id;
         $bill = $this->postJson('/api/v1/purchase-bills', $payload)->assertCreated()->json('data.id');
@@ -462,20 +462,20 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $one = $this->tenant('one');
         $two = $this->tenant('two');
-        Sanctum::actingAs($one['user']);
+        Sanctum::actingAs($one['user'], ['company-api']);
         $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($one, 'REV-1'))->assertCreated()->json('data.id');
         $this->postJson("/api/v1/purchase-bills/{$bill}/approve")->assertOk();
         $this->putJson("/api/v1/purchase-bills/{$bill}/revision", $this->purchasePayload($one, 'REV-1') + ['revision_reason' => 'Corrected'])->assertOk();
         $this->assertDatabaseHas('bill_revisions', ['company_id' => $one['company']->id, 'document_type' => 'purchase', 'document_id' => $bill]);
         $this->assertDatabaseHas('audit_logs', ['company_id' => $one['company']->id, 'event' => 'bills.revised']);
-        Sanctum::actingAs($two['user']);
+        Sanctum::actingAs($two['user'], ['company-api']);
         $this->getJson("/api/v1/purchase-bills/{$bill}")->assertNotFound();
     }
 
     public function test_near_duplicate_warning_preserves_data_and_transport_allocation_is_display_only(): void
     {
         $context = $this->tenant('warnings');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'WARN-1'))->assertCreated()->json('data.id');
         $this->getJson('/api/v1/purchase-bills/near-duplicates?supplier_id='.$context['supplier']->id.'&supplier_bill_date='.now()->toDateString())->assertOk()->assertJsonFragment(['internal_number' => PurchaseBill::query()->findOrFail($bill)->internal_number]);
         $before = PurchaseBill::query()->findOrFail($bill)->lines()->first()->toArray();
@@ -494,7 +494,7 @@ class PhaseThreeOperationsTest extends TestCase
         $role->syncPermissions(Permission::query()->whereIn('name', ['sales.view', 'sales.create'])->get());
         $clerk->assignRole($role);
         $registrar->setPermissionsTeamId(null);
-        Sanctum::actingAs($clerk);
+        Sanctum::actingAs($clerk, ['company-api']);
         $payload = $this->salesPayload($context, 'DISC-1');
         $payload['discount'] = 10;
         $this->postJson('/api/v1/sales-bills', $payload)->assertUnprocessable()->assertJsonValidationErrors('discount');
@@ -503,7 +503,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_closed_period_rejects_revision(): void
     {
         $context = $this->tenant('closed-revision');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'CLOSE-1'))->assertCreated()->json('data.id');
         $this->postJson("/api/v1/purchase-bills/{$bill}/approve")->assertOk();
         $period = FiscalPeriod::query()->where('company_id', $context['company']->id)->firstOrFail();
@@ -517,7 +517,7 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $context = $this->tenant('fleet-reverse');
         $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'REV-1', 'ownership' => 'company', 'status' => 'active']);
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $expense = $this->postJson('/api/v1/fleet/expenses', ['vehicle_id' => $vehicle->id, 'cashbox_id' => $context['cashbox']->id, 'expense_date' => now()->toDateString(), 'category' => 'fuel', 'amount' => 50])->assertCreated()->json('data.id');
         $this->postJson("/api/v1/fleet/expenses/{$expense}/approve")->assertOk();
         $this->postJson("/api/v1/fleet/expenses/{$expense}/reverse", ['date' => now()->toDateString()])->assertOk();
@@ -540,7 +540,7 @@ class PhaseThreeOperationsTest extends TestCase
         $this->get('/fleet')->assertOk()->assertInertia(fn ($page) => $page->component('Company/Fleet')->has('vehicles')->has('maintenance'));
         $this->get('/fleet/reports/maintenance-period')->assertOk()->assertInertia(fn ($page) => $page->component('Company/FleetReport')->where('report', 'maintenance-period'));
         $this->get('/dashboard')->assertOk()->assertInertia(fn ($page) => $page->has('daily_sales')->has('payments_receipts')->has('top_sold_products')->has('sales_by_customer'));
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'PRINT-1'))->assertCreated()->json('data.id');
         $this->actingAs($context['user'])->get("/operations/purchase/{$bill}/edit")->assertOk()->assertInertia(fn ($page) => $page->component('Company/BillForm')->where('document.id', $bill));
         $this->actingAs($context['user'])->get("/operations/purchase/{$bill}/print")->assertOk()->assertSee('فاتورة مشتريات');
@@ -582,7 +582,7 @@ class PhaseThreeOperationsTest extends TestCase
     {
         $context = $this->tenant('edit-actions');
         $this->actingAs($context['user']);
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $draft = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'EDIT-DRAFT'))->assertCreated()->json('data.id');
         $approved = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'EDIT-APPROVED'))->assertCreated()->json('data.id');
         $this->postJson("/api/v1/purchase-bills/{$approved}/approve")->assertOk();
@@ -608,7 +608,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_operations_payload_exposes_edit_actions_for_permitted_bill_states(): void
     {
         $context = $this->tenant('edit-visibility');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $draftPurchase = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'EDIT-VIS-P'))->assertCreated()->json('data.id');
         $approvedPurchase = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'EDIT-VIS-PA'))->assertCreated()->json('data.id');
         $this->postJson("/api/v1/purchase-bills/{$approvedPurchase}/approve")->assertOk();
@@ -624,7 +624,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_default_arabic_purchase_print_contains_rtl_arabic_labels(): void
     {
         $context = $this->tenant('arabic-print');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'AR-PRINT'))->assertCreated()->json('data.id');
         $this->actingAs($context['user'])->get("/operations/purchase/{$bill}/print")->assertOk()->assertSee('فاتورة مشتريات')->assertSee('dir="rtl"', false);
     }
@@ -632,7 +632,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_bill_view_and_two_print_modes_expose_complete_data_without_leaking_prices_to_operational_copy(): void
     {
         $context = $this->tenant('bill-view-modes');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $bill = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'VIEW-MODE'))->assertCreated()->json('data.id');
         $this->actingAs($context['user'])->get("/operations/purchase/{$bill}")->assertOk()->assertInertia(fn ($page) => $page->component('Company/BillView')->where('document.id', $bill)->has('revisions'));
         $this->get("/operations/purchase/{$bill}/print?mode=invoice")->assertOk()->assertSee('سعر الوحدة');
@@ -707,7 +707,7 @@ class PhaseThreeOperationsTest extends TestCase
         foreach (['/dashboard', '/settings/access', '/settings/users/'.$context['user']->id, '/subscription', '/branches', '/inventory', '/parties', '/accounting', '/reports/journal', '/operations', '/fleet'] as $path) {
             $this->get($path)->assertOk();
         }
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         foreach (['/api/v1/branches', '/api/v1/products', '/api/v1/parties', '/api/v1/accounts', '/api/v1/reports/trial-balance', '/api/v1/purchase-bills', '/api/v1/sales-bills', '/api/v1/fleet/vehicles'] as $path) {
             $this->getJson($path)->assertOk();
         }
@@ -719,7 +719,7 @@ class PhaseThreeOperationsTest extends TestCase
 
         $nonOwner = User::query()->create(['name' => 'No Access', 'email' => 'no-owner-access@example.test', 'password' => 'password', 'company_id' => $context['company']->id, 'account_type' => 'company', 'status' => 'active', 'email_verified_at' => now()]);
         $this->actingAs($nonOwner)->get('/fleet')->assertForbidden();
-        Sanctum::actingAs($nonOwner);
+        Sanctum::actingAs($nonOwner, ['company-api']);
         $this->getJson('/api/v1/fleet/vehicles')->assertForbidden();
         $this->putJson('/api/v1/users/'.$context['user']->id, [])->assertForbidden();
     }
@@ -729,7 +729,7 @@ class PhaseThreeOperationsTest extends TestCase
         $one = $this->tenant('owner-isolation-one');
         $two = $this->tenant('owner-isolation-two');
         $this->actingAs($one['user'])->get('/fleet')->assertOk();
-        Sanctum::actingAs($one['user']);
+        Sanctum::actingAs($one['user'], ['company-api']);
         $this->getJson('/api/v1/fleet/vehicles')->assertOk();
         $this->assertNotSame($one['company']->id, $two['company']->id);
         $this->assertSame($one['company']->id, $one['user']->company_id);
@@ -738,7 +738,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_purchase_line_actual_weight_is_ignored_and_not_persisted(): void
     {
         $context = $this->tenant('purchase-line-contract');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
 
         $billId = $this->postJson('/api/v1/purchase-bills', $this->purchasePayload($context, 'CONTRACT-1'))
             ->assertCreated()
@@ -752,7 +752,7 @@ class PhaseThreeOperationsTest extends TestCase
         $one = $this->tenant('fleet-relations-one');
         $two = $this->tenant('fleet-relations-two');
         $foreignVehicle = Vehicle::query()->create(['company_id' => $two['company']->id, 'branch_id' => $two['branch']->id, 'plate' => 'FOREIGN-1', 'ownership' => 'company', 'status' => 'active']);
-        Sanctum::actingAs($one['user']);
+        Sanctum::actingAs($one['user'], ['company-api']);
 
         $this->postJson('/api/v1/fleet/vehicles', ['branch_id' => $two['branch']->id, 'plate' => 'BAD-BRANCH', 'ownership' => 'company', 'status' => 'active'])->assertNotFound();
         $this->postJson('/api/v1/fleet/trips', ['vehicle_id' => $foreignVehicle->id, 'trip_type' => 'delivery', 'trip_at' => now()->toDateTimeString()])->assertNotFound();
@@ -766,7 +766,7 @@ class PhaseThreeOperationsTest extends TestCase
         $registrar->setPermissionsTeamId((int) $context['company']->id);
         $context['user']->givePermissionTo(Permission::query()->firstOrCreate(['name' => 'users.update', 'guard_name' => 'web']));
         $registrar->forgetCachedPermissions();
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
 
         $this->putJson('/api/v1/users/'.$context['user']->id.'/permissions', ['permissions' => []])->assertForbidden();
     }
@@ -801,7 +801,7 @@ class PhaseThreeOperationsTest extends TestCase
         $context = $this->tenant('manual-trip-lifecycle');
         $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'MAN-1', 'ownership' => 'company', 'status' => 'active']);
         $driver = Driver::query()->create(['company_id' => $context['company']->id, 'name' => 'Driver One', 'status' => 'active']);
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $trip = $this->postJson('/api/v1/fleet/trips', ['vehicle_id' => $vehicle->id, 'driver_id' => $driver->id, 'branch_id' => $context['branch']->id, 'trip_type' => 'delivery', 'origin' => 'Cairo', 'destination' => 'Giza', 'trip_at' => now()->toDateTimeString(), 'distance' => 25, 'odometer_in' => 100, 'odometer_out' => 125, 'fuel_cost' => 40, 'road_fees' => 10, 'loading_fees' => 5, 'revenue' => 200])->assertCreated()->json('data.id');
         $this->assertDatabaseHas('trips', ['id' => $trip, 'status' => 'draft', 'driver_id' => $driver->id]);
         $this->postJson("/api/v1/fleet/trips/{$trip}/approve")->assertOk()->assertJsonPath('data.status', 'approved');
@@ -814,7 +814,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_branch_performance_counts_each_vehicle_expense_once_and_includes_vehicles_without_trips(): void
     {
         $context = $this->tenant('branch-cost-allocation');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'BR-1', 'ownership' => 'company', 'status' => 'active']);
         $idleVehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'BR-2', 'ownership' => 'company', 'status' => 'active']);
 
@@ -838,7 +838,7 @@ class PhaseThreeOperationsTest extends TestCase
         $context = $this->tenant('invoice-trip-expense');
         $vehicle = Vehicle::query()->create(['company_id' => $context['company']->id, 'branch_id' => $context['branch']->id, 'plate' => 'INV-1', 'ownership' => 'company', 'status' => 'active']);
         $driver = Driver::query()->create(['company_id' => $context['company']->id, 'name' => 'Driver Two', 'status' => 'active']);
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $payload = $this->purchasePayload($context, 'TRIP-COMPLETE');
         $payload += ['vehicle_id' => $vehicle->id, 'driver_id' => $driver->id, 'origin' => 'Port', 'destination' => 'Depot', 'distance' => 70, 'odometer_in' => 1000, 'odometer_out' => 1070, 'fuel_cost' => 60, 'road_fees' => 15, 'loading_fees' => 8];
         $bill = $this->postJson('/api/v1/purchase-bills', $payload)->assertCreated()->json('data.id');
@@ -866,7 +866,7 @@ class PhaseThreeOperationsTest extends TestCase
     public function test_receipt_and_voucher_details_and_print_routes_are_available_from_party_workspaces(): void
     {
         $context = $this->tenant('money-document-routes');
-        Sanctum::actingAs($context['user']);
+        Sanctum::actingAs($context['user'], ['company-api']);
         $receiptId = $this->postJson('/api/v1/receipts', [
             'counterparty_type' => 'customer', 'party_id' => $context['customer']->id, 'cashbox_id' => $context['cashbox']->id,
             'receipt_date' => now()->toDateString(), 'amount' => 125, 'notes' => 'Customer collection',

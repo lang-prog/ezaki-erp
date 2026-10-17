@@ -3,12 +3,11 @@
 use App\Http\Controllers\Web\AuthenticationController;
 use App\Http\Controllers\Web\CompanyAccessController;
 use App\Http\Controllers\Web\CompanyProfileController;
+use App\Http\Controllers\Web\CompanySubscriptionRequestController;
 use App\Http\Controllers\Web\CoreErpPageController;
 use App\Http\Controllers\Web\LocaleController;
 use App\Http\Controllers\Web\PasswordResetController;
 use App\Http\Controllers\Web\RegistrationController;
-use App\Http\Controllers\Web\SuperAdminLicenseController;
-use App\Http\Controllers\Web\SuperAdminPlatformController;
 use App\Services\CompanyLandingService;
 use App\Services\SubscriptionLifecycle;
 use Illuminate\Http\Request;
@@ -56,8 +55,8 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
 
         return Inertia::render('Company/Subscription', ['subscription' => $subscription, 'status' => $request->attributes->get('subscription_status')]);
     })->middleware('can:subscriptions.view')->name('company.subscription');
-    Route::post('/subscription/contact', fn () => back()->with('status', 'Your renewal request has been sent to the platform team.'))->name('company.subscription.contact');
-    Route::post('/subscription/renew', fn () => back()->with('status', 'Your renewal request has been sent to the platform team.'))->name('company.subscription.renew');
+    Route::post('/subscription/contact', [CompanySubscriptionRequestController::class, 'store'])->defaults('type', 'contact')->middleware(['can:subscriptions.view', 'throttle:6,1'])->name('company.subscription.contact');
+    Route::post('/subscription/renew', [CompanySubscriptionRequestController::class, 'store'])->defaults('type', 'renew')->middleware(['can:subscriptions.view', 'throttle:6,1'])->name('company.subscription.renew');
     Route::post('/password', [CompanyProfileController::class, 'updatePassword'])->name('company.password.update');
     Route::get('/branches', [CoreErpPageController::class, 'branches'])->middleware('can:branches.view')->name('company.branches');
     Route::get('/inventory', [CoreErpPageController::class, 'inventory'])->middleware('can:inventory.view')->name('company.inventory');
@@ -100,25 +99,4 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/fleet/reports/{report}', [CoreErpPageController::class, 'fleetReport'])->middleware(['can:fleet.view', 'throttle:api.reports'])->whereIn('report', ['vehicle-pl', 'trip-cost', 'fuel', 'driver-performance', 'expenses-by-category', 'maintenance-period', 'inactive-vehicles', 'branch-performance'])->name('company.fleet.report');
 });
 
-Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account.type:super_admin', 'session.version'])->group(function (): void {
-    Route::post('/logout', [AuthenticationController::class, 'logout'])->name('logout');
-    Route::get('/', [SuperAdminPlatformController::class, 'index'])->name('dashboard');
-    Route::post('/registration-setting', [SuperAdminPlatformController::class, 'updateRegistration'])->name('registration-setting');
-    Route::post('/plans', [SuperAdminPlatformController::class, 'storePlan'])->name('plans.store');
-    Route::post('/coupons', [SuperAdminPlatformController::class, 'storeCoupon'])->name('coupons.store');
-    Route::post('/registrations/{registration}/approve', [SuperAdminPlatformController::class, 'approveRegistration'])->name('registrations.approve');
-    Route::post('/registrations/{registration}/reject', [SuperAdminPlatformController::class, 'rejectRegistration'])->name('registrations.reject');
-    Route::post('/companies', [SuperAdminPlatformController::class, 'storeCompany'])->name('companies.store');
-    Route::post('/subscriptions/{subscription}/payments', [SuperAdminPlatformController::class, 'recordPayment'])->name('subscriptions.payments.store');
-    Route::post('/companies/{company}/activate', [SuperAdminPlatformController::class, 'activateCompany'])->name('companies.activate');
-    Route::post('/companies/{company}/suspend', [SuperAdminPlatformController::class, 'suspendCompany'])->name('companies.suspend');
-    Route::post('/companies/{company}/archive', [SuperAdminPlatformController::class, 'archiveCompany'])->name('companies.archive');
-    Route::post('/companies/{company}/restore', [SuperAdminPlatformController::class, 'restoreCompany'])->name('companies.restore');
-    Route::post('/companies/{company}/plan', [SuperAdminPlatformController::class, 'changeCompanyPlan'])->name('companies.plan');
-    Route::post('/companies/{company}/renew', [SuperAdminPlatformController::class, 'renewCompany'])->name('companies.renew');
-    Route::put('/companies/{company}/limit-addons', [SuperAdminPlatformController::class, 'updateCompanyLimitAddons'])->name('companies.limit-addons');
-    Route::post('/licenses/{license}/enable', [SuperAdminLicenseController::class, 'enable'])->name('licenses.enable');
-    Route::post('/licenses/{license}/disable', [SuperAdminLicenseController::class, 'disable'])->name('licenses.disable');
-    Route::post('/licenses/{license}/revoke', [SuperAdminLicenseController::class, 'revoke'])->name('licenses.revoke');
-    Route::post('/licenses/{license}/transfer', [SuperAdminLicenseController::class, 'transfer'])->name('licenses.transfer');
-});
+require __DIR__.'/platform.php';

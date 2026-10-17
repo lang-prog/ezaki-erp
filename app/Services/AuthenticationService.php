@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\LoginLog;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 
@@ -13,36 +14,45 @@ class AuthenticationService
 {
     private const DUMMY_PASSWORD_HASH = '$2y$12$92IXUNpkjO0rOQ5byMi.Ye4oQ4v8yM8Q0p2JpY6x6lLq7GmY3Lq7u';
 
+    public function __construct(private readonly AuditRecorder $audit) {}
+
     public function authenticate(string $email, string $password, string $accountType, ?string $ip, ?string $userAgent): ?User
     {
         return DB::transaction(function () use ($email, $password, $accountType, $ip, $userAgent): ?User {
             $user = User::query()->where('email', $email)->lockForUpdate()->first();
             $passwordValid = Hash::check($password, $user?->password ?: self::DUMMY_PASSWORD_HASH);
-            $locked = $user?->login_locked_until !== null && $user->login_locked_until->isFuture();
+            $sourceKey = 'auth-lock:'.hash('sha256', strtolower($email).'|'.$ip);
+            $source = Cache::get($sourceKey, ['fails' => 0, 'until' => null]);
+            $locked = ($source['until'] !== null && $source['until'] > time())
+                || ($user?->login_locked_until !== null && $user->login_locked_until->isFuture());
             $valid = $user !== null
                 && ! $locked
                 && $user->account_type === $accountType
                 && $user->isActive()
                 && $passwordValid;
 
-            if (! $valid && $user && ! $locked) {
-                $attempts = ((int) $user->failed_login_attempts) + 1;
+            if (! $valid && ! $locked) {
+                $source['fails']++;
                 $threshold = max(1, (int) config('security.auth.lockout_attempts', 5));
-                $lockedUntil = null;
-
-                if ($attempts >= $threshold) {
-                    $exponent = min($attempts - $threshold, 10);
-                    $seconds = min(
-                        (int) config('security.auth.lockout_max_seconds', 900),
-                        (int) config('security.auth.lockout_base_seconds', 60) * (2 ** $exponent),
-                    );
-                    $lockedUntil = now()->addSeconds($seconds);
+                if ($source['fails'] >= $threshold) {
+                    $exponent = min($source['fails'] - $threshold, 10);
+                    $seconds = min((int) config('security.auth.lockout_max_seconds', 900), (int) config('security.auth.lockout_base_seconds', 60) * (2 ** $exponent));
+                    $source['until'] = time() + $seconds;
+                    if ($user?->account_type === 'super_admin') {
+                        $this->audit->record('platform.login_locked', $user, null, $user->id, ['seconds' => $seconds], null, ['severity' => 'warning']);
+                    }
                 }
+                Cache::put($sourceKey, $source, now()->addSeconds((int) config('security.auth.lockout_max_seconds', 900) * 2));
 
-                $user->forceFill([
-                    'failed_login_attempts' => $attempts,
-                    'login_locked_until' => $lockedUntil,
-                ])->save();
+                if ($user) {
+                    // The account-wide lock only trips on a much larger (distributed) attack, so one source cannot lock out the owner.
+                    $attempts = ((int) $user->failed_login_attempts) + 1;
+                    $update = ['failed_login_attempts' => $attempts];
+                    if ($attempts >= max($threshold, (int) config('security.auth.lockout_global_attempts', 30))) {
+                        $update['login_locked_until'] = now()->addSeconds((int) config('security.auth.lockout_max_seconds', 900));
+                    }
+                    $user->forceFill($update)->save();
+                }
             }
 
             LoginLog::query()->create([
@@ -58,6 +68,7 @@ class AuthenticationService
                 return null;
             }
 
+            Cache::forget($sourceKey);
             $user->forceFill([
                 'last_login_at' => now(),
                 'login_count' => $user->login_count + 1,

@@ -2,10 +2,31 @@ import './bootstrap';
 import React from 'react';
 import { createInertiaApp, router } from '@inertiajs/react';
 import { createRoot } from 'react-dom/client';
+import ErrorBoundary from './Components/ErrorBoundary';
 import { csrfHeaders } from './csrf';
 import { translate } from './i18n';
 
 const pages = import.meta.glob('./Pages/**/*.jsx');
+
+// Final safety net only: a render failure shows a localized, recoverable card instead of an empty root.
+function AppCrashFallback({ retry }) {
+    const locale = document.documentElement.lang || 'en';
+    return <main className="notice-card error" role="alert" style={{ margin: '2rem auto', maxInlineSize: '36rem' }}>
+        <h1>{translate(locale, 'pf_boundary_title')}</h1>
+        <p>{translate(locale, 'pf_boundary_copy')}</p>
+        <div className="erp-toolbar">
+            <button type="button" className="erp-button erp-button--primary" onClick={retry}>{translate(locale, 'pf_boundary_retry')}</button>
+            <button type="button" className="erp-button erp-button--secondary" onClick={() => window.location.reload()}>{translate(locale, 'pf_boundary_reload')}</button>
+        </div>
+    </main>;
+}
+
+function AppBoundary({ children }) {
+    const [navigations, setNavigations] = React.useState(0);
+    React.useEffect(() => router.on('navigate', () => setNavigations((count) => count + 1)), []);
+
+    return <ErrorBoundary resetKey={navigations} fallback={AppCrashFallback}>{children}</ErrorBoundary>;
+}
 
 function GlobalRequestErrors({ children }) {
     const [message, setMessage] = React.useState('');
@@ -51,7 +72,8 @@ function enhanceControls(locale) {
         if (!control.title || (locale === 'ar' && hint && !arabicText.test(control.title))) {
             control.title = locale === 'ar' && (!hint || !arabicText.test(hint)) ? fallback : (hint || fallback);
         }
-        if (control.tagName === 'SELECT' && control.options.length > 7 && !control.dataset.searchEnhanced) {
+        // Never inject DOM into React-owned dialogs: a later reconcile of that subtree could throw and blank the page.
+        if (control.tagName === 'SELECT' && control.options.length > 7 && !control.dataset.searchEnhanced && !control.closest('[role="dialog"]')) {
             const search = document.createElement('input');
             search.type = 'search';
             search.className = 'mb-1 block w-full border border-[#c9d0c8] bg-white px-3 py-2 text-sm';
@@ -95,7 +117,7 @@ createInertiaApp({
         enhanceControls(props.initialPage.props.locale);
         router.on('navigate', (event) => syncDocumentLanguage(event.detail.page.props.locale));
         router.on('navigate', (event) => enhanceControls(event.detail.page.props.locale));
-        createRoot(el).render(<GlobalRequestErrors><App {...props} /></GlobalRequestErrors>);
+        createRoot(el).render(<GlobalRequestErrors><AppBoundary><App {...props} /></AppBoundary></GlobalRequestErrors>);
         const observer = new MutationObserver(() => enhanceControls(document.documentElement.lang));
         observer.observe(el, { childList: true, subtree: true });
         queueMicrotask(() => enhanceControls(props.initialPage.props.locale));

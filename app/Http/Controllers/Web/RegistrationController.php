@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Web;
 
 use App\Http\Controllers\Controller;
+use App\Models\Company;
 use App\Models\Coupon;
 use App\Models\Plan;
 use App\Models\PlatformSetting;
@@ -44,7 +45,7 @@ class RegistrationController extends Controller
             'address' => ['nullable', 'string', 'max:2000'],
             'password' => ['required', 'confirmed', 'string', 'min:8'],
             'plan_id' => ['required', 'integer', 'exists:plans,id'],
-            'coupon_code' => ['nullable', 'string', 'exists:coupons,code'],
+            'coupon_code' => ['nullable', 'string', 'max:100'],
             'terms_accepted' => ['accepted'],
         ]);
 
@@ -56,12 +57,18 @@ class RegistrationController extends Controller
             $registration = DB::transaction(function () use ($data, $planId, $couponCode): ?CompanyRegistrationRequest {
                 $plan = Plan::query()->lockForUpdate()->findOrFail($planId);
                 abort_unless($plan->is_active, 422, 'The selected plan is no longer active.');
+                // An unknown or unusable coupon is ignored silently so the form cannot be used to probe valid codes.
                 $coupon = $couponCode ? Coupon::query()->where('code', $couponCode)->lockForUpdate()->first() : null;
-                abort_if($couponCode && ! $coupon, 422, 'The selected coupon is not available.');
-                abort_if($coupon && ! $coupon->isAvailableFor($plan), 422, 'The selected coupon is not available.');
+                if ($coupon && ! $coupon->isAvailableFor($plan)) {
+                    $coupon = null;
+                }
+
+                CompanyRegistrationRequest::query()->where('email', $data['email'])->where('status', 'unverified')
+                    ->where('verification_expires_at', '<', now())->delete();
 
                 if (User::query()->where('email', $data['email'])->exists()
-                    || CompanyRegistrationRequest::query()->where('email', $data['email'])->exists()) {
+                    || CompanyRegistrationRequest::query()->where('email', $data['email'])->exists()
+                    || (! empty($data['tax_number']) && Company::query()->where('tax_number', $data['tax_number'])->exists())) {
                     return null;
                 }
 

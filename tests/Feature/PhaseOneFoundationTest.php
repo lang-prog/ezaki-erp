@@ -71,7 +71,7 @@ class PhaseOneFoundationTest extends TestCase
         ]);
         $admin = User::query()->create([
             'name' => 'Platform Admin', 'email' => 'redirect-admin@example.test', 'password' => 'password',
-            'account_type' => 'super_admin', 'status' => 'active',
+            'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active',
         ]);
 
         $this->actingAs($owner)->get('/')->assertRedirect(route('company.users.profile', ['user' => $owner->id]));
@@ -105,7 +105,7 @@ class PhaseOneFoundationTest extends TestCase
 
         $approver = User::query()->create([
             'name' => 'Platform Operator', 'email' => 'admin@example.test',
-            'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'status' => 'active',
+            'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active',
         ]);
         $company = app(CompanyProvisioningService::class)->approve($registration->fresh(), $approver, $plan);
         $owner = User::query()->where('email', 'owner@example.test')->firstOrFail();
@@ -123,7 +123,7 @@ class PhaseOneFoundationTest extends TestCase
             'name' => 'Platform Operator',
             'email' => 'operator@example.test',
             'password' => 'correct-horse-battery',
-            'account_type' => 'super_admin',
+            'account_type' => 'super_admin', 'platform_role' => 'owner',
             'status' => 'active',
         ]);
 
@@ -186,7 +186,7 @@ class PhaseOneFoundationTest extends TestCase
     {
         User::query()->create([
             'name' => 'Platform Operator', 'email' => 'platform-login@example.test',
-            'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'status' => 'active',
+            'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active',
         ]);
 
         $this->post('/super-admin/login', ['email' => 'platform-login@example.test', 'password' => 'correct-horse-battery'])
@@ -198,7 +198,7 @@ class PhaseOneFoundationTest extends TestCase
     {
         $admin = User::query()->create([
             'name' => 'Platform Operator', 'email' => 'manual-create-admin@example.test',
-            'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'status' => 'active',
+            'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active',
         ]);
         $plan = Plan::query()->create([
             'code' => 'manual-plan', 'name' => 'Manual Plan', 'duration' => 'monthly', 'price' => 100,
@@ -231,7 +231,7 @@ class PhaseOneFoundationTest extends TestCase
         $subscription = $company->subscriptions()->with('plan')->firstOrFail();
 
         $this->assertSame('active', $company->status);
-        $this->assertSame('actual_weight', $company->settings['purchase_inventory_basis']);
+        $this->assertSame('factory_weight', $company->settings['purchase_inventory_basis']);
         $this->assertNotNull($company->approved_at);
         $this->assertSame('Created directly by platform staff.', $company->notes);
         $this->assertSame($company->id, $owner->company_id);
@@ -256,7 +256,7 @@ class PhaseOneFoundationTest extends TestCase
         Role::query()->create(['name' => 'Other Tenant Secret', 'guard_name' => 'web', 'company_id' => $otherCompany->id]);
         $registrar->setPermissionsTeamId(null);
 
-        Sanctum::actingAs($owner);
+        Sanctum::actingAs($owner, ['company-api']);
         $this->getJson('/api/v1/roles')
             ->assertOk()
             ->assertJsonFragment(['name' => 'Company Owner'])
@@ -267,7 +267,7 @@ class PhaseOneFoundationTest extends TestCase
     {
         $admin = User::query()->create([
             'name' => 'Platform Operator', 'email' => 'duplicate-admin@example.test',
-            'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'status' => 'active',
+            'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active',
         ]);
         $existingCompany = Company::query()->create(['name' => 'Existing Tenant', 'status' => 'active']);
         User::query()->create([
@@ -301,7 +301,7 @@ class PhaseOneFoundationTest extends TestCase
         Subscription::query()->create(['company_id' => $company->id, 'plan_id' => $plan->id, 'status' => 'suspended', 'starts_at' => now()->subMonth(), 'ends_at' => now()->subDays(10)]);
         $user = User::query()->create(['name' => 'Owner', 'email' => 'suspended@example.test', 'password' => 'correct-horse-battery', 'company_id' => $company->id, 'account_type' => 'company', 'status' => 'active']);
 
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->getJson('/api/v1/subscription')->assertOk()->assertJson(['status' => 'suspended']);
         $this->getJson('/api/v1/roles')->assertForbidden();
         $this->postJson('/api/v1/logout')->assertOk();
@@ -363,7 +363,7 @@ class PhaseOneFoundationTest extends TestCase
         Role::query()->create(['name' => 'Private Role', 'guard_name' => 'web', 'company_id' => $secondCompany->id]);
         $registrar->setPermissionsTeamId(null);
 
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->getJson('/api/v1/roles')
             ->assertOk()
             ->assertJsonFragment(['name' => 'Company Owner'])
@@ -417,7 +417,7 @@ class PhaseOneFoundationTest extends TestCase
         $this->assertTrue($user->hasPermissionTo('roles.create'));
         $registrar->setPermissionsTeamId(null);
 
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $created = $this->postJson('/api/v1/roles', ['name' => 'Reporter', 'permissions' => ['reports.view']])
             ->assertCreated()
             ->assertJsonPath('data.name', 'Reporter');
@@ -473,7 +473,7 @@ class PhaseOneFoundationTest extends TestCase
             $this->assertSame(403, $exception->getStatusCode());
         }
 
-        Sanctum::actingAs($owner);
+        Sanctum::actingAs($owner, ['company-api']);
         $newUser = [
             'first_name' => 'New', 'second_name' => 'Seat', 'email' => 'new-seat@example.test',
             'password' => 'correct-horse-battery', 'password_confirmation' => 'correct-horse-battery',
@@ -483,8 +483,8 @@ class PhaseOneFoundationTest extends TestCase
 
         $subscription->forceFill(['overrides' => ['limit_addons' => ['users' => 2, 'branches' => 3, 'warehouses' => 4]]])->save();
         $this->assertSame(3, $limits->effectiveLimit($subscription->fresh(), 'users'));
-        $this->assertSame(3, $limits->effectiveLimit($subscription->fresh(), 'branches'));
-        $this->assertSame(4, $limits->effectiveLimit($subscription->fresh(), 'warehouses'));
+        $this->assertNull($limits->effectiveLimit($subscription->fresh(), 'branches'), 'An unlimited base limit must stay unlimited with an add-on.');
+        $this->assertNull($limits->effectiveLimit($subscription->fresh(), 'warehouses'));
         $this->assertSame(0, $limits->currentCount($company, 'branches'));
         $limits->assertCanAdd($company, $subscription->fresh(), 'users');
         $this->postJson('/api/v1/users', $newUser)->assertCreated();
@@ -496,26 +496,39 @@ class PhaseOneFoundationTest extends TestCase
         $firstPlan = Plan::query()->create(['code' => 'life-first', 'name' => 'First', 'duration' => 'monthly', 'price' => 10, 'is_active' => true]);
         $secondPlan = Plan::query()->create(['code' => 'life-second', 'name' => 'Second', 'duration' => 'yearly', 'price' => 20, 'is_active' => true]);
         $subscription = Subscription::query()->create(['company_id' => $company->id, 'plan_id' => $firstPlan->id, 'status' => 'active', 'starts_at' => now()->subMonth(), 'ends_at' => now()->subDays(10)]);
-        $admin = User::query()->create(['name' => 'Admin', 'email' => 'lifecycle-admin@example.test', 'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'status' => 'active']);
+        $admin = User::query()->create(['name' => 'Admin', 'email' => 'lifecycle-admin@example.test', 'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active']);
 
-        $this->actingAs($admin)->get('/super-admin')->assertOk()->assertInertia(fn ($page) => $page
-            ->component('SuperAdmin/Dashboard')
+        $this->actingAs($admin)->withSession(['platform_stepup_at' => time()]);
+        $this->get('/super-admin/companies')->assertOk()->assertInertia(fn ($page) => $page
+            ->component('SuperAdmin/Companies')
             ->where('companies.data.0.name', 'Lifecycle Co')
             ->where('companies.data.0.subscription.plan.name', 'First'));
-        $this->put("/super-admin/companies/{$company->id}/limit-addons", ['users' => 2, 'branches' => 1, 'warehouses' => 3])->assertRedirect();
+        $this->put("/super-admin/companies/{$company->id}/limit-addons", ['users' => 2, 'branches' => 1, 'warehouses' => 3])->assertSessionHasErrors('reason');
+        $this->put("/super-admin/companies/{$company->id}/limit-addons", ['users' => 2, 'branches' => 1, 'warehouses' => 3, 'reason' => 'Agreed add-on'])->assertRedirect();
         $this->assertSame(['users' => 2, 'branches' => 1, 'warehouses' => 3], $subscription->fresh()->overrides['limit_addons']);
-        $this->post("/super-admin/companies/{$company->id}/plan", ['plan_id' => $secondPlan->id])->assertRedirect();
-        $this->assertSame($secondPlan->id, $subscription->fresh()->plan_id);
-        $this->post("/super-admin/companies/{$company->id}/renew", ['amount' => 20, 'reference' => 'renewal-test'])->assertRedirect();
-        $this->assertTrue($subscription->fresh()->ends_at->isFuture());
-        $this->assertDatabaseHas('manual_payments', ['subscription_id' => $subscription->id, 'status' => 'paid', 'reference' => 'renewal-test']);
-        $this->post("/super-admin/companies/{$company->id}/suspend")->assertRedirect();
+
+        $this->post("/super-admin/companies/{$company->id}/plan", ['plan_id' => $secondPlan->id, 'reason' => 'Customer upgrade'])->assertRedirect();
+        $current = $company->subscriptions()->current()->firstOrFail();
+        $this->assertNotSame($subscription->id, $current->id);
+        $this->assertSame($secondPlan->id, $current->plan_id);
+        $this->assertNotNull($subscription->fresh()->superseded_at);
+        $this->assertSame($firstPlan->id, $subscription->fresh()->plan_id);
+        $this->assertSame($subscription->ends_at->timestamp, $current->ends_at->timestamp);
+
+        $renewal = ['amount' => 20, 'reference' => 'renewal-test', 'idempotency_key' => 'renewal-key-0001', 'reason' => 'Bank transfer received'];
+        $this->post("/super-admin/companies/{$company->id}/renew", $renewal)->assertRedirect();
+        $this->post("/super-admin/companies/{$company->id}/renew", $renewal)->assertRedirect();
+        $this->assertTrue($current->fresh()->ends_at->isFuture());
+        $this->assertDatabaseHas('manual_payments', ['subscription_id' => $current->id, 'status' => 'paid', 'reference' => 'renewal-test']);
+        $this->assertSame(1, \DB::table('manual_payments')->where('idempotency_key', 'renewal-key-0001')->count());
+
+        $this->post("/super-admin/companies/{$company->id}/suspend", ['reason' => 'Contract review'])->assertRedirect();
         $this->assertSame('suspended', $company->fresh()->status);
-        $this->post("/super-admin/companies/{$company->id}/activate")->assertRedirect();
+        $this->post("/super-admin/companies/{$company->id}/activate", ['reason' => 'Review done'])->assertRedirect();
         $this->assertSame('active', $company->fresh()->status);
-        $this->post("/super-admin/companies/{$company->id}/archive")->assertRedirect();
+        $this->post("/super-admin/companies/{$company->id}/archive", ['reason' => 'Customer left'])->assertRedirect();
         $this->assertSame('archived', $company->fresh()->status);
-        $this->post("/super-admin/companies/{$company->id}/restore")->assertRedirect();
+        $this->post("/super-admin/companies/{$company->id}/restore", ['reason' => 'Customer returned'])->assertRedirect();
         $this->assertSame('active', $company->fresh()->status);
         $this->assertDatabaseHas('audit_logs', ['event' => 'company.restored', 'user_id' => $admin->id]);
     }
@@ -525,9 +538,9 @@ class PhaseOneFoundationTest extends TestCase
         $company = Company::query()->create(['name' => 'Long Archived Co', 'status' => 'archived', 'archived_at' => now()->subMonths(7)]);
         $plan = Plan::query()->create(['code' => 'long-archived', 'name' => 'Long Archived', 'duration' => 'monthly', 'price' => 10, 'is_active' => true]);
         $subscription = Subscription::query()->create(['company_id' => $company->id, 'plan_id' => $plan->id, 'status' => 'active', 'starts_at' => now()->subYear(), 'ends_at' => now()->subMonths(7)]);
-        $admin = User::query()->create(['name' => 'Admin', 'email' => 'restore-admin@example.test', 'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'status' => 'active']);
+        $admin = User::query()->create(['name' => 'Admin', 'email' => 'restore-admin@example.test', 'password' => 'correct-horse-battery', 'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active']);
 
-        $this->actingAs($admin)->post("/super-admin/companies/{$company->id}/restore")->assertRedirect();
+        $this->actingAs($admin)->withSession(['platform_stepup_at' => time()])->post("/super-admin/companies/{$company->id}/restore", ['reason' => 'Customer returned'])->assertRedirect();
 
         $this->assertSame('active', $company->fresh()->status);
         $this->assertNull($company->fresh()->archived_at);
@@ -588,7 +601,7 @@ class PhaseOneFoundationTest extends TestCase
         $user->assignRole($role);
         $registrar->setPermissionsTeamId(null);
 
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['company-api']);
         $this->postJson('/api/v1/users', [])->assertForbidden();
         $this->getJson('/api/v1/subscription')->assertOk()->assertJson(['status' => 'read_only']);
         $this->putJson('/api/v1/password', [

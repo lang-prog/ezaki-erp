@@ -35,9 +35,16 @@ class AuthenticationController extends Controller
             return back()->withErrors(['email' => 'The supplied sign-in details are invalid.'])->onlyInput('email');
         }
 
-        Auth::login($user, $request->boolean('remember'));
+        // Platform sessions never use a remember-me recaller; it would outlive the scoped platform session cookie.
+        Auth::login($user, $type === 'company' && $request->boolean('remember'));
         $request->session()->regenerate();
         $request->session()->put('session_version', (int) $user->session_version);
+        if ($type === 'super_admin') {
+            $request->session()->forget(['platform_mfa_at', 'platform_stepup_at']);
+            if (! $user->hasMfa()) {
+                $request->session()->put('platform_stepup_at', time());
+            }
+        }
 
         return redirect()->intended($landing->forUser($user));
     }

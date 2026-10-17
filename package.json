@@ -5,13 +5,14 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "test": "node --test tests/csrf.test.mjs tests/company-settings.test.mjs tests/navigation.test.mjs tests/statement.test.mjs tests/accounting-ux.test.mjs"
+        "test": "node --test tests/csrf.test.mjs tests/company-settings.test.mjs tests/navigation.test.mjs tests/statement.test.mjs tests/accounting-ux.test.mjs tests/platform-ui.test.mjs tests/plan-change.test.mjs"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",
         "@vitejs/plugin-react": "^4.7.0",
         "axios": "^1.11.0",
         "concurrently": "^9.0.1",
+        "jsdom": "^25.0.1",
         "laravel-vite-plugin": "^1.3.0",
         "tailwindcss": "^4.0.0",
         "vite": "^6.4.1"
