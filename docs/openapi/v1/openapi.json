@@ -178,6 +178,7 @@
           "core"
         ],
         "operationId": "subscription",
+        "description": "Current subscription status. The additive `notice` object (state, category, access, show, key, params, severity, ends_at, ends_on, timezone, days_remaining) is derived on the server from the same lifecycle the access middleware enforces; clients must not compute remaining days themselves.",
         "security": [
           {
             "bearerAuth": []

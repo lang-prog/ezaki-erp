@@ -4,10 +4,11 @@ import { translate } from '../i18n';
 import { companyNavigation, platformNavigation } from '../navigation';
 import NavigationIcon from '../Components/NavigationIcon';
 import SidebarNav from '../Components/SidebarNav';
+import SubscriptionNotice from '../Components/SubscriptionNotice';
 
 export default function WorkspaceLayout({ title, children, platform = false }) {
     const { props, url } = usePage();
-    const { auth, locale, subscriptionWarning, navigationCapabilities = {} } = props;
+    const { auth, locale, subscriptionNotice, navigationCapabilities = {} } = props;
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [theme, setTheme] = useState(() => (typeof window !== 'undefined' ? window.localStorage.getItem('ezaki-theme') || 'light' : 'light'));
     const closeSidebar = useCallback(() => setSidebarOpen(false), []);
@@ -54,7 +55,7 @@ export default function WorkspaceLayout({ title, children, platform = false }) {
             </header>
             <main id="main-content" className="ez-main" tabIndex={-1}>
                 <div className="page-body">
-                    {!platform && subscriptionWarning && <div className="notice-card" role="status">{t('renewalWarning')}</div>}
+                    {!platform && url.split('?')[0] !== '/subscription' && <SubscriptionNotice notice={subscriptionNotice} locale={locale} canView={Boolean(navigationCapabilities['subscriptions.view'])} />}
                     {children}
                 </div>
             </main>

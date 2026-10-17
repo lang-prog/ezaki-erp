@@ -53,7 +53,10 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/subscription', function (Request $request, SubscriptionLifecycle $lifecycle) {
         $subscription = $lifecycle->currentFor($request->attributes->get('company'));
 
-        return Inertia::render('Company/Subscription', ['subscription' => $subscription, 'status' => $request->attributes->get('subscription_status')]);
+        return Inertia::render('Company/Subscription', [
+            'subscription' => $subscription ? ['plan' => $subscription->plan?->only(['name', 'duration'])] : null,
+            'status' => $request->attributes->get('subscription_status'),
+        ]);
     })->middleware('can:subscriptions.view')->name('company.subscription');
     Route::post('/subscription/contact', [CompanySubscriptionRequestController::class, 'store'])->defaults('type', 'contact')->middleware(['can:subscriptions.view', 'throttle:6,1'])->name('company.subscription.contact');
     Route::post('/subscription/renew', [CompanySubscriptionRequestController::class, 'store'])->defaults('type', 'renew')->middleware(['can:subscriptions.view', 'throttle:6,1'])->name('company.subscription.renew');

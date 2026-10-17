@@ -173,6 +173,15 @@ No company, accounting, stock or journal row is rewritten. Existing subscription
 
 **Production notes:** do not edit production data by hand; the Super Admin UI is the only supported lifecycle writer. Verify `release:preflight --production`, the smoke script, a Platform Owner login, an MFA challenge and one audited reversible action (for example, suspend then activate a test company) before removing maintenance mode.
 
+### Subscription notice (expiry banner) rollout
+
+No migration and no data change. The banner, subscription page, `GET /api/v1/subscription` (additive `notice` field) and the daily expiry email are all derived by `App\Services\SubscriptionNotice` from the same `SubscriptionLifecycle` the access middleware enforces.
+
+- `COMPANY_DEFAULT_TIMEZONE` (default `Africa/Cairo`): timezone used to count calendar days when a company has no valid `settings.timezone`. Keep the host PHP/ICU timezone database current; an outdated tzdata (for example Egypt's reinstated DST) shifts local midnights by an hour.
+- `SUBSCRIPTION_NOTICE_DAYS` (default `7`): paid subscriptions are announced, and the daily email is sent, only when this many calendar days or fewer remain. Trial and test periods are always announced in the banner (email follows the same window).
+- After deploying run `php artisan config:clear` (then re-cache) so `config/subscription.php` is read; no queue restart is needed beyond the usual `php artisan queue:restart`.
+- Rollback is code-only; nothing in the database changed.
+
 ### External verification still required
 
 This repository-only pass cannot provide XAMPP/Apache, SMTP, Redis, a persistent queue worker, production HTTPS, load/P95, or a real MySQL migration/backup/restore proof. Run those integration checks in the deployment environment/CI (including foreign keys, `EXPLAIN`, queue retry/failure behavior, and a restore drill) before release acceptance.

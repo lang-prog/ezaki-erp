@@ -19,13 +19,16 @@ const inertiaStub = {
             resolveDir: rootDir,
             loader: 'js',
             contents: `
-                import { createElement } from 'react';
-                export const usePage = () => ({ props: window.__pageProps });
-                export const Link = ({ href, children }) => createElement('a', { href }, children);
+                import { createElement, useState } from 'react';
+                export const usePage = () => ({ props: window.__pageProps, url: window.__pageUrl ?? '/' });
+                export const Head = () => null;
+                export const Link = ({ href, children, ...rest }) => createElement('a', { href, ...(rest.className ? { className: rest.className } : {}) }, children);
+                export const useForm = (initial) => { const [data, set] = useState(initial); return { data, setData: (key, value) => set({ ...data, [key]: value }), post: (url) => window.__inertia.push(['form-post', url]), processing: false, errors: {} }; };
                 export const router = {
                     reload: (options) => window.__inertia.push(['reload', options]),
                     visit: (url, options) => window.__inertia.push(['visit', url, options]),
                     get: (url, data, options) => window.__inertia.push(['get', url, data, options]),
+                    post: (url, data, options) => window.__inertia.push(['post', url, data, options]),
                     on: () => () => {},
                 };
             `,
@@ -54,7 +57,7 @@ export async function bundleEntry(entry) {
 }
 
 /** Boots a jsdom window with the bundled entry plus scripted axios; returns helpers to drive and inspect the UI. */
-export async function createScene({ entry, locale = 'en', url = 'http://localhost/super-admin/subscriptions?state=lapsed', handler }) {
+export async function createScene({ entry, locale = 'en', url = 'http://localhost/super-admin/subscriptions?state=lapsed', handler = async () => ({ data: {} }), pageProps = {}, pageUrl = '/' }) {
     const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url, runScripts: 'outside-only', pretendToBeVisual: true });
     scenes.add(dom);
     const { window } = dom;
@@ -68,7 +71,9 @@ export async function createScene({ entry, locale = 'en', url = 'http://localhos
     };
     window.TextEncoder = globalThis.TextEncoder;
     window.TextDecoder = globalThis.TextDecoder;
-    window.__pageProps = { locale, capabilities: { 'platform.subscriptions.plan_change': true } };
+    window.__pageProps = { locale, capabilities: { 'platform.subscriptions.plan_change': true }, ...pageProps };
+    window.__pageUrl = pageUrl;
+    window.matchMedia = () => ({ matches: window.innerWidth < 900, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
     window.__inertia = [];
     window.document.documentElement.lang = locale;
     window.document.documentElement.dir = locale === 'ar' ? 'rtl' : 'ltr';

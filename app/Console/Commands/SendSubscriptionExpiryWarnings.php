@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Notifications\SubscriptionExpiryWarning;
+use App\Services\SubscriptionNotice;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Notification;
@@ -17,23 +18,28 @@ class SendSubscriptionExpiryWarnings extends Command
 
     protected $description = 'Send daily subscription expiry reminders to company owners';
 
-    public function handle(): int
+    public function handle(SubscriptionNotice $notices): int
     {
         $today = today()->toDateString();
-        $windowEnd = now()->addDays(7);
+        // The query is a coarse candidate window; the notice service decides with the same calendar-day policy as the banner.
+        $windowEnd = now()->addDays(max(0, (int) config('subscription.notice_days', 7)) + 1);
         $sent = 0;
         $failed = 0;
 
         Subscription::query()
-            ->with('company')
+            ->with(['company', 'plan'])
             ->whereNull('superseded_at')
             ->where('status', 'active')
             ->whereNotNull('ends_at')
             ->whereBetween('ends_at', [now(), $windowEnd])
             ->whereHas('company', fn ($query) => $query->where('status', 'active'))
             ->orderBy('id')
-            ->chunkById(100, function ($subscriptions) use ($today, &$sent, &$failed): void {
+            ->chunkById(100, function ($subscriptions) use ($notices, $today, &$sent, &$failed): void {
                 foreach ($subscriptions as $subscription) {
+                    $notice = $notices->for($subscription->company, $subscription);
+                    if ($notice['state'] !== 'active' || $notice['access'] !== 'warning' || $notice['category'] === 'lifetime') {
+                        continue;
+                    }
                     $owners = User::query()
                         ->where('company_id', $subscription->company_id)
                         ->where('account_type', 'company')

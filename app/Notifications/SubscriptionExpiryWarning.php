@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Notifications;
 
 use App\Models\Subscription;
+use App\Services\SubscriptionNotice;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -30,10 +31,21 @@ class SubscriptionExpiryWarning extends Notification implements ShouldQueue
 
     public function toMail(object $notifiable): MailMessage
     {
+        $company = $this->subscription->company;
+        $notice = $company ? app(SubscriptionNotice::class)->for($company, $this->subscription) : null;
+        $category = in_array($notice['category'] ?? null, ['trial', 'test'], true) ? $notice['category'] : 'paid';
+        $date = (string) ($notice['ends_on'] ?? '');
+        $key = (string) ($notice['key'] ?? '');
+        $line = match (true) {
+            $key === "{$category}.ends" => __("subscription.mail.ends.{$category}", ['days' => trans_choice('subscription.days', (int) $notice['params']['days']), 'date' => $date]),
+            $key === "{$category}.today" => __("subscription.mail.today.{$category}", ['date' => $date]),
+            default => __('subscription.mail.generic', ['date' => $date]),
+        };
+
         return (new MailMessage)
-            ->subject('E-Zaki ERP subscription expiry reminder')
-            ->greeting('Hello '.$notifiable->name)
-            ->line('Your company subscription is scheduled to expire on '.$this->subscription->ends_at?->toDateString().'.')
-            ->line('Please contact your platform administrator to arrange renewal.');
+            ->subject(__("subscription.mail.subject.{$category}"))
+            ->greeting(__('subscription.mail.greeting', ['name' => $notifiable->name]))
+            ->line($line)
+            ->line(__('subscription.mail.action'));
     }
 }

@@ -1,5 +1,6 @@
 import { accountingAr, accountingEn } from './i18n-accounting.js';
 import { platformAr, platformEn } from './i18n-platform.js';
+import { subscriptionAr, subscriptionEn } from './i18n-subscription.js';
 
 const strings = {
     en: {
@@ -25,7 +26,7 @@ const strings = {
         steelTrade: 'Steel trade', clearControl: 'Clear control for every company operation.',
         createUser: 'Create user', customRole: 'Custom role', roleName: 'Role name', initialPassword: 'Initial password',
         assignRole: 'Assign role', users: 'Users', create: 'Create', monthly: 'Monthly', sixMonths: 'Six months', yearly: 'Yearly', trial: 'Trial', lifetime: 'Lifetime',
-        changePassword: 'Change password', currentPassword: 'Current password', newPassword: 'New password', updatePassword: 'Update password', renewalWarning: 'Your subscription expires within seven days.', subscriptionStatus: 'Status',
+        changePassword: 'Change password', currentPassword: 'Current password', newPassword: 'New password', updatePassword: 'Update password', subscriptionStatus: 'Status',
         branches: 'Branches & warehouses', inventory: 'Inventory', parties: 'Customers & suppliers', customers: 'Customers', suppliers: 'Suppliers', accounting: 'Accounting',
         createBranch: 'Create branch', branchCode: 'Branch code', branchName: 'Branch name', warehouseName: 'Warehouse name',
         warehouses: 'Warehouses', edit: 'Edit', archive: 'Archive', saveChanges: 'Save changes', noBranches: 'No branches yet.',
@@ -81,7 +82,7 @@ const strings = {
         steelTrade: 'تجارة حديد التسليح', clearControl: 'تحكم واضح في عمليات شركتك.',
         createUser: 'إنشاء مستخدم', customRole: 'دور مخصص', roleName: 'اسم الدور', initialPassword: 'كلمة المرور الأولية',
         assignRole: 'تعيين دور', users: 'المستخدمون', create: 'إنشاء', monthly: 'شهري', sixMonths: 'ستة أشهر', yearly: 'سنوي', trial: 'تجريبي', lifetime: 'مدى الحياة',
-        changePassword: 'تغيير كلمة المرور', currentPassword: 'كلمة المرور الحالية', newPassword: 'كلمة المرور الجديدة', updatePassword: 'تحديث كلمة المرور', renewalWarning: 'ينتهي اشتراكك خلال سبعة أيام.', subscriptionStatus: 'الحالة',
+        changePassword: 'تغيير كلمة المرور', currentPassword: 'كلمة المرور الحالية', newPassword: 'كلمة المرور الجديدة', updatePassword: 'تحديث كلمة المرور', subscriptionStatus: 'الحالة',
         branches: 'الفروع والمخازن', inventory: 'المخزون', parties: 'العملاء والموردون', customers: 'العملاء', suppliers: 'الموردون', accounting: 'المحاسبة',
         createBranch: 'إنشاء فرع', branchCode: 'كود الفرع', branchName: 'اسم الفرع', warehouseName: 'اسم المخزن',
         warehouses: 'المخازن', edit: 'تعديل', archive: 'أرشفة', saveChanges: 'حفظ التعديلات', noBranches: 'لا توجد فروع بعد.',
@@ -116,8 +117,8 @@ const strings = {
     },
 };
 
-Object.assign(strings.en, accountingEn, platformEn);
-Object.assign(strings.ar, accountingAr, platformAr);
+Object.assign(strings.en, accountingEn, platformEn, subscriptionEn);
+Object.assign(strings.ar, accountingAr, platformAr, subscriptionAr);
 
 export const catalog = strings;
 

@@ -20,11 +20,18 @@ Route::prefix('v1')->group(function (): void {
     Route::middleware(['auth:sanctum', 'company.api', 'session.version', 'account.type:company', 'tenant', 'subscription', 'local.license'])->group(function (): void {
         Route::get('/subscription', function (Request $request, SubscriptionLifecycle $lifecycle) {
             $subscription = $lifecycle->currentFor($request->attributes->get('company'));
+            $endsAt = null;
+            try {
+                $endsAt = $subscription?->ends_at;
+            } catch (Throwable) {
+                // An unreadable end date is reported through the notice, never as a 500.
+            }
 
             return response()->json([
                 'status' => $request->attributes->get('subscription_status'),
                 'plan' => $subscription?->plan?->only(['id', 'name', 'duration']),
-                'ends_at' => $subscription?->ends_at,
+                'ends_at' => $endsAt,
+                'notice' => $request->attributes->get('subscription_notice'),
             ]);
         })->middleware('throttle:api.read')->name('api.v1.subscription');
         Route::post('/subscription/contact', [CompanySubscriptionRequestController::class, 'store'])->defaults('type', 'contact')->middleware(['can:subscriptions.view', 'throttle:api.write'])->name('api.v1.subscription.contact');

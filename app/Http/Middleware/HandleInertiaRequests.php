@@ -49,7 +49,7 @@ class HandleInertiaRequests extends Middleware
             'capabilities' => $capabilities,
             'navigationCapabilities' => $capabilities,
             'subscriptionStatus' => fn () => $request->attributes->get('subscription_status'),
-            'subscriptionWarning' => fn () => $request->attributes->get('subscription_warning', false),
+            'subscriptionNotice' => fn () => $request->attributes->get('subscription_notice'),
             'registrationOpen' => fn () => PlatformSetting::boolean('self_registration_open', config('registration.open')),
         ]);
     }
