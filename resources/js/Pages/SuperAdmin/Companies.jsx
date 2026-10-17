@@ -26,7 +26,8 @@ function CreateCompany({ plans, onSaved }) {
         }
     }
     const text = (key, label, props = {}) => <label className="field"><span>{t(label)}</span><input value={form[key]} onChange={set(key)} {...props} /></label>;
-    return <form className="erp-section posting-form" onSubmit={submit} aria-labelledby="create-company-title">
+    return <>
+    <form className="erp-section posting-form" onSubmit={submit} aria-labelledby="create-company-title">
         <h2 id="create-company-title">{t('pf_create_company')}</h2>
         {state.error && <Notice type="error">{state.error}</Notice>}
         {state.ok && <Notice type="success">{t('pf_company_created')}</Notice>}
@@ -39,9 +40,10 @@ function CreateCompany({ plans, onSaved }) {
             <label className="field field--wide"><span>{t('address')}</span><input value={form.address} onChange={set('address')} /></label>
             <label className="field field--wide"><span>{t('pf_admin_notes')}</span><input value={form.notes} onChange={set('notes')} /></label>
         </div>
-        <button disabled={state.busy} className="erp-button erp-button--primary">{t('pf_create_company_submit')}</button>
-        {api.stepUpDialog}
-    </form>;
+        <button type="submit" disabled={state.busy} className="erp-button erp-button--primary">{t('pf_create_company_submit')}</button>
+    </form>
+    {api.stepUpDialog}
+    </>;
 }
 
 export default function Companies({ companies, filters = {}, plans = [] }) {
@@ -64,7 +66,7 @@ export default function Companies({ companies, filters = {}, plans = [] }) {
             <form className="report-filter-bar no-print" onSubmit={apply}>
                 <label className="field"><span>{t('pf_search')}</span><input type="search" value={values.q} onChange={(event) => setValues({ ...values, q: event.target.value })} /></label>
                 <label className="field"><span>{t('status')}</span><select value={values.status} onChange={(event) => setValues({ ...values, status: event.target.value })}><option value="">{t('allStatuses')}</option>{['active', 'suspended', 'archived'].map((s) => <option key={s} value={s}>{t(`pf_status_${s}`)}</option>)}</select></label>
-                <div className="erp-toolbar"><button className="erp-button erp-button--primary">{t('apply')}</button></div>
+                <div className="erp-toolbar"><button type="submit" className="erp-button erp-button--primary">{t('apply')}</button></div>
             </form>
             <div className="erp-table-wrap"><table className="erp-table">
                 <thead><tr><th>{t('pf_company')}</th><th>{t('status')}</th><th>{t('pf_plan')}</th><th>{t('pf_access_state')}</th><th>{t('pf_ends')}</th><th className="no-print">{t('actions')}</th></tr></thead>

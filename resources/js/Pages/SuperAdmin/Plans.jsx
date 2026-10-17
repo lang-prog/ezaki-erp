@@ -51,7 +51,7 @@ export default function Plans({ plans = [], coupons = [] }) {
                     <label className="field"><span>{t('price')}</span><input type="number" min="0" step="0.01" required value={plan.price} onChange={(e) => setPlan({ ...plan, price: e.target.value })} /></label>
                     {['users', 'branches', 'warehouses'].map((key) => <label key={key} className="field"><span>{t(`pf_res_${key}`)} <small>({t('pf_empty_unlimited')})</small></span><input type="number" min="1" value={plan.limits[key]} onChange={(e) => setPlan({ ...plan, limits: { ...plan.limits, [key]: e.target.value } })} /></label>)}
                 </div>
-                <button className="erp-button erp-button--primary">{t('createPlan')}</button>
+                <button type="submit" className="erp-button erp-button--primary">{t('createPlan')}</button>
             </form>}
         </section>
         <section className="erp-section" aria-labelledby="coupons-title">
@@ -74,7 +74,7 @@ export default function Plans({ plans = [], coupons = [] }) {
                     <label className="field"><span>{t('pf_valid_from')}</span><input type="datetime-local" value={coupon.starts_at} onChange={(e) => setCoupon({ ...coupon, starts_at: e.target.value })} /></label>
                     <label className="field"><span>{t('pf_valid_to')}</span><input type="datetime-local" value={coupon.ends_at} onChange={(e) => setCoupon({ ...coupon, ends_at: e.target.value })} /></label>
                 </div>
-                <button className="erp-button erp-button--primary">{t('createCoupon')}</button>
+                <button type="submit" className="erp-button erp-button--primary">{t('createCoupon')}</button>
             </form>}
         </section>
         {dialog && <ConfirmActionDialog title={`${t(dialog.row.is_active ? 'pf_deactivate' : 'pf_activate')} — ${dialog.row.name ?? dialog.row.code}`} danger={dialog.row.is_active} confirmLabel={t(dialog.row.is_active ? 'pf_deactivate' : 'pf_activate')} impact={<p>{t(dialog.kind === 'plans' ? 'pf_impact_toggle_plan' : 'pf_impact_toggle_coupon')}</p>} onClose={() => setDialog(null)} onConfirm={({ reason }) => api.act('post', `/super-admin/${dialog.kind}/${dialog.row.id}/toggle`, { is_active: !dialog.row.is_active, reason })} />}

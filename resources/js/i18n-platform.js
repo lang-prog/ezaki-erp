@@ -1,6 +1,10 @@
 // Super Admin (platform) strings. Merged into the base catalog by i18n.js.
 export const platformEn = {
     pf_name: 'Name',
+    pf_no_plans: 'There are no active plans to choose from. Create or activate a plan first.', pf_plan_stale: 'The selected plan is no longer available. Choose another plan.', pf_plan_inactive: 'This plan is not active and cannot be assigned.', pf_price: 'Price', pf_duration: 'Duration',
+    pf_err_403: 'You do not have permission to perform this action.', pf_err_409: 'The request conflicts with the current state of the company or subscription.', pf_err_419: 'Your session expired. Reload the data and try again.', pf_err_422: 'Some of the entered details are invalid.', pf_err_423: 'A fresh identity confirmation is required.', pf_err_429: 'Too many attempts. Wait a moment and try again.', pf_err_500: 'The server could not complete the request. Reload the data to confirm the current state, then try again.', pf_err_network: 'The server could not be reached. Check your connection and try again.',
+    pf_reload_data: 'Reload data', pf_render_failed: 'This part of the page could not be displayed. Close the dialog and try again.',
+    pf_boundary_title: 'Something went wrong on this page', pf_boundary_copy: 'Your data was not changed. Try again, or reload the page.', pf_boundary_retry: 'Try again', pf_boundary_reload: 'Reload page',
     pf_pagination: 'Pages', pf_empty: 'No records.', pf_loading: 'Loading…', pf_saved: 'Saved.', pf_error_generic: 'The request could not be completed. Check the details and try again.',
     pf_security: 'Security', pf_stepup_title: 'Confirm your identity', pf_stepup_copy: 'This action needs a recent password confirmation. Enter your password and, if enabled, a code from your authenticator app.',
     pf_confirm: 'Confirm', pf_confirm_eyebrow: 'Confirmation', pf_review_hint: 'Review the impact before you confirm.', pf_danger_hint: 'This action has a significant effect. Review it carefully.',
@@ -59,6 +63,10 @@ export const platformEn = {
 
 export const platformAr = {
     pf_name: 'الاسم',
+    pf_no_plans: 'لا توجد خطط نشطة للاختيار منها. أنشئ خطة أو فعّلها أولًا.', pf_plan_stale: 'الخطة المختارة لم تعد متاحة. اختر خطة أخرى.', pf_plan_inactive: 'هذه الخطة غير نشطة ولا يمكن إسنادها.', pf_price: 'السعر', pf_duration: 'المدة',
+    pf_err_403: 'ليست لديك صلاحية لتنفيذ هذا الإجراء.', pf_err_409: 'الطلب يتعارض مع الحالة الحالية للشركة أو الاشتراك.', pf_err_419: 'انتهت صلاحية الجلسة. أعد تحميل البيانات وحاول مرة أخرى.', pf_err_422: 'بعض البيانات المدخلة غير صحيحة.', pf_err_423: 'مطلوب تأكيد هوية حديث.', pf_err_429: 'محاولات كثيرة. انتظر قليلًا ثم حاول مرة أخرى.', pf_err_500: 'تعذر على الخادم إتمام الطلب. أعد تحميل البيانات للتأكد من الحالة الحالية ثم حاول مرة أخرى.', pf_err_network: 'تعذر الوصول إلى الخادم. تحقق من الاتصال وحاول مرة أخرى.',
+    pf_reload_data: 'إعادة تحميل البيانات', pf_render_failed: 'تعذر عرض هذا الجزء من الصفحة. أغلق النافذة وحاول مرة أخرى.',
+    pf_boundary_title: 'حدث خطأ في هذه الصفحة', pf_boundary_copy: 'لم تتغير بياناتك. حاول مرة أخرى أو أعد تحميل الصفحة.', pf_boundary_retry: 'حاول مرة أخرى', pf_boundary_reload: 'إعادة تحميل الصفحة',
     pf_pagination: 'الصفحات', pf_empty: 'لا توجد سجلات.', pf_loading: 'جارٍ التحميل…', pf_saved: 'تم الحفظ.', pf_error_generic: 'تعذر إتمام الطلب. راجع البيانات وحاول مرة أخرى.',
     pf_security: 'الأمان', pf_stepup_title: 'تأكيد الهوية', pf_stepup_copy: 'يتطلب هذا الإجراء تأكيدًا حديثًا لكلمة المرور. أدخل كلمة المرور ورمز تطبيق المصادقة إن كان مفعّلًا.',
     pf_confirm: 'تأكيد', pf_confirm_eyebrow: 'تأكيد', pf_review_hint: 'راجع الأثر قبل التأكيد.', pf_danger_hint: 'لهذا الإجراء أثر كبير. راجعه بعناية.',

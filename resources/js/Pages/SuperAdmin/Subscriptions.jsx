@@ -1,35 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { router } from '@inertiajs/react';
 import SuperAdminLayout from '../../Layouts/SuperAdminLayout';
-import { ConfirmActionDialog, EmptyRow, Notice, PageHeader, Pagination, StatusBadge, errorText, newKey, usePlatformApi, usePt } from '../../Components/Platform/ui';
-
-function usePreview(params, enabled = true) {
-    const [state, setState] = useState({ loading: enabled, data: null, error: '' });
-    const query = JSON.stringify(params);
-    useEffect(() => {
-        if (!enabled) return undefined;
-        let cancelled = false;
-        setState({ loading: true, data: null, error: '' });
-        window.axios.get('/super-admin/subscriptions/preview', { params: JSON.parse(query) })
-            .then((response) => !cancelled && setState({ loading: false, data: response.data, error: '' }))
-            .catch((error) => !cancelled && setState({ loading: false, data: null, error: errorText(error, '') || 'error' }));
-        return () => { cancelled = true; };
-    }, [query, enabled]);
-    return state;
-}
-
-function UsageTable({ usage, over, t }) {
-    return <table className="erp-table"><thead><tr><th>{t('pf_resource')}</th><th>{t('pf_usage')}</th><th>{t('pf_limit')}</th></tr></thead><tbody>
-        {Object.entries(usage).map(([key, row]) => <tr key={key}><td>{t(`pf_res_${key}`)}</td><td>{row.usage}</td><td>{row.limit ?? t('pf_unlimited')} {over.includes(key) && <StatusBadge status="failed" label={t('pf_over_limit')} />}</td></tr>)}
-    </tbody></table>;
-}
+import { ConfirmActionDialog, EmptyRow, Notice, PageHeader, Pagination, StatusBadge, newKey, usePlatformApi, usePreview, usePt } from '../../Components/Platform/ui';
+import PlanChangeDialog, { UsageTable } from '../../Components/Platform/PlanChangeDialog';
 
 function PaymentDialog({ subscription, onClose, api }) {
     const { t, date, money } = usePt();
     const key = useMemo(() => newKey(), []);
     const [form, setForm] = useState({ amount: '', status: 'paid', reference: '', notes: '' });
     const preview = usePreview({ company_id: subscription.company_id, action: 'payment' });
-    const info = preview.data;
+    const info = preview.data ?? {};
     return <ConfirmActionDialog title={`${t('pf_record_payment')} — ${subscription.company}`} confirmLabel={t('pf_record_payment')} disabled={preview.loading || Boolean(preview.error)} onClose={onClose}
         onConfirm={({ reason }) => api.act('post', `/super-admin/subscriptions/${subscription.id}/payments`, { ...form, reason, idempotency_key: key })}
         impact={preview.loading ? <p>{t('pf_loading')}</p> : preview.error ? <Notice type="error">{t('pf_preview_failed')}</Notice> : <dl className="impact-list">
@@ -48,29 +28,11 @@ function PaymentDialog({ subscription, onClose, api }) {
     </ConfirmActionDialog>;
 }
 
-function PlanDialog({ subscription, plans, onClose, api }) {
-    const { t, date } = usePt();
-    const [planId, setPlanId] = useState('');
-    const preview = usePreview({ company_id: subscription.company_id, action: 'plan', plan_id: planId }, planId !== '');
-    const info = preview.data;
-    const blocked = !planId || preview.loading || Boolean(preview.error) || info?.same_plan || (info?.over_limit?.length ?? 0) > 0;
-    return <ConfirmActionDialog title={`${t('pf_change_plan')} — ${subscription.company}`} confirmLabel={t('pf_change_plan')} danger disabled={blocked} onClose={onClose}
-        onConfirm={({ reason }) => api.act('post', `/super-admin/companies/${subscription.company_id}/plan`, { plan_id: planId, reason })}
-        impact={planId === '' ? <p>{t('pf_choose_plan')}</p> : preview.loading ? <p>{t('pf_loading')}</p> : preview.error ? <Notice type="error">{t('pf_preview_failed')}</Notice> : <>
-            <p>{info.from} → <strong>{info.to}</strong>. {t('pf_plan_keeps_date')} ({info.ends_at ? date(info.ends_at) : t('pf_lifetime')})</p>
-            {info.same_plan && <Notice type="error">{t('pf_same_plan')}</Notice>}
-            <UsageTable usage={info.usage} over={info.over_limit} t={t} />
-            {info.over_limit.length > 0 && <Notice type="error">{t('pf_downgrade_blocked')}</Notice>}
-        </>}>
-        <label className="field"><span>{t('pf_plan')}</span><select required value={planId} onChange={(event) => setPlanId(event.target.value)}><option value="">—</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {plan.price} {t('currency')}</option>)}</select></label>
-    </ConfirmActionDialog>;
-}
-
 function LimitsDialog({ subscription, onClose, api }) {
     const { t } = usePt();
     const [limits, setLimits] = useState({ users: 0, branches: 0, warehouses: 0 });
     const preview = usePreview({ company_id: subscription.company_id, action: 'limits', ...limits });
-    const info = preview.data;
+    const info = preview.data ?? {};
     return <ConfirmActionDialog title={`${t('pf_limits')} — ${subscription.company}`} confirmLabel={t('save')} disabled={preview.loading || Boolean(preview.error) || (info?.over_limit?.length ?? 0) > 0} onClose={onClose}
         onConfirm={({ reason }) => api.act('put', `/super-admin/companies/${subscription.company_id}/limit-addons`, { ...limits, reason })}
         impact={preview.loading ? <p>{t('pf_loading')}</p> : preview.error ? <Notice type="error">{t('pf_preview_failed')}</Notice> : <UsageTable usage={info.usage} over={info.over_limit} t={t} />}>
@@ -93,7 +55,7 @@ export default function Subscriptions({ subscriptions, filters, payments = [], p
             <form className="report-filter-bar no-print" onSubmit={apply}>
                 <label className="field"><span>{t('pf_search')}</span><input type="search" value={values.q} onChange={(event) => setValues({ ...values, q: event.target.value })} /></label>
                 <label className="field"><span>{t('pf_state_filter')}</span><select value={values.state} onChange={(event) => setValues({ ...values, state: event.target.value })}>{['all', 'expiring', 'lapsed', 'suspended'].map((s) => <option key={s} value={s}>{t(`pf_filter_${s}`)}</option>)}</select></label>
-                <div className="erp-toolbar"><button className="erp-button erp-button--primary">{t('apply')}</button></div>
+                <div className="erp-toolbar"><button type="submit" className="erp-button erp-button--primary">{t('apply')}</button></div>
             </form>
             <div className="erp-table-wrap"><table className="erp-table">
                 <thead><tr><th>{t('pf_company')}</th><th>{t('pf_plan')}</th><th>{t('pf_access_state')}</th><th>{t('pf_starts')}</th><th>{t('pf_ends')}</th><th className="no-print">{t('actions')}</th></tr></thead>
@@ -124,7 +86,7 @@ export default function Subscriptions({ subscriptions, filters, payments = [], p
             </table></div>
         </section>
         {dialog?.type === 'payment' && <PaymentDialog subscription={dialog.row} api={api} onClose={() => setDialog(null)} />}
-        {dialog?.type === 'plan' && <PlanDialog subscription={dialog.row} plans={plans} api={api} onClose={() => setDialog(null)} />}
+        {dialog?.type === 'plan' && <PlanChangeDialog subscription={dialog.row} plans={plans} api={api} onClose={() => setDialog(null)} />}
         {dialog?.type === 'limits' && <LimitsDialog subscription={dialog.row} api={api} onClose={() => setDialog(null)} />}
         {resolve && <ConfirmActionDialog title={t(resolve.status === 'paid' ? 'pf_mark_paid' : 'pf_mark_failed')} danger={resolve.status === 'failed'} confirmLabel={t(resolve.status === 'paid' ? 'pf_mark_paid' : 'pf_mark_failed')} impact={<p>{t(resolve.status === 'paid' ? 'pf_impact_pay_pending' : 'pf_impact_fail_pending')}</p>} onClose={() => setResolve(null)} onConfirm={({ reason }) => api.act('post', `/super-admin/payments/${resolve.payment.id}/resolve`, { status: resolve.status, reason })} />}
         {api.stepUpDialog}

@@ -26,7 +26,7 @@ export default function Security({ mfa, pending, recoveryCodes }) {
                 <label className="field"><span>{t('pf_secret_key')}</span><input readOnly dir="ltr" value={pending.secret} onFocus={(event) => event.target.select()} /></label>
                 <label className="field"><span>{t('pf_otpauth')}</span><input readOnly dir="ltr" value={pending.uri} onFocus={(event) => event.target.select()} /></label>
                 <label className="field"><span>{t('pf_mfa_code')}</span><input inputMode="numeric" autoComplete="one-time-code" required value={form.data.code} onChange={(event) => form.setData('code', event.target.value)} aria-invalid={Boolean(form.errors.code)} />{form.errors.code && <small role="alert">{form.errors.code}</small>}</label>
-                <button disabled={form.processing} className="erp-button erp-button--primary">{t('pf_confirm_enroll')}</button>
+                <button type="submit" disabled={form.processing} className="erp-button erp-button--primary">{t('pf_confirm_enroll')}</button>
             </form>}
         </section>
         {dialog === 'codes' && <ConfirmActionDialog title={t('pf_regenerate_codes')} withReason={false} confirmLabel={t('pf_regenerate_codes')} impact={<p>{t('pf_impact_codes')}</p>} onClose={() => setDialog(null)} onConfirm={() => api.act('post', '/super-admin/security/recovery-codes', {})} />}

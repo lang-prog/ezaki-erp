@@ -57,12 +57,12 @@ class SubscriptionController extends PlatformController
     {
         $data = $request->validate([
             'company_id' => ['required', 'integer', 'exists:companies,id'], 'action' => ['required', 'in:plan,payment,limits'],
-            'plan_id' => ['nullable', 'integer', 'exists:plans,id'], 'users' => ['nullable', 'integer', 'min:0'],
+            'plan_id' => ['nullable', 'integer', 'required_if:action,plan', 'exists:plans,id'], 'users' => ['nullable', 'integer', 'min:0'],
             'branches' => ['nullable', 'integer', 'min:0'], 'warehouses' => ['nullable', 'integer', 'min:0'],
         ]);
         $company = Company::query()->findOrFail($data['company_id']);
         $current = $lifecycle->currentFor($company);
-        abort_unless($current, 409);
+        abort_unless($current, 409, 'The company has no subscription.');
         $addons = $current->overrides['limit_addons'] ?? [];
 
         if ($data['action'] === 'payment') {

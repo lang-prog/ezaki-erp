@@ -46,7 +46,7 @@ export default function Admins({ admins = [], roles = [] }) {
                 <label className="field"><span>{t('confirmPassword')}</span><input type="password" minLength={12} required autoComplete="new-password" value={form.password_confirmation} onChange={(e) => setForm({ ...form, password_confirmation: e.target.value })} /></label>
                 <label className="field"><span>{t('pf_role')}</span><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{roles.map((r) => <option key={r} value={r}>{t(`pf_role_${r}`)}</option>)}</select><small>{t(`pf_role_hint_${form.role}`)}</small></label>
             </div>
-            <button className="erp-button erp-button--primary">{t('pf_create_admin')}</button>
+            <button type="submit" className="erp-button erp-button--primary">{t('pf_create_admin')}</button>
         </form>}
         {dialog?.type === 'role' && <ConfirmActionDialog title={`${t('pf_change_role')} — ${dialog.admin.name}`} confirmLabel={t('save')} impact={<p>{t('pf_impact_role')}</p>} onClose={() => setDialog(null)} onConfirm={({ reason }) => api.act('put', `/super-admin/admins/${dialog.admin.id}/role`, { role, reason })}>
             <label className="field"><span>{t('pf_role')}</span><select value={role} onChange={(e) => setRole(e.target.value)}>{roles.map((r) => <option key={r} value={r}>{t(`pf_role_${r}`)}</option>)}</select></label>

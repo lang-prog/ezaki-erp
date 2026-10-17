@@ -7,6 +7,7 @@ const root = new URL('../resources/js/', import.meta.url);
 const files = [
     ...readdirSync(new URL('Pages/SuperAdmin/', root)).map((name) => `Pages/SuperAdmin/${name}`),
     'Components/Platform/ui.jsx',
+    'Components/Platform/PlanChangeDialog.jsx',
     'Pages/Auth/Login.jsx',
 ];
 
@@ -55,6 +56,8 @@ test('dynamic translation families are fully defined', () => {
         pf_res_: ['users', 'branches', 'warehouses'],
         pf_extra_: ['users', 'branches', 'warehouses'],
         pf_alert_: ['lapsed', 'expiring', 'registrations', 'requests'],
+        pf_err_: ['403', '409', '419', '422', '423', '429', '500', 'network'],
+        pf_boundary_: ['title', 'copy', 'retry', 'reload'],
     };
     const missing = [];
     for (const [prefix, names] of Object.entries(families)) {

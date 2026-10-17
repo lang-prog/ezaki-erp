@@ -23,7 +23,7 @@ export default function Audit({ logs, filters = {} }) {
                 {field('event', 'pf_event')}{field('subject', 'pf_subject')}{field('company_id', 'pf_company_id', { type: 'number', min: 1 })}{field('user_id', 'pf_actor_id', { type: 'number', min: 1 })}
                 <label className="field"><span>{t('pf_severity')}</span><select value={values.severity} onChange={(event) => setValues({ ...values, severity: event.target.value })}><option value="">{t('allStatuses')}</option>{['info', 'warning', 'critical'].map((s) => <option key={s} value={s}>{t(`pf_sev_${s}`)}</option>)}</select></label>
                 {field('from', 'fromDate', { type: 'date' })}{field('to', 'toDate', { type: 'date' })}
-                <div className="erp-toolbar"><button className="erp-button erp-button--primary">{t('apply')}</button></div>
+                <div className="erp-toolbar"><button type="submit" className="erp-button erp-button--primary">{t('apply')}</button></div>
             </form>
             <div className="erp-table-wrap"><table className="erp-table">
                 <thead><tr><th>{t('pf_when')}</th><th>{t('pf_event')}</th><th>{t('pf_severity')}</th><th>{t('pf_actor')}</th><th>{t('pf_company')}</th><th>{t('pf_subject')}</th><th>{t('pf_reason')}</th></tr></thead>

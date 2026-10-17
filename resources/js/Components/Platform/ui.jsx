@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, router, usePage } from '@inertiajs/react';
 import ModalShell from '../ModalShell';
+import ErrorBoundary from '../ErrorBoundary';
+import { failureKey } from './planChange';
 import { translate } from '../../i18n';
 import { formatDate, formatDateTime, formatMoney } from '../../format';
 
@@ -15,6 +17,37 @@ export function errorText(error, fallback) {
     const data = error?.response?.data;
     if (data?.errors) return Object.values(data.errors).flat().join(' ');
     return data?.message || fallback;
+}
+
+/** Localized message for any failed platform request: validation detail for 422, never raw server errors for 5xx. */
+export function failureMessage(error, t) {
+    const status = error?.response?.status;
+    const data = error?.response?.data;
+    if (status === 422 && data?.errors) return Object.values(data.errors).flat().join(' ');
+    const base = t(failureKey(status));
+    if (status === 409 && typeof data?.message === 'string' && data.message) return `${base} ${data.message}`;
+
+    return base;
+}
+
+/**
+ * GET preview of an action's impact. `loading` and `data` are derived from the query the result belongs to,
+ * so the render that follows a changed selection can never see data from another query (or none at all).
+ */
+export function usePreview(params, enabled = true) {
+    const query = JSON.stringify(params);
+    const [state, setState] = useState({ query: null, data: null, error: '', status: null });
+    useEffect(() => {
+        if (!enabled) return undefined;
+        let cancelled = false;
+        window.axios.get('/super-admin/subscriptions/preview', { params: JSON.parse(query) })
+            .then((response) => { if (!cancelled) setState({ query, data: response.data, error: '', status: null }); })
+            .catch((error) => { if (!cancelled) setState({ query, data: null, error: 'failed', status: error?.response?.status ?? null }); });
+        return () => { cancelled = true; };
+    }, [query, enabled]);
+    const settled = enabled && state.query === query;
+
+    return { loading: enabled && !settled, data: settled ? state.data : null, error: settled ? state.error : '', status: settled ? state.status : null };
 }
 
 const TONES = {
@@ -50,9 +83,21 @@ export function EmptyRow({ colSpan }) {
     return <tr><td colSpan={colSpan} className="empty-cell">{t('pf_empty')}</td></tr>;
 }
 
+function Toast({ text, onDismiss }) {
+    const { t } = usePt();
+    useEffect(() => {
+        const timer = window.setTimeout(onDismiss, 6000);
+        return () => window.clearTimeout(timer);
+    }, [text, onDismiss]);
+
+    return <div role="status" className="notice-card success platform-toast no-print"><span>{text}</span><button type="button" className="erp-link-button" onClick={onDismiss} aria-label={t('close')}>×</button></div>;
+}
+
 /** Runs platform requests; a 423 step-up response opens a password/TOTP dialog and then retries the request once. */
 export function usePlatformApi() {
+    const { t } = usePt();
     const [pending, setPending] = useState(null);
+    const [notice, setNotice] = useState('');
 
     const askStepUp = useCallback((requiresMfa) => new Promise((resolve, reject) => setPending({ requiresMfa, resolve, reject })), []);
     const call = useCallback(async (method, url, data) => {
@@ -64,7 +109,8 @@ export function usePlatformApi() {
                 return window.axios({ method, url, data });
             }
             if (error.response?.status === 423 && error.response.data?.code) {
-                window.location.assign(error.response.data.code === 'mfa_required' ? '/super-admin/mfa/challenge' : '/super-admin/security');
+                router.visit(error.response.data.code === 'mfa_required' ? '/super-admin/mfa/challenge' : '/super-admin/security');
+                throw new Error('cancelled');
             }
             throw error;
         }
@@ -72,10 +118,19 @@ export function usePlatformApi() {
     const act = useCallback(async (method, url, data) => {
         const result = await call(method, url, data);
         router.reload({ preserveScroll: true });
+        setNotice(t('pf_saved'));
         return result;
-    }, [call]);
+    }, [call, t]);
+    const dismiss = useCallback(() => setNotice(''), []);
 
-    return { call, act, stepUpDialog: pending ? <StepUpDialog requiresMfa={pending.requiresMfa} onDone={() => { pending.resolve(); setPending(null); }} onCancel={() => { pending.reject(new Error('cancelled')); setPending(null); }} /> : null };
+    return {
+        call,
+        act,
+        stepUpDialog: <>
+            {pending && <StepUpDialog requiresMfa={pending.requiresMfa} onDone={() => { pending.resolve(); setPending(null); }} onCancel={() => { pending.reject(new Error('cancelled')); setPending(null); }} />}
+            {notice && <Toast text={notice} onDismiss={dismiss} />}
+        </>,
+    };
 }
 
 function StepUpDialog({ requiresMfa, onDone, onCancel }) {
@@ -85,13 +140,14 @@ function StepUpDialog({ requiresMfa, onDone, onCancel }) {
     const [busy, setBusy] = useState(false);
     async function submit(event) {
         event.preventDefault();
+        event.stopPropagation();
         setBusy(true);
         setError('');
         try {
             await window.axios.post('/super-admin/step-up', form);
             onDone();
         } catch (failure) {
-            setError(errorText(failure, t('pf_error_generic')));
+            setError(failureMessage(failure, t));
         } finally {
             setBusy(false);
         }
@@ -108,24 +164,35 @@ function StepUpDialog({ requiresMfa, onDone, onCancel }) {
     </ModalShell>;
 }
 
+function ContainedFailure() {
+    const { t } = usePt();
+
+    return <Notice type="error">{t('pf_render_failed')}</Notice>;
+}
+
 /** Accessible confirmation: shows the impact first, requires a reason, and surfaces server errors inline. */
-export function ConfirmActionDialog({ title, eyebrow, impact, confirmLabel, danger = false, withReason = true, onConfirm, onClose, disabled = false, children }) {
+export function ConfirmActionDialog({ title, eyebrow, impact, confirmLabel, danger = false, withReason = true, onConfirm, onClose, disabled = false, resetKey = '', children }) {
     const { t } = usePt();
     const [reason, setReason] = useState('');
     const [busy, setBusy] = useState(false);
-    const [error, setError] = useState('');
+    const [error, setError] = useState(null);
     const mounted = useRef(true);
+    const inFlight = useRef(false);
     useEffect(() => () => { mounted.current = false; }, []);
     async function submit(event) {
         event.preventDefault();
+        event.stopPropagation();
+        if (inFlight.current || disabled) return;
+        inFlight.current = true;
         setBusy(true);
-        setError('');
+        setError(null);
         try {
             await onConfirm({ reason });
             onClose();
         } catch (failure) {
-            if (failure?.message !== 'cancelled' && mounted.current) setError(errorText(failure, t('pf_error_generic')));
+            if (failure?.message !== 'cancelled' && mounted.current) setError({ text: failureMessage(failure, t), status: failure?.response?.status ?? null });
         } finally {
+            inFlight.current = false;
             if (mounted.current) setBusy(false);
         }
     }
@@ -134,9 +201,11 @@ export function ConfirmActionDialog({ title, eyebrow, impact, confirmLabel, dang
         <button type="submit" form="confirm-form" disabled={busy || disabled} className={`erp-button ${danger ? 'erp-button--danger' : 'erp-button--primary'}`}>{danger && <span aria-hidden="true">⚠ </span>}{confirmLabel}</button>
     </>}>
         <form id="confirm-form" className="account-edit-form" onSubmit={submit}>
-            {error && <Notice type="error">{error}</Notice>}
-            {impact && <div className="impact-box" role="group" aria-label={t('pf_impact')}><strong>{t('pf_impact')}</strong>{impact}</div>}
-            {children}
+            {error && <Notice type="error"><span>{error.text}</span>{error.status === 419 && <> <button type="button" className="erp-link-button" onClick={() => router.reload({ preserveScroll: true })}>{t('pf_reload_data')}</button></>}</Notice>}
+            <ErrorBoundary resetKey={resetKey} fallback={<ContainedFailure />}>
+                {impact && <div className="impact-box" role="group" aria-label={t('pf_impact')}><strong>{t('pf_impact')}</strong>{impact}</div>}
+                {children}
+            </ErrorBoundary>
             {withReason && <label className="field"><span>{t('pf_reason')}</span><textarea required minLength={3} maxLength={1000} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} /><small>{t('pf_reason_hint')}</small></label>}
         </form>
     </ModalShell>;
