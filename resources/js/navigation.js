@@ -79,6 +79,7 @@ export const platformNavigation = [
     { id: 'platform-commercial', label: 'pf_group_commercial', icon: 'ledger', expanded: true, items: [
         { id: 'platform-subscriptions', label: 'pf_nav_subscriptions', href: '/super-admin/subscriptions', permission: 'platform.subscriptions.view', icon: 'document' },
         { id: 'platform-plans', label: 'pf_nav_plans', href: '/super-admin/plans', any: ['platform.plans.manage', 'platform.coupons.manage'], icon: 'ticket' },
+        { id: 'platform-durations', label: 'dur_nav', href: '/super-admin/durations', permission: 'platform.plans.manage', icon: 'list' },
         { id: 'platform-licenses', label: 'pf_nav_licenses', href: '/super-admin/licenses', permission: 'platform.licenses.view', icon: 'document' },
     ] },
     { id: 'platform-governance', label: 'pf_group_governance', icon: 'settings', expanded: true, items: [

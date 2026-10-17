@@ -54,7 +54,7 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
         $subscription = $lifecycle->currentFor($request->attributes->get('company'));
 
         return Inertia::render('Company/Subscription', [
-            'subscription' => $subscription ? ['plan' => $subscription->plan?->only(['name', 'duration'])] : null,
+            'subscription' => $subscription ? ['plan' => $subscription->plan ? [...$subscription->plan->only(['name', 'duration']), 'duration_info' => $subscription->plan->durationInfo()] : null] : null,
             'status' => $request->attributes->get('subscription_status'),
         ]);
     })->middleware('can:subscriptions.view')->name('company.subscription');

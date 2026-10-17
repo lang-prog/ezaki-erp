@@ -35,11 +35,11 @@ final class SubscriptionNotice
         return in_array($default, $known, true) ? $default : 'UTC';
     }
 
-    /** trial (plan duration), test (explicit overrides.period_type), lifetime (plan duration) or paid. */
+    /** lifetime / trial / test / paid, from the plan's duration definition; overrides.period_type = 'test' stays honoured. */
     public function categoryFor(Subscription $subscription): string
     {
-        $duration = $subscription->plan?->duration;
-        if ($duration === 'lifetime') {
+        $definition = $subscription->plan?->durationDefinition();
+        if ($definition?->isLifetime()) {
             return 'lifetime';
         }
         $overrides = is_array($subscription->overrides) ? $subscription->overrides : [];
@@ -47,7 +47,7 @@ final class SubscriptionNotice
             return 'test';
         }
 
-        return $duration === 'trial' ? 'trial' : 'paid';
+        return in_array($definition?->category, ['trial', 'test'], true) ? $definition->category : 'paid';
     }
 
     public function accessFor(string $state): string

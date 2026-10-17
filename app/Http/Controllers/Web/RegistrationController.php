@@ -27,7 +27,7 @@ class RegistrationController extends Controller
     {
         abort_unless(PlatformSetting::boolean('self_registration_open', config('registration.open')), 404);
 
-        return Inertia::render('Auth/Register', ['plans' => Plan::query()->where('is_active', true)->get(['id', 'name', 'duration', 'price'])]);
+        return Inertia::render('Auth/Register', ['plans' => Plan::query()->where('is_active', true)->with('durationCatalog')->get()->map->summary()->values()]);
     }
 
     public function store(Request $request): RedirectResponse

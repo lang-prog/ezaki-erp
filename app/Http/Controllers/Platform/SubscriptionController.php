@@ -29,7 +29,7 @@ class SubscriptionController extends PlatformController
             'suspended' => $metrics->currentSubscriptions()->where('status', 'suspended'),
             default => $metrics->currentSubscriptions(),
         };
-        $subscriptions = $query->with(['company:id,name,status', 'plan:id,name,duration,price'])
+        $subscriptions = $query->with(['company:id,name,status', 'plan:id,name,duration,duration_days,subscription_duration_id,price', 'plan.durationCatalog'])
             ->when($filters['q'] ?? null, fn ($builder, $term) => $builder->whereHas('company', fn ($company) => $company->where('name', 'like', $this->like($term))))
             ->latest('id')->paginate(20)->withQueryString()
             ->through(fn (Subscription $subscription): array => [
@@ -48,7 +48,7 @@ class SubscriptionController extends PlatformController
                     'amount' => $payment->amount, 'status' => $payment->status, 'reference' => $payment->reference, 'paid_at' => $payment->paid_at,
                     'created_at' => $payment->created_at, 'new_ends_at' => $payment->new_ends_at,
                 ]),
-            'plans' => Plan::query()->where('is_active', true)->orderBy('name')->get(['id', 'name', 'duration', 'price']),
+            'plans' => Plan::query()->where('is_active', true)->with('durationCatalog')->orderBy('name')->get()->map->summary()->values(),
         ]);
     }
 
@@ -75,7 +75,7 @@ class SubscriptionController extends PlatformController
 
             return response()->json([
                 'action' => 'plan', 'same_plan' => (int) $plan->id === (int) $current->plan_id, 'inactive' => ! $plan->is_active,
-                'from' => $current->plan?->name, 'to' => $plan->name, 'ends_at' => $plan->duration === 'lifetime' ? null : $current->ends_at,
+                'from' => $current->plan?->name, 'to' => $plan->name, 'ends_at' => $lifecycle->isLifetime($plan) ? null : $current->ends_at,
                 'usage' => $transitions->usage($company, $plan, $addons), 'over_limit' => array_keys($transitions->overLimit($company, $plan, $addons)),
             ]);
         }

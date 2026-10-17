@@ -65,7 +65,7 @@ class CompanyProvisioningService
             abort_unless($plan->is_active, 409, 'The selected plan is no longer active.');
             $coupon = $registration->coupon_id ? Coupon::query()->lockForUpdate()->find($registration->coupon_id) : null;
             abort_if($registration->coupon_id && (! $coupon || ! $coupon->isAvailableFor($plan)), 409, 'The selected coupon is no longer available.');
-            abort_if($plan->duration === 'trial' && ! $plan->duration_days, 409, 'Trial duration must be configured.');
+            abort_if($plan->durationDefinition() === null && $plan->duration === 'trial', 409, 'Trial duration must be configured.');
             $company = $this->provision([
                 'name' => $registration->company_name,
                 'trade_name' => $registration->trade_name,
@@ -101,7 +101,7 @@ class CompanyProvisioningService
             abort_unless($plan->is_active, 422, 'The selected plan is no longer active.');
             $coupon = $coupon ? Coupon::query()->lockForUpdate()->findOrFail($coupon->id) : null;
             abort_if($coupon && ! $coupon->isAvailableFor($plan), 422, 'The selected coupon is not available.');
-            abort_if($plan->duration === 'trial' && ! $plan->duration_days, 422, 'Trial duration must be configured.');
+            abort_if($plan->durationDefinition() === null && $plan->duration === 'trial', 422, 'Trial duration must be configured.');
 
             $company = $this->provision([
                 ...$data,

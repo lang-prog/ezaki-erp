@@ -1,5 +1,6 @@
 import { Link, useForm, usePage } from '@inertiajs/react';
 import { translate } from '../../i18n';
+import { durationLabel } from '../../i18n-durations';
 
 export default function Register({ plans }) {
     const { errors, flash, locale } = usePage().props;
@@ -24,7 +25,7 @@ export default function Register({ plans }) {
                 {flash?.status && <p className="mt-4 border-l-4 border-[#34795c] bg-white p-4">{flash.status}</p>}
                 <form onSubmit={submit} className="mt-8 grid gap-5 bg-white p-6 md:grid-cols-2">
                     {fields.map(([name, label]) => <label key={name} className={`text-sm font-medium ${name === 'address' ? 'md:col-span-2' : ''}`}>{t(label)}<input type={name.includes('password') ? 'password' : name === 'email' ? 'email' : 'text'} value={form.data[name]} onChange={(event) => form.setData(name, event.target.value)} className="mt-2 w-full border border-[#c9d0c8] px-3 py-2.5" />{errors[name] && <span className="mt-1 block text-xs text-red-700">{errors[name]}</span>}</label>)}
-                    <label className="text-sm font-medium">{t('requestedPlan')}<select value={form.data.plan_id} onChange={(event) => form.setData('plan_id', event.target.value)} className="mt-2 w-full border border-[#c9d0c8] bg-white px-3 py-2.5"><option value="">{t('selectLater')}</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {plan.duration}</option>)}</select></label>
+                    <label className="text-sm font-medium">{t('requestedPlan')}<select value={form.data.plan_id} onChange={(event) => form.setData('plan_id', event.target.value)} className="mt-2 w-full border border-[#c9d0c8] bg-white px-3 py-2.5"><option value="">{t('selectLater')}</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {durationLabel(locale, plan.duration_info)}</option>)}</select></label>
                     <label className="flex items-center gap-2 self-end text-sm"><input type="checkbox" checked={form.data.terms_accepted} onChange={(event) => form.setData('terms_accepted', event.target.checked)} />{t('acceptTerms')}</label>
                     <button disabled={form.processing} className="bg-[#34795c] px-4 py-3 font-medium text-white md:col-span-2">{t('sendVerification')}</button>
                 </form>

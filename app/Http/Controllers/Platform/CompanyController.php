@@ -23,7 +23,7 @@ class CompanyController extends PlatformController
     {
         $filters = $request->validate(['q' => ['nullable', 'string', 'max:100'], 'status' => ['nullable', 'in:active,suspended,archived,pending']]);
         $companies = Company::query()
-            ->with(['subscriptions' => fn ($query) => $query->current()->with('plan:id,name,duration,price,limits')])
+            ->with(['subscriptions' => fn ($query) => $query->current()->with(['plan:id,name,duration,duration_days,subscription_duration_id,price,limits', 'plan.durationCatalog'])])
             ->when($filters['q'] ?? null, fn ($query, $term) => $query->where(fn ($inner) => $inner->where('name', 'like', $this->like($term))->orWhere('trade_name', 'like', $this->like($term))->orWhere('tax_number', 'like', $this->like($term))))
             ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
             ->latest('id')->paginate(20)->withQueryString()
@@ -35,7 +35,7 @@ class CompanyController extends PlatformController
                     'subscription' => $subscription ? [
                         'id' => $subscription->id, 'status' => $subscription->status, 'access_state' => $lifecycle->accessState($company, $subscription),
                         'starts_at' => $subscription->starts_at, 'ends_at' => $subscription->ends_at,
-                        'plan' => ['id' => $subscription->plan?->id, 'name' => $subscription->plan?->name, 'duration' => $subscription->plan?->duration, 'price' => $subscription->plan?->price],
+                        'plan' => ['id' => $subscription->plan?->id, 'name' => $subscription->plan?->name, 'duration' => $subscription->plan?->duration, 'duration_info' => $subscription->plan?->durationInfo(), 'price' => $subscription->plan?->price],
                         'limit_addons' => $subscription->overrides['limit_addons'] ?? ['users' => 0, 'branches' => 0, 'warehouses' => 0],
                     ] : null,
                 ];
@@ -44,7 +44,7 @@ class CompanyController extends PlatformController
         return Inertia::render('SuperAdmin/Companies', [
             'companies' => $companies,
             'filters' => $filters,
-            'plans' => Plan::query()->where('is_active', true)->orderBy('name')->get(['id', 'name', 'duration', 'price']),
+            'plans' => Plan::query()->where('is_active', true)->with('durationCatalog')->orderBy('name')->get()->map->summary()->values(),
         ]);
     }
 

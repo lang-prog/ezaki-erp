@@ -4,6 +4,7 @@ import CompanyLayout from '../../Layouts/CompanyLayout';
 import SubscriptionNotice from '../../Components/SubscriptionNotice';
 import { translate } from '../../i18n';
 import { formatDate } from '../../format';
+import { durationLabel, durationSummary } from '../../i18n-durations';
 
 export default function Subscription({ subscription }) {
     const { locale, subscriptionNotice: notice } = usePage().props;
@@ -36,6 +37,7 @@ export default function Subscription({ subscription }) {
                 <h2 id="subscription-details">{t('sub_details')}</h2>
                 <dl className="impact-list">
                     {subscription?.plan?.name && <div><dt>{t('sub_plan')}</dt><dd>{subscription.plan.name}</dd></div>}
+                    {subscription?.plan?.duration_info?.configured && <div><dt>{t('pf_duration')}</dt><dd>{durationLabel(locale, subscription.plan.duration_info)} · {durationSummary(locale, subscription.plan.duration_info)}</dd></div>}
                     {notice.category && <div><dt>{t('sub_type')}</dt><dd>{t(`sub_category_${notice.category}`)}</dd></div>}
                     <div><dt>{t('sub_status')}</dt><dd>{t(`sub_state_${notice.state}`)}</dd></div>
                     <div><dt>{t('sub_ends_on')}</dt><dd>{notice.ends_on ? formatDate(notice.ends_on, locale) : t('sub_no_end')}</dd></div>

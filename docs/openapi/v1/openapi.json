@@ -178,7 +178,7 @@
           "core"
         ],
         "operationId": "subscription",
-        "description": "Current subscription status. The additive `notice` object (state, category, access, show, key, params, severity, ends_at, ends_on, timezone, days_remaining) is derived on the server from the same lifecycle the access middleware enforces; clients must not compute remaining days themselves.",
+        "description": "Current subscription status. The additive `notice` object (state, category, access, show, key, params, severity, ends_at, ends_on, timezone, days_remaining) is derived on the server from the same lifecycle the access middleware enforces; clients must not compute remaining days themselves. The plan object also carries the additive `duration_info` (id, key, category trial|test|paid, unit day|week|month|year|lifetime, value, name_ar, name_en, is_lifetime, is_active, configured) from the Super Admin duration catalog; the legacy `duration` string is kept for existing clients.",
         "security": [
           {
             "bearerAuth": []

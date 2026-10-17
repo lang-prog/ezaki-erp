@@ -69,22 +69,14 @@ class SubscriptionLifecycle
         return $subscription ? $this->status($subscription, $now) : 'none';
     }
 
+    /** End of a period starting at $startsAt, from the plan's duration definition (null = no expiry). */
     public function expiryFor(Plan $plan, ?CarbonImmutable $startsAt = null): ?CarbonImmutable
     {
-        if ($plan->duration === 'lifetime') {
-            return null;
-        }
+        return $plan->durationDefinition()?->addTo($startsAt ?? CarbonImmutable::now());
+    }
 
-        $start = $startsAt ?? CarbonImmutable::now();
-        if ($plan->duration_days) {
-            return $start->addDays($plan->duration_days);
-        }
-
-        return match ($plan->duration) {
-            'monthly' => $start->addMonthNoOverflow(),
-            'six_months' => $start->addMonthsNoOverflow(6),
-            'yearly' => $start->addYearNoOverflow(),
-            default => null,
-        };
+    public function isLifetime(Plan $plan): bool
+    {
+        return $plan->durationDefinition()?->isLifetime() === true;
     }
 }

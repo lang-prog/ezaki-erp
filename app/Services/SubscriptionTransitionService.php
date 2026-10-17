@@ -121,7 +121,7 @@ class SubscriptionTransitionService
             }
 
             $now = CarbonImmutable::now();
-            $endsAt = $plan->duration === 'lifetime'
+            $endsAt = $this->lifecycle->isLifetime($plan)
                 ? null
                 : ($current->ends_at ?? $this->lifecycle->expiryFor($plan, $now));
             $before = $this->snapshot($current);
@@ -294,7 +294,7 @@ class SubscriptionTransitionService
         $base = $future ? $current->ends_at->toImmutable() : $now;
         $newEnds = $this->lifecycle->expiryFor($current->plan, $base);
         $attributes = ['ends_at' => $newEnds];
-        if (! $future && $current->plan->duration !== 'lifetime') {
+        if (! $future && ! $this->lifecycle->isLifetime($current->plan)) {
             $attributes['starts_at'] = $now;
         }
         $current->forceFill($attributes)->save();

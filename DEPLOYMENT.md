@@ -182,6 +182,17 @@ No migration and no data change. The banner, subscription page, `GET /api/v1/sub
 - After deploying run `php artisan config:clear` (then re-cache) so `config/subscription.php` is read; no queue restart is needed beyond the usual `php artisan queue:restart`.
 - Rollback is code-only; nothing in the database changed.
 
+### Configurable subscription durations rollout
+
+Super Admin (`plans.manage`: owner and billing) manages the duration catalog at `/super-admin/durations`; plans pick a catalog duration instead of a fixed list.
+
+- Migration `2026_10_18_000001_create_subscription_durations` is additive: it creates `subscription_durations` and the nullable `plans.subscription_duration_id` (FK `plans_sd_fk`, restrict on delete), then runs the idempotent `SubscriptionDurationBackfill`. Back up the database first (`scripts/backup.sh`) and run `php artisan migrate --pretend` before `php artisan migrate --force`.
+- The backfill seeds the protected system durations (`monthly`, `six_months`, `yearly`, `lifetime`) and links existing plans only when the mapping is unambiguous: lifetime plans, monthly/six-month/yearly plans without `duration_days`, and trial plans with N days (a `trial_{N}d` duration is created). Any other plan stays unlinked and keeps resolving through the legacy rules, so no plan changes behaviour. Review `plans.subscription_duration_id IS NULL` afterwards and link those plans from the Plans page if wanted (only possible while the plan has no subscriptions).
+- No subscription, invoice, payment, ledger or audit row is touched: `starts_at`/`ends_at` and every historical date stay as stored. Editing a duration never recalculates existing subscriptions; its interval is locked once a plan references it, and system durations are never editable.
+- Expiry maths is unchanged for existing rules; new durations add calendar months/years without end-of-month overflow, days and weeks as exact days. Trial/test categories drive the banner and email wording.
+- `GET /api/v1/subscription` gains the additive `plan.duration_info`; the legacy `duration` string stays.
+- Rollback is code-only: the new table and nullable column are ignored by the previous release, and legacy `plans.duration`/`duration_days` are untouched.
+
 ### External verification still required
 
 This repository-only pass cannot provide XAMPP/Apache, SMTP, Redis, a persistent queue worker, production HTTPS, load/P95, or a real MySQL migration/backup/restore proof. Run those integration checks in the deployment environment/CI (including foreign keys, `EXPLAIN`, queue retry/failure behavior, and a restore drill) before release acceptance.

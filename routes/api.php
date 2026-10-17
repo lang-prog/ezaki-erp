@@ -29,7 +29,7 @@ Route::prefix('v1')->group(function (): void {
 
             return response()->json([
                 'status' => $request->attributes->get('subscription_status'),
-                'plan' => $subscription?->plan?->only(['id', 'name', 'duration']),
+                'plan' => $subscription?->plan ? [...$subscription->plan->only(['id', 'name', 'duration']), 'duration_info' => $subscription->plan->durationInfo()] : null,
                 'ends_at' => $endsAt,
                 'notice' => $request->attributes->get('subscription_notice'),
             ]);

@@ -5,6 +5,7 @@ use App\Http\Controllers\Platform\AuditController;
 use App\Http\Controllers\Platform\CatalogController;
 use App\Http\Controllers\Platform\CompanyController;
 use App\Http\Controllers\Platform\DashboardController;
+use App\Http\Controllers\Platform\DurationController;
 use App\Http\Controllers\Platform\LicenseController;
 use App\Http\Controllers\Platform\MfaController;
 use App\Http\Controllers\Platform\RegistrationController as PlatformRegistrationController;
@@ -52,6 +53,13 @@ Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account
         Route::get('/plans', [CatalogController::class, 'index'])->middleware('platform.can:plans.manage,coupons.manage')->name('plans.index');
         Route::post('/plans', [CatalogController::class, 'storePlan'])->middleware(['platform.can:plans.manage', 'throttle:platform.write'])->name('plans.store');
         Route::post('/plans/{plan}/toggle', [CatalogController::class, 'togglePlan'])->middleware(['platform.can:plans.manage', 'platform.stepup', 'throttle:platform.write'])->name('plans.toggle');
+        Route::put('/plans/{plan}', [CatalogController::class, 'updatePlan'])->middleware(['platform.can:plans.manage', 'platform.stepup', 'throttle:platform.write'])->name('plans.update');
+
+        Route::get('/durations', [DurationController::class, 'index'])->middleware('platform.can:plans.manage')->name('durations.index');
+        Route::post('/durations', [DurationController::class, 'store'])->middleware(['platform.can:plans.manage', 'throttle:platform.write'])->name('durations.store');
+        Route::put('/durations/{duration}', [DurationController::class, 'update'])->middleware(['platform.can:plans.manage', 'platform.stepup', 'throttle:platform.write'])->name('durations.update');
+        Route::post('/durations/{duration}/activate', [DurationController::class, 'activate'])->middleware(['platform.can:plans.manage', 'platform.stepup', 'throttle:platform.write'])->name('durations.activate');
+        Route::post('/durations/{duration}/deactivate', [DurationController::class, 'deactivate'])->middleware(['platform.can:plans.manage', 'platform.stepup', 'throttle:platform.write'])->name('durations.deactivate');
         Route::post('/coupons', [CatalogController::class, 'storeCoupon'])->middleware(['platform.can:coupons.manage', 'throttle:platform.write'])->name('coupons.store');
         Route::post('/coupons/{coupon}/toggle', [CatalogController::class, 'toggleCoupon'])->middleware(['platform.can:coupons.manage', 'platform.stepup', 'throttle:platform.write'])->name('coupons.toggle');
 

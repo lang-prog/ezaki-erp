@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { router } from '@inertiajs/react';
 import SuperAdminLayout from '../../Layouts/SuperAdminLayout';
 import { ConfirmActionDialog, EmptyRow, Notice, PageHeader, Pagination, StatusBadge, usePlatformApi, usePt } from '../../Components/Platform/ui';
+import { durationLabel } from '../../i18n-durations';
 
 const IMPACT = { suspend: 'pf_impact_suspend', activate: 'pf_impact_activate', archive: 'pf_impact_archive', restore: 'pf_impact_restore' };
 
 function CreateCompany({ plans, onSaved }) {
-    const { t } = usePt();
+    const { t, locale } = usePt();
     const api = usePlatformApi();
     const empty = { name: '', trade_name: '', tax_number: '', phone: '', country: '', city: '', address: '', owner_name: '', owner_email: '', owner_password: '', owner_password_confirmation: '', plan_id: '', coupon_code: '', notes: '' };
     const [form, setForm] = useState(empty);
@@ -35,7 +36,7 @@ function CreateCompany({ plans, onSaved }) {
             {text('name', 'companyName', { required: true })}{text('trade_name', 'tradeName')}{text('tax_number', 'taxNumber')}{text('phone', 'phone')}{text('country', 'country')}{text('city', 'city')}
             {text('owner_name', 'ownerName', { required: true })}{text('owner_email', 'ownerEmail', { required: true, type: 'email' })}
             {text('owner_password', 'password', { required: true, type: 'password', minLength: 8, autoComplete: 'new-password' })}{text('owner_password_confirmation', 'confirmPassword', { required: true, type: 'password', minLength: 8, autoComplete: 'new-password' })}
-            <label className="field"><span>{t('requestedPlan')}</span><select required value={form.plan_id} onChange={set('plan_id')}><option value="">—</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {t(`pf_duration_${plan.duration}`)} · {plan.price} {t('currency')}</option>)}</select></label>
+            <label className="field"><span>{t('requestedPlan')}</span><select required value={form.plan_id} onChange={set('plan_id')}><option value="">—</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {durationLabel(locale, plan.duration_info)} · {plan.price} {t('currency')}</option>)}</select></label>
             {text('coupon_code', 'couponCode')}
             <label className="field field--wide"><span>{t('address')}</span><input value={form.address} onChange={set('address')} /></label>
             <label className="field field--wide"><span>{t('pf_admin_notes')}</span><input value={form.notes} onChange={set('notes')} /></label>
@@ -47,7 +48,7 @@ function CreateCompany({ plans, onSaved }) {
 }
 
 export default function Companies({ companies, filters = {}, plans = [] }) {
-    const { t, can, date } = usePt();
+    const { t, can, date, locale } = usePt();
     const api = usePlatformApi();
     const [dialog, setDialog] = useState(null);
     const [values, setValues] = useState({ q: filters.q ?? '', status: filters.status ?? '' });
@@ -76,7 +77,7 @@ export default function Companies({ companies, filters = {}, plans = [] }) {
                         <td><StatusBadge status={company.status} label={t(`pf_status_${company.status}`)} /></td>
                         <td>{company.subscription?.plan?.name ?? '—'}</td>
                         <td>{company.subscription ? <StatusBadge status={company.subscription.access_state} label={t(`pf_state_${company.subscription.access_state}`)} /> : t('pf_no_subscription')}</td>
-                        <td>{company.subscription?.plan?.duration === 'lifetime' ? t('pf_lifetime') : date(company.subscription?.ends_at)}</td>
+                        <td>{company.subscription?.plan?.duration_info?.is_lifetime ? t('pf_lifetime') : date(company.subscription?.ends_at)}</td>
                         <td className="no-print"><div className="row-actions">{actions(company).map(([action, danger]) => <button key={action} type="button" className={`table-action ${danger ? 'table-action--danger' : ''}`} onClick={() => setDialog({ action, danger, company })}>{danger && <span aria-hidden="true">⚠ </span>}{t(`pf_action_${action}`)}</button>)}</div></td>
                     </tr>)}
                     {companies.data.length === 0 && <EmptyRow colSpan={6} />}
