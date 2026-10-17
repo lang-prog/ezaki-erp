@@ -22,15 +22,17 @@ class SendSubscriptionExpiryWarnings extends Command
         $today = today()->toDateString();
         $windowEnd = now()->addDays(7);
         $sent = 0;
+        $failed = 0;
 
         Subscription::query()
             ->with('company')
+            ->whereNull('superseded_at')
             ->where('status', 'active')
             ->whereNotNull('ends_at')
             ->whereBetween('ends_at', [now(), $windowEnd])
             ->whereHas('company', fn ($query) => $query->where('status', 'active'))
             ->orderBy('id')
-            ->chunkById(100, function ($subscriptions) use ($today, &$sent): void {
+            ->chunkById(100, function ($subscriptions) use ($today, &$sent, &$failed): void {
                 foreach ($subscriptions as $subscription) {
                     $owners = User::query()
                         ->where('company_id', $subscription->company_id)
@@ -48,17 +50,8 @@ class SendSubscriptionExpiryWarnings extends Command
                         ->get();
 
                     foreach ($owners as $owner) {
-                        $alreadySent = DB::table('subscription_expiry_notices')
-                            ->where('subscription_id', $subscription->id)
-                            ->where('user_id', $owner->id)
-                            ->where('notice_date', $today)
-                            ->exists();
-                        if ($alreadySent) {
-                            continue;
-                        }
-
-                        Notification::send($owner, new SubscriptionExpiryWarning($subscription));
-                        DB::table('subscription_expiry_notices')->insertOrIgnore([
+                        // Claim the notice first (unique per subscription/user/day); release it if sending fails so a retry can resend.
+                        $claimed = DB::table('subscription_expiry_notices')->insertOrIgnore([
                             'subscription_id' => $subscription->id,
                             'user_id' => $owner->id,
                             'notice_date' => $today,
@@ -66,12 +59,22 @@ class SendSubscriptionExpiryWarnings extends Command
                             'created_at' => now(),
                             'updated_at' => now(),
                         ]);
-                        $sent++;
+                        if ($claimed === 0) {
+                            continue;
+                        }
+                        try {
+                            Notification::send($owner, new SubscriptionExpiryWarning($subscription));
+                            $sent++;
+                        } catch (\Throwable $exception) {
+                            DB::table('subscription_expiry_notices')->where('subscription_id', $subscription->id)->where('user_id', $owner->id)->where('notice_date', $today)->delete();
+                            report($exception);
+                            $failed++;
+                        }
                     }
                 }
             });
 
-        $this->info("Sent {$sent} subscription expiry reminder(s).");
+        $this->info("Sent {$sent} subscription expiry reminder(s); {$failed} failed and will be retried.");
 
         return self::SUCCESS;
     }

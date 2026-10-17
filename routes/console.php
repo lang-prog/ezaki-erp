@@ -10,3 +10,5 @@ Artisan::command('inspire', function () {
 
 Schedule::command('subscriptions:send-expiry-warnings')->dailyAt('08:00')->withoutOverlapping();
 Schedule::command('companies:archive-expired')->dailyAt('02:00')->withoutOverlapping();
+Schedule::command('registrations:prune-stale')->dailyAt('03:00')->withoutOverlapping();
+Schedule::command('sanctum:prune-expired --hours=24')->dailyAt('03:30')->withoutOverlapping();

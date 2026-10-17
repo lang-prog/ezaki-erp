@@ -7,6 +7,31 @@ return [
         'lockout_attempts' => (int) env('AUTH_LOCKOUT_ATTEMPTS', 5),
         'lockout_base_seconds' => (int) env('AUTH_LOCKOUT_BASE_SECONDS', 60),
         'lockout_max_seconds' => (int) env('AUTH_LOCKOUT_MAX_SECONDS', 900),
+        'lockout_global_attempts' => (int) env('AUTH_LOCKOUT_GLOBAL_ATTEMPTS', 30),
+    ],
+    // Comma-separated proxy IPs/CIDRs, REMOTE_ADDR (trust the directly connected proxy) or *. Unset trusts loopback only.
+    'trusted_proxies' => env('TRUSTED_PROXIES'),
+    'platform' => [
+        'mfa_required' => (bool) env('PLATFORM_MFA_REQUIRED', false),
+        // Enrollment becomes mandatory from this date (Y-m-d) when set; until then admins can enrol voluntarily.
+        'mfa_enforce_from' => env('PLATFORM_MFA_ENFORCE_FROM'),
+        'step_up_minutes' => (int) env('PLATFORM_STEP_UP_MINUTES', 10),
+        'mfa_attempts_per_minute' => (int) env('PLATFORM_MFA_ATTEMPTS', 5),
+        'write_rate_limit' => (int) env('PLATFORM_WRITE_RATE_LIMIT', 40),
+        'min_password_length' => 12,
+    ],
+    'audit' => [
+        'retention_days' => (int) env('AUDIT_RETENTION_DAYS', 730),
+        'login_log_retention_days' => (int) env('LOGIN_LOG_RETENTION_DAYS', 180),
+    ],
+    'registration' => [
+        'stale_unverified_hours' => (int) env('REGISTRATION_STALE_HOURS', 24),
+    ],
+    'license' => [
+        'verify_write_interval_minutes' => (int) env('LICENSE_VERIFY_WRITE_MINUTES', 10),
+    ],
+    'tokens' => [
+        'ttl_minutes' => (int) env('API_TOKEN_TTL_MINUTES', 43200),
     ],
     'api' => [
         'read_rate_limit' => (int) env('API_READ_RATE_LIMIT', 120),

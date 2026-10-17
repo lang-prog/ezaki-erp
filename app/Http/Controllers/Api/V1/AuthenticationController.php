@@ -24,7 +24,7 @@ class AuthenticationController extends Controller
         }
 
         return response()->json([
-            'token' => $user->createToken('api-v1')->plainTextToken,
+            'token' => $user->createToken('api-v1', ['company-api'], now()->addMinutes(max(5, (int) config('security.tokens.ttl_minutes', 43200))))->plainTextToken,
             'user' => ['id' => $user->id, 'name' => $user->name, 'email' => $user->email, 'company_id' => $user->company_id],
         ]);
     }

@@ -2,11 +2,12 @@
 
 namespace App\Models;
 
+use App\Support\PlatformPermissions;
 use Database\Factories\UserFactory;
 use Illuminate\Auth\Passwords\CanResetPassword as CanResetPasswordTrait;
 use Illuminate\Contracts\Auth\CanResetPassword;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -41,6 +42,11 @@ class User extends Authenticatable implements CanResetPassword
         'failed_login_attempts',
         'login_locked_until',
         'session_version',
+        'platform_role',
+        'mfa_secret',
+        'mfa_confirmed_at',
+        'mfa_recovery_codes',
+        'mfa_last_step',
     ];
 
     /**
@@ -51,6 +57,9 @@ class User extends Authenticatable implements CanResetPassword
     protected $hidden = [
         'password',
         'remember_token',
+        'mfa_secret',
+        'mfa_recovery_codes',
+        'mfa_last_step',
     ];
 
     /**
@@ -69,6 +78,8 @@ class User extends Authenticatable implements CanResetPassword
             'login_locked_until' => 'datetime',
             'session_version' => 'integer',
             'password' => 'hashed',
+            'mfa_secret' => 'encrypted',
+            'mfa_confirmed_at' => 'datetime',
         ];
     }
 
@@ -85,6 +96,17 @@ class User extends Authenticatable implements CanResetPassword
     public function isActive(): bool
     {
         return $this->status === 'active' && $this->disabled_at === null;
+    }
+
+    public function platformCan(string $permission): bool
+    {
+        return $this->account_type === 'super_admin' && $this->isActive()
+            && in_array($permission, PlatformPermissions::forRole($this->platform_role), true);
+    }
+
+    public function hasMfa(): bool
+    {
+        return $this->mfa_confirmed_at !== null && $this->mfa_secret !== null;
     }
 
     public function isCompanyOwner(): bool

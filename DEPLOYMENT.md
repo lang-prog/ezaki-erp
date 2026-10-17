@@ -28,7 +28,7 @@
 
 Set the site's document root to the project's `public` directory. If the host fixes the document root elsewhere, deploy the Laravel public entrypoint and its public assets there; do not expose `.env`, `vendor`, `storage`, or the project root over HTTP. Enable URL rewriting and grant Laravel write access to `storage` and `bootstrap/cache`.
 
-Set `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL` to the HTTPS site URL, `TRUSTED_PROXIES=*` when the host terminates TLS through OpenResty/Passenger, a secure generated `APP_KEY`, a MySQL connection, secure session cookies, and a production mail transport. The application includes a `TrustProxies` middleware so Laravel honors the hosting provider's `X-Forwarded-Proto: https` header and generates HTTPS Vite asset URLs. Then run migrations and `npm run build` as part of deployment. Use `php artisan optimize:clear` before rebuilding the production cache, followed by `php artisan config:cache`, `php artisan route:cache`, and `php artisan view:cache` after deployment configuration is final.
+Set `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL` to the HTTPS site URL, `TRUSTED_PROXIES` set to the explicit IP/CIDR list of your reverse proxy when the host terminates TLS through OpenResty/Passenger (see the Super Admin runbook below; `*` is accepted only if the application is reachable exclusively through that proxy), a secure generated `APP_KEY`, a MySQL connection, secure session cookies, and a production mail transport. The application includes a `TrustProxies` middleware so Laravel honors the hosting provider's `X-Forwarded-Proto: https` header and generates HTTPS Vite asset URLs. Then run migrations and `npm run build` as part of deployment. Use `php artisan optimize:clear` before rebuilding the production cache, followed by `php artisan config:cache`, `php artisan route:cache`, and `php artisan view:cache` after deployment configuration is final.
 
 For production, set `SESSION_SECURE_COOKIE=true`, keep `SESSION_HTTP_ONLY=true` and `SESSION_SAME_SITE=lax` (use `none` only for a deliberately cross-site HTTPS client), and set `CORS_ALLOWED_ORIGINS` to a comma-separated, explicit HTTPS origin allowlist. Never use `*` with credentials. HSTS is emitted on HTTPS responses by default; if TLS terminates at a reverse proxy, forward the original HTTPS scheme and verify `TrustProxies` before enabling preload-style policies.
 
@@ -72,7 +72,7 @@ Local-edition installations activated before signed-payload persistence must be 
 1. Start MySQL and Apache in the XAMPP Control Panel. Create an empty `utf8mb4` database and a dedicated local application user with privileges only on that database. Never use MySQL `root` in `.env`.
 2. Point the Apache vhost `DocumentRoot` only at `<repo>/public`, enable `mod_rewrite`, and grant `AllowOverride All` for that directory. Never map the repository root, `.env`, `vendor`, or `storage` as a document root.
 3. Keep `.env` outside source control and outside any public directory. Set `APP_ENV=production`, `APP_DEBUG=false`, a unique `APP_KEY`, an HTTPS `APP_URL`, `SESSION_SECURE_COOKIE=true`, and the real MySQL/mail/queue/cache values. Do not copy secrets into `.env.example`.
-4. Install/build and migrate forward only. If the site is behind OpenResty/Passenger, keep `TRUSTED_PROXIES=*` in `.env`:
+4. Install/build and migrate forward only. If the site is behind OpenResty/Passenger, set `TRUSTED_PROXIES` in `.env` to the proxy IP/CIDR list (not a blanket `*` unless direct access is blocked):
 
 ```text
 composer install --no-dev --optimize-autoloader
@@ -129,6 +129,49 @@ Recommended policy for a single-site deployment: daily database plus private-sto
 4. For irreversible/schema changes, use a forward fix or a tested down/compatibility migration; do not improvise `migrate:rollback` on production.
 5. Run `migrate:status`, `release:preflight --production`, queue checks, and the smoke script. Confirm login, dashboard, a read-only core list, mail transport, and worker health before removing maintenance mode.
 6. Record the incident, manifest checksum, commit, actual RPO/RTO, and any failed jobs.
+
+### Super Admin remediation runbook
+
+**Migrations (additive, MySQL-safe, run in order with `php artisan migrate --force` after a verified backup):**
+
+1. `2026_10_15_000001_add_platform_security_fields` adds `users.platform_role` and the MFA columns, extends `audit_logs` (actor type, severity, reason, before/after, request id, user agent), and sets `platform_role = owner` for every existing `super_admin` so nobody is locked out.
+2. `2026_10_15_000002_add_subscription_history_and_requests` adds subscription history (`superseded_at`, `previous_subscription_id`, `subscription_events`), payment idempotency/audit columns, and `subscription_requests`.
+
+No company, accounting, stock or journal row is rewritten. Existing subscriptions stay current. Rolling the migrations back drops the new columns and tables and loses MFA enrolment, payment idempotency keys and request history, so prefer a code-only rollback: the old code ignores the new columns.
+
+**Environment variables (all optional, safe defaults):**
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TRUSTED_PROXIES` | unset (loopback only) | Comma-separated proxy IP/CIDR list. Required behind a reverse proxy, otherwise client IPs and HTTPS detection fall back to the proxy address. |
+| `PLATFORM_MFA_REQUIRED` | `false` | Force every platform administrator to enrol TOTP. |
+| `PLATFORM_MFA_ENFORCE_FROM` | unset | ISO date from which enrolment becomes mandatory (grace period). |
+| `PLATFORM_STEP_UP_MINUTES` | `10` | Validity of a password (+TOTP) confirmation for high-impact actions. |
+| `AUTH_LOCKOUT_*` | 5 / 60s / 900s / 30 | Per-source lockout threshold, base and max seconds, and the much higher account-wide threshold. |
+| `API_TOKEN_TTL_MINUTES` | `43200` | Expiry of newly issued API tokens (30 days). |
+| `AUDIT_RETENTION_DAYS`, `LOGIN_LOG_RETENTION_DAYS` | `730`, `180` | Used only by the explicit pruning command. |
+
+**MFA / step-up rollout:**
+
+1. Deploy with MFA optional. Each administrator opens Super Admin > Security, adds the secret to an authenticator app, confirms a code and stores the recovery codes (shown once).
+2. Set `PLATFORM_MFA_ENFORCE_FROM` to a future date, then switch to `PLATFORM_MFA_REQUIRED=true` after everyone has enrolled.
+3. A locked-out administrator is recovered from the server console only: `php artisan platform:mfa-reset admin@example.com` (asks for confirmation, audited, revokes sessions). Keep at least two Platform Owners.
+4. High-impact actions (lifecycle, payments, plan changes, limits, administrators, licenses, settings) require a password confirmation within the step-up window and a mandatory reason; both are recorded in the audit log. Remember-me is disabled for the platform.
+
+**Subscription and payment behavior changes:**
+
+- Manual payments accept only fully paid renewals (`paid`, `pending`, `failed`); partial payments and refund statuses are rejected, overpayments are recorded, and an `idempotency_key` is required so a double click cannot extend twice. Extension starts from the current end date when it is still in the future.
+- A payment or plan change never reactivates a suspended or archived company; use Activate or Restore explicitly. Archived companies must be restored first.
+- A plan change creates a new subscription row and keeps the old one as history (`superseded_at`); the paid-through date is unchanged and downgrades below current usage are blocked.
+- Company suspension or archival always wins over subscription dates, including the local edition.
+- Plan `features` flags are deprecated and no longer enforced; users, branches and warehouses limits control access. New companies default to the `factory_weight` inventory basis.
+- Company contact/renewal buttons now persist a request that platform staff handle under Super Admin > Requests.
+
+**Tokens and sessions:** new API tokens carry the `company-api` ability and expire after `API_TOKEN_TTL_MINUTES`. Existing tokens keep working (no global expiry was forced); revoke or rotate them on your own schedule. Anonymous and unknown-account password-reset responses are identical.
+
+**Scheduler, queue and cache steps after deploy:** run `php artisan optimize:clear`, rebuild with `config:cache`, `route:cache`, `view:cache`, run `php artisan queue:restart`, and keep `schedule:run` every minute. The scheduler now also runs `companies:archive-expired`, the queued expiry warnings and `registrations:prune-stale`. `platform:prune-logs` is deliberately never scheduled: preview with `--dry-run`, then delete only with `--force` after your retention decision. Because the login lockout and step-up rate limits use the cache, a shared persistent cache store (not `array`) is recommended in production.
+
+**Production notes:** do not edit production data by hand; the Super Admin UI is the only supported lifecycle writer. Verify `release:preflight --production`, the smoke script, a Platform Owner login, an MFA challenge and one audited reversible action (for example, suspend then activate a test company) before removing maintenance mode.
 
 ### External verification still required
 

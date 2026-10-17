@@ -128,7 +128,7 @@ class CompanyAccessController extends Controller
         abort_if(array_diff(array_merge($data['permissions'] ?? [], $rolePermissions), $assignable), 403, 'You cannot grant permissions you do not hold.');
 
         $company = $request->attributes->get('company');
-        $subscription = $company->subscriptions()->with('plan')->latest('starts_at')->firstOrFail();
+        $subscription = $company->subscriptions()->with('plan')->current()->firstOrFail();
 
         $user = DB::transaction(function () use ($data, $companyId, $company, $subscription, $limits): User {
             $limits->lockAndAssertCanAdd($company, $subscription->id, 'users');
@@ -252,7 +252,7 @@ class CompanyAccessController extends Controller
         DB::transaction(function () use ($data, $user, $request, $limits): void {
             if ($data['active']) {
                 $company = $request->attributes->get('company');
-                $subscription = $company->subscriptions()->latest('starts_at')->firstOrFail();
+                $subscription = $company->subscriptions()->current()->firstOrFail();
                 $limits->lockAndAssertCanAdd($company, $subscription->id, 'users');
             }
             $user->forceFill([

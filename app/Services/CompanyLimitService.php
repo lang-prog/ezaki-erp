@@ -15,14 +15,18 @@ class CompanyLimitService
 {
     public function effectiveLimit(Subscription $subscription, string $resource): ?int
     {
-        $base = data_get($subscription->plan?->limits, $resource);
-        $addon = data_get($subscription->overrides, "limit_addons.{$resource}", 0);
+        return $this->limitFor($subscription->plan?->limits, $subscription->overrides['limit_addons'] ?? [], $resource);
+    }
 
-        if ($base === null && ! $addon) {
+    /** An unlimited (null) plan limit stays unlimited; add-ons only extend a finite limit. */
+    public function limitFor(?array $planLimits, array $addons, string $resource): ?int
+    {
+        $base = data_get($planLimits, $resource);
+        if ($base === null || $base === '') {
             return null;
         }
 
-        return (int) $base + (int) $addon;
+        return (int) $base + (int) ($addons[$resource] ?? 0);
     }
 
     public function currentCount(Company $company, string $resource): int

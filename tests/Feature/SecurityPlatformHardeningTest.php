@@ -52,8 +52,28 @@ final class SecurityPlatformHardeningTest extends TestCase
         $second->assertUnauthorized()->assertExactJson(['message' => 'The supplied sign-in details are invalid.']);
         $unknown->assertUnauthorized()->assertExactJson(['message' => 'The supplied sign-in details are invalid.']);
         $this->assertSame(2, $user->fresh()->failed_login_attempts);
-        $this->assertTrue($user->fresh()->login_locked_until->isFuture());
+        $this->assertNull($user->fresh()->login_locked_until, 'One source must not lock the account for everyone.');
         $this->postJson('/api/v1/login', ['email' => $user->email, 'password' => 'correct-password'])->assertUnauthorized();
+        $this->withServerVariables(['REMOTE_ADDR' => '10.9.8.7'])->postJson('/api/v1/login', ['email' => $user->email, 'password' => 'correct-password'])->assertOk();
+    }
+
+    public function test_distributed_failures_trip_the_account_wide_lock(): void
+    {
+        config([
+            'security.auth.login_ip_rate_limit' => 100,
+            'security.auth.login_account_rate_limit' => 100,
+            'security.auth.lockout_attempts' => 2,
+            'security.auth.lockout_global_attempts' => 3,
+        ]);
+        $company = Company::query()->create(['name' => 'Distributed Co', 'status' => 'active']);
+        $user = User::query()->create(['name' => 'Owner', 'email' => 'distributed@example.test', 'password' => 'correct-password', 'company_id' => $company->id, 'account_type' => 'company', 'status' => 'active']);
+
+        foreach (['1.1.1.1', '2.2.2.2', '3.3.3.3'] as $ip) {
+            $this->withServerVariables(['REMOTE_ADDR' => $ip])->postJson('/api/v1/login', ['email' => $user->email, 'password' => 'wrong-password'])->assertUnauthorized();
+        }
+
+        $this->assertTrue($user->fresh()->login_locked_until->isFuture());
+        $this->withServerVariables(['REMOTE_ADDR' => '4.4.4.4'])->postJson('/api/v1/login', ['email' => $user->email, 'password' => 'correct-password'])->assertUnauthorized();
     }
 
     public function test_api_login_named_limiter_returns_429(): void

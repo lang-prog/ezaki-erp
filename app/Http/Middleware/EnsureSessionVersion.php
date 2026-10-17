@@ -20,6 +20,7 @@ final class EnsureSessionVersion
         $user = $request->user();
 
         if ($user && (int) $request->session()->get('session_version', 0) !== (int) $user->session_version) {
+            $platform = $user->account_type === 'super_admin';
             Auth::guard('web')->logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
@@ -28,7 +29,7 @@ final class EnsureSessionVersion
                 return response()->json(['message' => 'Unauthenticated.'], 401);
             }
 
-            return redirect()->guest(route('login'));
+            return redirect()->guest(route($platform ? 'super-admin.login' : 'login'));
         }
 
         return $next($request);

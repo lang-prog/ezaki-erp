@@ -69,20 +69,23 @@ export const companyNavigation = [
 
 export const platformNavigation = [
     { id: 'platform-home', label: 'navOverview', icon: 'home', expanded: true, items: [
-        { id: 'platform-dashboard', label: 'platformOverview', href: '/super-admin', icon: 'dashboard' },
+        { id: 'platform-dashboard', label: 'platformOverview', href: '/super-admin', permission: 'platform.dashboard.view', icon: 'dashboard' },
     ] },
-    { id: 'platform-onboarding', label: 'registrationRequests', icon: 'people', expanded: true, items: [
-        { id: 'platform-registration-settings', label: 'selfRegistration', href: '/super-admin#registration-settings', icon: 'settings' },
-        { id: 'platform-registrations', label: 'registrationRequests', href: '/super-admin#registrations', icon: 'list' },
-        { id: 'platform-new-company', label: 'createCompany', href: '/super-admin#new-company', icon: 'add' },
+    { id: 'platform-tenants', label: 'pf_group_tenants', icon: 'branches', expanded: true, items: [
+        { id: 'platform-companies', label: 'pf_nav_companies', href: '/super-admin/companies', permission: 'platform.companies.view', icon: 'branches' },
+        { id: 'platform-registrations', label: 'pf_nav_registrations', href: '/super-admin/registrations', permission: 'platform.registrations.manage', icon: 'list' },
+        { id: 'platform-requests', label: 'pf_nav_requests', href: '/super-admin/requests', permission: 'platform.subscription_requests.manage', icon: 'document' },
     ] },
-    { id: 'platform-companies', label: 'companies', icon: 'branches', expanded: true, items: [
-        { id: 'platform-company-list', label: 'companies', href: '/super-admin#companies', icon: 'branches' },
-        { id: 'platform-subscriptions', label: 'subscriptionsPayments', href: '/super-admin#subscriptions', icon: 'document' },
+    { id: 'platform-commercial', label: 'pf_group_commercial', icon: 'ledger', expanded: true, items: [
+        { id: 'platform-subscriptions', label: 'pf_nav_subscriptions', href: '/super-admin/subscriptions', permission: 'platform.subscriptions.view', icon: 'document' },
+        { id: 'platform-plans', label: 'pf_nav_plans', href: '/super-admin/plans', any: ['platform.plans.manage', 'platform.coupons.manage'], icon: 'ticket' },
+        { id: 'platform-licenses', label: 'pf_nav_licenses', href: '/super-admin/licenses', permission: 'platform.licenses.view', icon: 'document' },
     ] },
-    { id: 'platform-catalog', label: 'platformCatalog', icon: 'settings', expanded: true, items: [
-        { id: 'platform-plans', label: 'plans', href: '/super-admin#plans', icon: 'document' },
-        { id: 'platform-coupons', label: 'coupons', href: '/super-admin#coupons', icon: 'ticket' },
+    { id: 'platform-governance', label: 'pf_group_governance', icon: 'settings', expanded: true, items: [
+        { id: 'platform-admins', label: 'pf_nav_admins', href: '/super-admin/admins', permission: 'platform.admins.view', icon: 'people' },
+        { id: 'platform-audit', label: 'pf_nav_audit', href: '/super-admin/audit', permission: 'platform.audit.view', icon: 'activity' },
+        { id: 'platform-settings', label: 'pf_nav_settings', href: '/super-admin/settings', permission: 'platform.settings.view', icon: 'settings' },
+        { id: 'platform-security', label: 'pf_security', href: '/super-admin/security', icon: 'settings' },
     ] },
 ];
 

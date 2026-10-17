@@ -16,6 +16,8 @@ class LocalLicense extends Model
         'transfer_reference', 'last_verified_at', 'signed_payload', 'signed_payload_raw', 'signature',
     ];
 
+    protected $hidden = ['key_hash', 'signed_payload_raw', 'signature', 'signed_payload'];
+
     protected function casts(): array
     {
         return [

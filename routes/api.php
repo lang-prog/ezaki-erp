@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\CoreErpController;
 use App\Http\Controllers\Api\V1\LocalLicenseController;
 use App\Http\Controllers\Api\V1\OperationsController;
 use App\Http\Controllers\Web\CompanyAccessController;
+use App\Http\Controllers\Web\CompanySubscriptionRequestController;
 use App\Services\SubscriptionLifecycle;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -16,7 +17,7 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/version', fn () => response()->json(['data' => ['api' => 'v1', 'application' => config('app.name'), 'laravel' => app()->version()]]))->name('api.v1.version');
     Route::post('/login', [AuthenticationController::class, 'login'])->middleware('throttle:login')->name('api.v1.login');
     Route::post('/license/activate', [LocalLicenseController::class, 'activate'])->middleware('throttle:5,1')->name('api.v1.license.activate');
-    Route::middleware(['auth:sanctum', 'session.version', 'account.type:company', 'tenant', 'subscription', 'local.license'])->group(function (): void {
+    Route::middleware(['auth:sanctum', 'company.api', 'session.version', 'account.type:company', 'tenant', 'subscription', 'local.license'])->group(function (): void {
         Route::get('/subscription', function (Request $request, SubscriptionLifecycle $lifecycle) {
             $subscription = $lifecycle->currentFor($request->attributes->get('company'));
 
@@ -26,8 +27,8 @@ Route::prefix('v1')->group(function (): void {
                 'ends_at' => $subscription?->ends_at,
             ]);
         })->middleware('throttle:api.read')->name('api.v1.subscription');
-        Route::post('/subscription/contact', fn () => response()->json(['status' => 'contact_requested']))->middleware('throttle:api.write')->name('api.v1.subscription.contact');
-        Route::post('/subscription/renew', fn () => response()->json(['status' => 'renewal_requested']))->middleware('throttle:api.write')->name('api.v1.subscription.renew');
+        Route::post('/subscription/contact', [CompanySubscriptionRequestController::class, 'store'])->defaults('type', 'contact')->middleware(['can:subscriptions.view', 'throttle:api.write'])->name('api.v1.subscription.contact');
+        Route::post('/subscription/renew', [CompanySubscriptionRequestController::class, 'store'])->defaults('type', 'renew')->middleware(['can:subscriptions.view', 'throttle:api.write'])->name('api.v1.subscription.renew');
         Route::put('/password', [CompanyProfileController::class, 'updatePassword'])->middleware('throttle:api.write')->name('api.v1.password.update');
         Route::put('/profile', [CompanyProfileController::class, 'update'])->middleware('throttle:api.write')->name('api.v1.profile.update');
         Route::get('/accounting-settings', [AccountingSettingsController::class, 'show'])->middleware('throttle:api.read')->name('api.v1.accounting-settings.show');

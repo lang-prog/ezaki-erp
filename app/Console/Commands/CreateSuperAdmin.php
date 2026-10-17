@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Models\User;
+use App\Support\PlatformPassword;
 use Illuminate\Console\Command;
 
 class CreateSuperAdmin extends Command
@@ -24,8 +25,8 @@ class CreateSuperAdmin extends Command
         }
 
         $password = $this->secret('Password');
-        if (! $password || $password !== $this->secret('Confirm password') || strlen($password) < 12) {
-            $this->error('Passwords must match and contain at least 12 characters.');
+        if (! $password || $password !== $this->secret('Confirm password') || ! PlatformPassword::passes($password)) {
+            $this->error('Passwords must match and contain at least 12 characters with upper/lower case letters and digits.');
 
             return self::FAILURE;
         }
@@ -36,6 +37,7 @@ class CreateSuperAdmin extends Command
             'password' => $password,
             'email_verified_at' => now(),
             'account_type' => 'super_admin',
+            'platform_role' => 'owner',
             'status' => 'active',
         ]);
 

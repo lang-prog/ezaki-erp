@@ -9,7 +9,7 @@ const visible = (grps, perms, query = '', lang = 'ar') => visibleNavigation(grps
 
 test('all company and platform destinations have unique IDs, labels and reachable routes', () => {
     const routes = readFileSync(new URL('../routes/web.php', import.meta.url), 'utf8');
-    const dashboard = readFileSync(new URL('../resources/js/Pages/SuperAdmin/Dashboard.jsx', import.meta.url), 'utf8');
+    const platformRoutes = readFileSync(new URL('../routes/platform.php', import.meta.url), 'utf8');
     for (const groups of [companyNavigation, platformNavigation]) {
         const items = groups.flatMap((group) => group.items);
         assert.equal(new Set(items.map((item) => item.id)).size, items.length);
@@ -17,7 +17,7 @@ test('all company and platform destinations have unique IDs, labels and reachabl
             assert.notEqual(translate('ar', item.label), item.label, item.id);
             assert.notEqual(translate('en', item.label), item.label, item.id);
             assert.ok(item.href.startsWith('/'), item.id);
-            if (item.href.startsWith('/super-admin#')) assert.ok(dashboard.includes(`id="${item.href.split('#')[1]}"`), item.id);
+            if (item.href.startsWith('/super-admin/')) assert.ok(platformRoutes.includes(`'${item.href.replace('/super-admin', '')}'`), item.id);
         }
     }
     for (const report of companyNavigation.flatMap((group) => group.items).filter((item) => item.href.startsWith('/reports/'))) {

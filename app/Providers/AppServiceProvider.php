@@ -52,6 +52,11 @@ class AppServiceProvider extends ServiceProvider
             });
         }
 
+        RateLimiter::for('platform.write', fn (Request $request): Limit => Limit::perMinute((int) config('security.platform.write_rate_limit', 40))
+            ->by('platform-write:'.($request->user()?->getAuthIdentifier() ?? $request->ip())));
+        RateLimiter::for('platform.auth', fn (Request $request): Limit => Limit::perMinute(10)
+            ->by('platform-auth:'.($request->user()?->getAuthIdentifier() ?? $request->ip())));
+
         Gate::before(function ($user): ?bool {
             return $user instanceof User && $user->isCompanyOwner() ? true : null;
         });
