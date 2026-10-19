@@ -5,6 +5,7 @@ use App\Http\Controllers\Platform\AuditController;
 use App\Http\Controllers\Platform\CatalogController;
 use App\Http\Controllers\Platform\CompanyController;
 use App\Http\Controllers\Platform\DashboardController;
+use App\Http\Controllers\Platform\DataMigrationController;
 use App\Http\Controllers\Platform\DurationController;
 use App\Http\Controllers\Platform\LicenseController;
 use App\Http\Controllers\Platform\MfaController;
@@ -37,6 +38,15 @@ Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account
         foreach (['activate', 'suspend', 'archive', 'restore'] as $action) {
             Route::post("/companies/{company}/{$action}", [CompanyController::class, $action])->middleware(['platform.can:companies.lifecycle', 'platform.stepup', 'throttle:platform.write'])->name("companies.{$action}");
         }
+
+        Route::get('/data-migrations', [DataMigrationController::class, 'index'])->middleware('platform.can:data_migration.view')->name('data-migrations.index');
+        Route::post('/data-migrations', [DataMigrationController::class, 'store'])->middleware(['platform.can:data_migration.manage', 'throttle:platform.write'])->name('data-migrations.store');
+        Route::get('/data-migrations/{run}', [DataMigrationController::class, 'show'])->middleware('platform.can:data_migration.view')->name('data-migrations.show');
+        Route::post('/data-migrations/{run}/analyze', [DataMigrationController::class, 'analyze'])->middleware(['platform.can:data_migration.manage', 'throttle:platform.write'])->name('data-migrations.analyze');
+        Route::put('/data-migrations/{run}/mappings/{mapping}', [DataMigrationController::class, 'updateMapping'])->middleware(['platform.can:data_migration.manage', 'throttle:platform.write'])->name('data-migrations.mappings.update');
+        Route::post('/data-migrations/{run}/prepare-masters', [DataMigrationController::class, 'prepareMasters'])->middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->name('data-migrations.prepare-masters');
+        Route::post('/data-migrations/{run}/prepare-openings', [DataMigrationController::class, 'prepareOpeningBalances'])->middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->name('data-migrations.prepare-openings');
+        Route::post('/data-migrations/{run}/execute-invoices', [DataMigrationController::class, 'executeInvoices'])->middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->name('data-migrations.execute-invoices');
 
         Route::get('/registrations', [PlatformRegistrationController::class, 'index'])->middleware('platform.can:registrations.manage')->name('registrations.index');
         Route::post('/registrations/{registration}/approve', [PlatformRegistrationController::class, 'approve'])->middleware(['platform.can:registrations.manage', 'throttle:platform.write'])->name('registrations.approve');

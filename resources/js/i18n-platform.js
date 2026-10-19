@@ -59,6 +59,7 @@ export const platformEn = {
     pf_impact_codes: 'The old recovery codes stop working and new ones are shown once.', pf_impact_disable_mfa: 'Your account will rely on the password only.', pf_enroll_title: 'Set up your authenticator app', pf_enroll_steps: 'Add the key below to an authenticator app (or paste the link into one), then enter the 6-digit code to confirm.',
     pf_secret_key: 'Secret key', pf_otpauth: 'Setup link', pf_confirm_enroll: 'Confirm and enable', pf_mfa_challenge: 'Two-step verification', pf_mfa_challenge_copy: 'Enter the code from your authenticator app or a recovery code to continue.',
     platformOverview: 'Platform overview',
+    pf_nav_data_migration: 'Data migration', pf_data_migration: 'Data migration', pf_migration_intro: 'Import legacy operational data safely. Files are analyzed before any company data is changed.', pf_migration_company: 'Target company', pf_migration_source: 'Legacy source file', pf_migration_from: 'Documents from', pf_migration_to: 'Documents to', pf_migration_upload: 'Upload and analyze', pf_migration_no_runs: 'No migration runs yet.', pf_migration_source_hint: 'SQL or compressed SQL dump. It is stored privately and never executed.', pf_migration_summary: 'Analysis summary', pf_migration_candidates: 'Candidates', pf_migration_review: 'Needs review', pf_migration_master: 'Master data', pf_migration_no_source: 'Choose a source file first.',
 };
 
 export const platformAr = {
@@ -121,4 +122,5 @@ export const platformAr = {
     pf_impact_codes: 'تتوقف رموز الاسترداد القديمة وتُعرض رموز جديدة مرة واحدة.', pf_impact_disable_mfa: 'سيعتمد حسابك على كلمة المرور وحدها.', pf_enroll_title: 'إعداد تطبيق المصادقة', pf_enroll_steps: 'أضف المفتاح أدناه إلى تطبيق مصادقة (أو الصق الرابط فيه) ثم أدخل الرمز المكوّن من 6 أرقام للتأكيد.',
     pf_secret_key: 'المفتاح السري', pf_otpauth: 'رابط الإعداد', pf_confirm_enroll: 'تأكيد وتفعيل', pf_mfa_challenge: 'التحقق بخطوتين', pf_mfa_challenge_copy: 'أدخل الرمز من تطبيق المصادقة أو رمز استرداد للمتابعة.',
     platformOverview: 'نظرة عامة على المنصة',
+    pf_nav_data_migration: 'نقل البيانات', pf_data_migration: 'نقل البيانات', pf_migration_intro: 'انقل البيانات التشغيلية القديمة بأمان. يتم تحليل الملفات قبل تغيير أي بيانات في الشركة.', pf_migration_company: 'الشركة المستهدفة', pf_migration_source: 'ملف المصدر القديم', pf_migration_from: 'المستندات من', pf_migration_to: 'المستندات إلى', pf_migration_upload: 'رفع وتحليل', pf_migration_no_runs: 'لا توجد عمليات نقل بعد.', pf_migration_source_hint: 'ملف SQL أو SQL مضغوط. يُحفظ خاصًا ولا يتم تنفيذه.', pf_migration_summary: 'ملخص التحليل', pf_migration_candidates: 'مرشحة', pf_migration_review: 'تحتاج مراجعة', pf_migration_master: 'البيانات الأساسية', pf_migration_no_source: 'اختر ملف المصدر أولًا.',
 };

@@ -1,0 +1,2536 @@
+diff --git a/DATA_MIGRATION_PLAN.md b/DATA_MIGRATION_PLAN.md
+new file mode 100644
+index 0000000..e1282be
+--- /dev/null
++++ b/DATA_MIGRATION_PLAN.md
+@@ -0,0 +1,75 @@
++# خطة مركز نقل البيانات القديم إلى E‑Zaki ERP
++
++## الهدف
++إضافة مركز ترحيل آمن وقابل للاستئناف يقرأ نسخة قاعدة البرنامج القديم للقراءة فقط، ويحوّل البيانات التشغيلية المختارة إلى الشركة المستهدفة داخل E‑Zaki ERP مع الحفاظ على العزل متعدد الشركات، وإعادة إنشاء القيود والمخزون عبر خدمات النظام الجديد بدل نسخ القيود القديمة.
++
++## النطاق المعتمد
++- أول تجربة للشركة رقم 2، مع اختيار الشركة من الواجهة وعدم تثبيت المعرف في الكود.
++- نطاق المستندات التجريبي: 2026-10-01 إلى 2026-10-18.
++- الرصيد الافتتاحي: حتى 2026-09-30، من تقرير مخزون مستقل بعد اعتماده.
++- إنشاء المستندات كمسودات في أول تشغيل.
++- غير المؤكد والمرتجع والملغى يعرض للمراجعة اليدوية.
++- وحدة القياس اختيار لكل صنف، ولا يوجد افتراض أن كل الأصناف حديد أو أن كل الوحدات وزن.
++
++## المعمارية
++1. **MigrationRun**: عملية نقل مستقلة مرتبطة بالشركة المستهدفة والمستخدم والمنطقة الزمنية والنطاق والحالة.
++2. **MigrationSourceRecord**: سجل وسيط يحتفظ بمرجع المصدر وبياناته المطهرة وحالته وسبب الاستبعاد أو الخطأ.
++3. **MigrationMapping**: مطابقة المصدر مع كيان الهدف، مع درجة الثقة وقرار المستخدم.
++4. **LegacySnapshotParser**: قارئ للقراءة فقط للملف `sql` أو `sql.gz`؛ لا ينفذ أي عبارة على قاعدة النظام الجديد.
++5. **LegacyAnalysisService**: يصنف الجداول والسجلات ويخرج الإحصائيات والتنبيهات.
++6. **MigrationPreviewService**: يتحقق من المطابقات والإجماليات ويمنع التنفيذ عند وجود نقص جوهري.
++7. **MigrationExecutionService**: ينشئ الكيانات والمسودات داخل معاملات صغيرة قابلة لإعادة المحاولة، ويستخدم `AccountingService`, `OperationsService`, و`InventoryService` عند الانتقال إلى الاعتماد.
++8. **MigrationAudit**: يسجل كل رفع وتحليل ومطابقة وإنشاء واستبعاد وفشل واستئناف.
++
++## صلاحيات الوصول
++- المسارات داخل مساحة المنصة ولا تظهر للمستخدم العام.
++- قدرة `platform.data_migration.view` للمعاينة.
++- قدرة `platform.data_migration.manage` لإنشاء عملية ورفع المصدر والمطابقة.
++- قدرة `platform.data_migration.execute` للتنفيذ وإنشاء المسودات.
++- السوبر أدمن لا يستطيع اختيار شركة غير المسموح بها حسب صلاحيات المنصة.
++- لا يقبل الخادم `company_id` دون إعادة التحقق من الشركة المستهدفة في كل عملية.
++
++## جداول العملية
++### `data_migration_runs`
++`company_id`, `created_by`, `source_name`, `source_system`, `documents_from`, `documents_to`, `opening_balance_as_of`, `mode`, `status`, `source_hash`, `summary`, `options`, `error_message`, `started_at`, `completed_at`, timestamps.
++
++### `data_migration_mappings`
++`run_id`, `entity_type`, `source_table`, `source_key`, `target_type`, `target_id`, `decision`, `confidence`, `payload`, timestamps، مع قيد فريد يمنع تكرار نفس المصدر داخل العملية.
++
++### `data_migration_records`
++`run_id`, `entity_type`, `source_table`, `source_id`, `source_date`, `source_number`, `source_payload`, `normalized_payload`, `status`, `target_type`, `target_id`, `error_message`, `fingerprint`, timestamps، مع قيد فريد على `run_id + entity_type + source_table + source_id`.
++
++## واجهة الاستخدام
++1. اختيار الشركة المستهدفة والنطاق وملف المصدر.
++2. التحليل والإحصائيات.
++3. مطابقة الفروع والمخازن.
++4. مطابقة الأطراف.
++5. مطابقة الأنواع والأقطار والأصناف والوحدات.
++6. مراجعة السجلات غير المؤكدة.
++7. المعاينة والإجماليات.
++8. إنشاء المسودات.
++9. تقرير النتائج والفروقات.
++
++كل خطوة تمنع الانتقال عند نقص البيانات اللازمة، وتحفظ الحالة عند التحديث، وتعرض الأخطاء بالعربية والإنجليزية.
++
++## معايير التنفيذ
++- لا توجد استثناءات CSRF أو تعطيل لعزل الشركات.
++- لا تُنفذ ملفات SQL المرفوعة ولا تُحقن أسماء جداول/أعمدة من المستخدم في SQL.
++- كل ملف مرفوع خاص ومحدود الحجم والنوع ويُفحص hash.
++- العملية idempotent؛ إعادة التشغيل لا تنشئ طرفًا أو فاتورة أو حركة مخزون مكررة.
++- المسودات لا تنشئ قيودًا أو حركة مخزون نهائية قبل الاعتماد.
++- التقارير تعرض إجمالي المصدر والمقبول والمستبعد والفروقات.
++- كل تحويل قابل للتتبع إلى المصدر القديم وإلى سجل الهدف الجديد.
++
++## ترتيب التنفيذ
++1. migrations/models والتدقيق.
++2. صلاحيات ومسارات المنصة.
++3. Parser وتحليل المصدر القديم.
++4. واجهة الاختيار والمعاينة والمطابقة.
++5. إنشاء الأطراف والأصناف والأرصدة الافتتاحية.
++6. إنشاء مسودات الفواتير والسندات وتخصيصاتها.
++7. ترحيل الأرصدة الافتتاحية والمخزون حتى تاريخ القطع بعد اعتماد المطابقات.
++8. تنفيذ الفواتير والسندات المعتمدة عبر خدمات النظام الجديد، مع إبقاء المصروفات وحركات البنوك غير المصنفة للمراجعة.
++9. الاعتماد الاختياري بعد المراجعة.
++10. اختبارات الانحدار والعزل والتكرار وقواعد الإجماليات.
++11. اختبار MySQL على نسخة اختبار، ثم تجربة الشركة رقم 2، ثم اعتماد النقل الكامل.
+diff --git a/DATA_MIGRATION_TODO.md b/DATA_MIGRATION_TODO.md
+new file mode 100644
+index 0000000..70d05df
+--- /dev/null
++++ b/DATA_MIGRATION_TODO.md
+@@ -0,0 +1,49 @@
++# حالة تنفيذ مركز نقل البيانات
++
++## المنجز
++
++- [x] جداول عمليات النقل والمطابقات والسجلات المرحلية مع فهارس تمنع تكرار المصدر داخل العملية.
++- [x] قارئ SQL وSQL.GZ للقراءة فقط؛ لا يتم تنفيذ أي SQL مرفوع على قاعدة النظام الجديد.
++- [x] التحقق من الامتداد والحجم والتخزين الخاص وSHA-256، مع حذف الملف عند فشل إنشاء العملية.
++- [x] اختيار الشركة المستهدفة من الواجهة مع إعادة التحقق من العزل في كل mapping وهدف.
++- [x] مطابقة العملاء والموردين والمخازن والأنواع والأقطار والأصناف.
++- [x] دعم الأصناف غير الحديدية كمنتج مستقل باسم ونوع ووحدة، وعدم افتراض أن كل فئة قطر.
++- [x] مطابقة وإنشاء الخزائن والحسابات البنكية عند اعتمادها، مع عدم إنشاء أي master data قبل خطوة منفصلة محمية بـ step-up.
++- [x] تصنيف فواتير الشراء والبيع بعيدًا عن صفوف الدفعات.
++- [x] حفظ صفوف إيصالات القبض وسندات الصرف المرحّلة كسجلات تحتاج مطابقة مصدر الخزينة، ثم تنفيذ السند عبر AccountingService بعد اعتماد المطابقات.
++- [x] ترحيل رصيد الطرف الافتتاحي حتى تاريخ القطع من المبيعات/المشتريات والدفعات، ثم إنشاء قيد افتتاحي عبر خدمة النظام الجديد.
++- [x] احتساب كمية المخزون الافتتاحية من سجل `store` حتى تاريخ القطع وربطها بالمنتج والمخزن.
++- [x] تثمين المخزون الافتتاحي بمتوسط تكلفة الشراء المتاح في المصدر مع تحذير صريح عند غياب تكلفة موثوقة.
++- [x] إنشاء قيد المخزون الافتتاحي مقابل حقوق الملكية الافتتاحية، وحركة مخزون بمفتاح مصدر idempotent.
++- [x] تنفيذ الفواتير والسندات في معاملات منفصلة، مع حالات فشل قابلة لإعادة المحاولة وسجل هدف لكل سجل ناجح.
++- [x] اختبارات انحدار للـ parser، staging الدفعات، عزل الشركة، تنفيذ فاتورة بقيد ومخزون، وترحيل رصيد طرف ومخزون افتتاحي.
++
++## يحتاج مراجعة يدوية قبل التنفيذ
++
++- المصروفات القديمة تحفظ في staging كسجلات `expense_document` وتظل خارج التنفيذ التلقائي حتى يحدد المستخدم حساب المصروف ومصدر الدفع.
++- حركات البنوك القديمة تحفظ كإحصاء وتحذير فقط؛ لا تُحوّل تلقائيًا إلى قبض أو صرف أو تحويل لأن وصف المصدر لا يكفي لتحديد طبيعتها المحاسبية.
++- تخصيص الدفعات القديمة لفواتير محددة لا يتم اختراعه عندما لا يوجد رابط موثوق في قاعدة المصدر؛ السند ينشأ غير مخصص ويمكن تخصيصه من صفحة تسوية الفواتير بعد التنفيذ.
++- أي سجل بإجمالي لا يطابق سطوره، أو بكمية سالبة، أو بنوع/قطر/مخزن غير معتمد يبقى في المراجعة ولا يُنفذ.
++- إذا كانت الشركة المستهدفة تحتوي رصيد مخزون قائم لنفس المنتج والمخزن، لا يتم دمجه تلقائيًا؛ يسجل المركز تحذيرًا لتجنب مضاعفة الرصيد.
++- لا يتم الكتابة فوق رصيد افتتاحي قائم لطرف؛ يحتاج المستخدم قرارًا يدويًا.
++
++## الاختبارات المنفذة
++
++- `php artisan test`: انتهى برمز خروج ناجح ولا توجد failures/errors؛ اختبارات مركز النقل الخمسة تمرّ، وسجل PHPUnit أيضًا 217 warning من اختبارات المشروع الحالية تحتاج تنظيفًا منفصلًا ولا تمنع التشغيل الحالي.
++- `npm test`: 106 اختبارات JavaScript ناجحة.
++- `npm run build`: ناجح، مع تحذير حجم chunk موجود في البناء.
++- `vendor/bin/pint --test`: ناجح.
++- `composer validate --no-check-publish`: ناجح.
++- `php scripts/lint-openapi.php`: ناجح؛ 19 مسارًا و21 عملية.
++- `npm audit --omit=optional`: صفر ثغرات.
++- `git diff --check`: ناجح.
++
++## قبل الإنتاج
++
++1. خذ نسخة احتياطية كاملة من قاعدة الإنتاج والملفات.
++2. طبّق migration على نسخة MySQL اختبارية مطابقة لإصدار الإنتاج، ثم نفذ `php artisan migrate --force` على الإنتاج في نافذة صيانة.
++3. ارفع dump القديم إلى التخزين الخاص من خلال مركز النقل، ولا تضعه داخل `public` ولا ترسله إلى قاعدة النظام الجديد.
++4. نفذ العملية على شركة اختبار أولًا، وراجع المطابقات وإجماليات المصدر والأرصدة والقوائم المالية.
++5. نفذ الأرصدة الافتتاحية مرة واحدة بعد اعتماد master data والمطابقات، ثم نفذ المستندات من تاريخ 1 أكتوبر أو التاريخ الذي تختاره.
++6. راجع القيود، الأستاذ، كشف الأطراف، المخزون، وتخصيصات الدفعات قبل اعتماد النقل النهائي.
++7. لم يتم تنفيذ أي ترحيل على قاعدة الإنتاج ضمن هذا العمل.
+diff --git a/app/Http/Controllers/Platform/DataMigrationController.php b/app/Http/Controllers/Platform/DataMigrationController.php
+new file mode 100644
+index 0000000..4b796b9
+--- /dev/null
++++ b/app/Http/Controllers/Platform/DataMigrationController.php
+@@ -0,0 +1,282 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Http\Controllers\Platform;
++
++use App\Models\Bank;
++use App\Models\Cashbox;
++use App\Models\Company;
++use App\Models\CustomerSupplier;
++use App\Models\DataMigrationMapping;
++use App\Models\DataMigrationRun;
++use App\Models\Diameter;
++use App\Models\Product;
++use App\Models\ProductType;
++use App\Models\Warehouse;
++use App\Services\AuditRecorder;
++use App\Services\LegacyAnalysisService;
++use App\Services\MigrationInvoiceExecutionService;
++use App\Services\MigrationMappingService;
++use App\Services\MigrationMasterDataService;
++use App\Services\MigrationOpeningBalanceService;
++use App\Services\MigrationRecordStagingService;
++use Illuminate\Http\JsonResponse;
++use Illuminate\Http\RedirectResponse;
++use Illuminate\Http\Request;
++use Illuminate\Support\Facades\Storage;
++use Illuminate\Support\Str;
++use Illuminate\Validation\Rule;
++use Illuminate\Validation\ValidationException;
++use Inertia\Inertia;
++use Inertia\Response;
++use Throwable;
++
++class DataMigrationController extends PlatformController
++{
++    public function index(): Response
++    {
++        return Inertia::render('SuperAdmin/DataMigration', [
++            'companies' => Company::query()
++                ->where('status', '!=', 'archived')
++                ->orderBy('name')
++                ->get(['id', 'name', 'trade_name', 'status']),
++            'runs' => DataMigrationRun::query()
++                ->with(['company:id,name', 'creator:id,name'])
++                ->latest('id')
++                ->paginate(15)
++                ->through(fn (DataMigrationRun $run): array => $this->runPayload($run)),
++        ]);
++    }
++
++    public function store(Request $request, AuditRecorder $audit): JsonResponse|RedirectResponse
++    {
++        $data = $request->validate([
++            'company_id' => ['required', 'integer', 'exists:companies,id'],
++            'documents_from' => ['required', 'date'],
++            'documents_to' => ['required', 'date', 'after_or_equal:documents_from'],
++            'opening_balance_as_of' => ['required', 'date', 'before:documents_from'],
++            'mode' => ['required', 'in:draft'],
++            'source' => ['required', 'file', 'max:131072'],
++        ]);
++        $file = $request->file('source');
++        $originalName = (string) $file->getClientOriginalName();
++        $lowerName = strtolower($originalName);
++        if (! str_ends_with($lowerName, '.sql') && ! str_ends_with($lowerName, '.sql.gz') && ! str_ends_with($lowerName, '.txt')) {
++            throw ValidationException::withMessages(['source' => 'Only SQL or compressed SQL source files are accepted.']);
++        }
++
++        $company = Company::query()->where('status', '!=', 'archived')->findOrFail((int) $data['company_id']);
++        $compressed = str_ends_with($lowerName, '.gz');
++        $storedName = Str::uuid()->toString().($compressed ? '.sql.gz' : '.sql');
++        $storedPath = $file->storeAs('data-migrations/'.$company->id, $storedName, 'local');
++        abort_unless(is_string($storedPath), 500, 'The source file could not be stored.');
++
++        try {
++            $sourceHash = hash_file('sha256', Storage::disk('local')->path($storedPath));
++            if ($sourceHash === false) {
++                throw new \RuntimeException('The source file hash could not be calculated.');
++            }
++            $run = DataMigrationRun::query()->create([
++                'company_id' => $company->id,
++                'created_by' => $request->user()->id,
++                'source_name' => Str::limit($originalName, 191, ''),
++                'source_disk' => 'local',
++                'source_path' => $storedPath,
++                'source_hash' => $sourceHash,
++                'documents_from' => $data['documents_from'],
++                'documents_to' => $data['documents_to'],
++                'opening_balance_as_of' => $data['opening_balance_as_of'],
++                'mode' => 'draft',
++                'status' => DataMigrationRun::STATUS_UPLOADED,
++                'options' => ['units' => 'per_item_review', 'manual_review_for_uncertain' => true],
++            ]);
++        } catch (Throwable $exception) {
++            Storage::disk('local')->delete($storedPath);
++            throw $exception;
++        }
++        $audit->record('platform.data_migration_uploaded', $run, $company->id, $request->user()->id, [
++            'source_name' => $run->source_name,
++            'source_hash' => $run->source_hash,
++            'documents_from' => $run->documents_from?->toDateString(),
++            'documents_to' => $run->documents_to?->toDateString(),
++        ], $request, ['severity' => 'warning', 'reason' => 'Legacy data migration source uploaded.']);
++
++        return $request->expectsJson()
++            ? response()->json(['ok' => true, 'run' => $this->runPayload($run)])
++            : redirect()->route('super-admin.data-migrations.show', $run);
++    }
++
++    public function show(DataMigrationRun $run): Response
++    {
++        $run->load(['company:id,name', 'creator:id,name', 'mappings' => fn ($query) => $query->orderBy('entity_type')->orderBy('source_key')]);
++
++        return Inertia::render('SuperAdmin/DataMigration', [
++            'companies' => Company::query()->where('status', '!=', 'archived')->orderBy('name')->get(['id', 'name', 'trade_name', 'status']),
++            'runs' => DataMigrationRun::query()->with(['company:id,name', 'creator:id,name'])->latest('id')->paginate(15)->through(fn (DataMigrationRun $item): array => $this->runPayload($item)),
++            'selectedRun' => $this->runPayload($run),
++            'mappingOptions' => $this->mappingOptions($run->company_id),
++        ]);
++    }
++
++    public function updateMapping(DataMigrationRun $run, DataMigrationMapping $mapping, Request $request, AuditRecorder $audit): JsonResponse|RedirectResponse
++    {
++        abort_unless($mapping->run_id === $run->id, 404);
++        $data = $request->validate([
++            'decision' => ['required', Rule::in(['matched', 'create_required', 'needs_review', 'excluded'])],
++            'target_id' => ['nullable', 'integer'],
++            'unit' => ['nullable', 'string', Rule::in(['ton', 'kg', 'gram', 'piece', 'liter', 'meter', 'box', 'bag', 'other'])],
++        ]);
++        $targetId = isset($data['target_id']) ? (int) $data['target_id'] : null;
++        if ($data['decision'] === 'matched') {
++            abort_unless($targetId !== null && $this->targetBelongsToRun($run, $mapping, $targetId), 422);
++        } else {
++            $targetId = null;
++        }
++        $before = ['decision' => $mapping->decision, 'target_id' => $mapping->target_id];
++        $payload = $mapping->payload ?? [];
++        $payload['reviewed'] = true;
++        if ($mapping->entity_type === 'product' && array_key_exists('unit', $data)) {
++            data_set($payload, 'source_attributes.unit', $data['unit'] ?: null);
++        }
++        $mapping->forceFill(['decision' => $data['decision'], 'target_id' => $targetId, 'confidence' => $data['decision'] === 'matched' ? 1 : $mapping->confidence, 'payload' => $payload])->save();
++        $audit->record('platform.data_migration_mapping_updated', $run, $run->company_id, $request->user()->id, ['mapping_id' => $mapping->id], $request, [
++            'severity' => 'warning', 'reason' => 'Legacy data migration mapping reviewed.', 'before' => $before, 'after' => ['decision' => $mapping->decision, 'target_id' => $mapping->target_id],
++        ]);
++
++        return $this->done($request, ['mapping' => $mapping->fresh()]);
++    }
++
++    public function analyze(DataMigrationRun $run, Request $request, LegacyAnalysisService $analysis, MigrationMappingService $mapping, MigrationRecordStagingService $staging, AuditRecorder $audit): JsonResponse|RedirectResponse
++    {
++        $run->load('company');
++        $run->forceFill(['status' => DataMigrationRun::STATUS_ANALYZING, 'error_message' => null, 'started_at' => now()])->save();
++
++        try {
++            $summary = $analysis->analyze(
++                Storage::disk($run->source_disk)->path($run->source_path),
++                $run->documents_from->toDateString(),
++                $run->documents_to->toDateString(),
++            );
++            $summary['mappings'] = $mapping->suggest($run);
++            $summary['records'] = $staging->stage($run);
++            $run->forceFill([
++                'status' => DataMigrationRun::STATUS_REVIEW,
++                'summary' => $summary,
++                'completed_at' => now(),
++            ])->save();
++            $audit->record('platform.data_migration_analyzed', $run, $run->company_id, $request->user()->id, [
++                'summary' => $summary['documents'] ?? [],
++                'source_hash' => $run->source_hash,
++            ], $request, ['severity' => 'warning', 'reason' => 'Legacy data migration source analyzed.']);
++        } catch (Throwable $exception) {
++            $run->forceFill([
++                'status' => DataMigrationRun::STATUS_FAILED,
++                'error_message' => Str::limit($exception->getMessage(), 2000, ''),
++                'completed_at' => now(),
++            ])->save();
++            $audit->record('platform.data_migration_analysis_failed', $run, $run->company_id, $request->user()->id, ['error' => $exception->getMessage()], $request, ['severity' => 'critical', 'reason' => 'Legacy data migration analysis failed.']);
++            throw $exception;
++        }
++
++        return $this->done($request, ['run' => $this->runPayload($run->fresh(['company', 'creator']))]);
++    }
++
++    public function prepareMasters(DataMigrationRun $run, Request $request, MigrationMasterDataService $masters, AuditRecorder $audit): JsonResponse|RedirectResponse
++    {
++        abort_unless(in_array($run->status, [DataMigrationRun::STATUS_REVIEW, DataMigrationRun::STATUS_READY], true), 409, 'The migration must be analyzed before master data can be prepared.');
++        $counts = $masters->createApproved($run, $request->user());
++        $summary = $run->summary ?? [];
++        $summary['master_data_created'] = $counts;
++        $run->forceFill(['summary' => $summary])->save();
++        $audit->record('platform.data_migration_masters_prepared', $run, $run->company_id, $request->user()->id, ['counts' => $counts], $request, ['severity' => 'warning', 'reason' => 'Approved legacy master data created in target company.']);
++
++        return $this->done($request, ['run' => $this->runPayload($run->fresh(['company', 'creator']))]);
++    }
++
++    public function executeInvoices(DataMigrationRun $run, Request $request, MigrationInvoiceExecutionService $execution, AuditRecorder $audit): JsonResponse|RedirectResponse
++    {
++        abort_unless(in_array($run->status, [DataMigrationRun::STATUS_REVIEW, DataMigrationRun::STATUS_READY, DataMigrationRun::STATUS_FAILED], true), 409, 'The migration is not ready for invoice execution.');
++        $run->forceFill(['status' => DataMigrationRun::STATUS_EXECUTING, 'started_at' => now(), 'error_message' => null])->save();
++        try {
++            $counts = $execution->execute($run, $request->user());
++            $summary = $run->summary ?? [];
++            $summary['invoice_execution'] = $counts;
++            $run->forceFill(['status' => $counts['failed'] > 0 ? DataMigrationRun::STATUS_FAILED : DataMigrationRun::STATUS_REVIEW, 'summary' => $summary, 'completed_at' => now(), 'error_message' => $counts['failed'] > 0 ? 'Some invoices require review after the execution attempt.' : null])->save();
++            $audit->record('platform.data_migration_invoices_executed', $run, $run->company_id, $request->user()->id, ['counts' => $counts], $request, ['severity' => $counts['failed'] > 0 ? 'critical' : 'warning', 'reason' => 'Legacy invoice execution completed as a separate controlled step.']);
++        } catch (Throwable $exception) {
++            $run->forceFill(['status' => DataMigrationRun::STATUS_FAILED, 'error_message' => Str::limit($exception->getMessage(), 2000, ''), 'completed_at' => now()])->save();
++            throw $exception;
++        }
++
++        return $this->done($request, ['run' => $this->runPayload($run->fresh(['company', 'creator']))]);
++    }
++
++    public function prepareOpeningBalances(DataMigrationRun $run, Request $request, MigrationOpeningBalanceService $opening, AuditRecorder $audit): JsonResponse|RedirectResponse
++    {
++        abort_unless(in_array($run->status, [DataMigrationRun::STATUS_REVIEW, DataMigrationRun::STATUS_READY], true), 409, 'Analyze and review the migration before posting opening balances.');
++        $result = $opening->post($run, $request->user());
++        $summary = $run->summary ?? [];
++        $summary['opening_balances'] = $result;
++        $run->forceFill(['summary' => $summary])->save();
++        $audit->record('platform.data_migration_openings_posted', $run, $run->company_id, $request->user()->id, ['result' => $result], $request, ['severity' => 'warning', 'reason' => 'Legacy opening balances and stock were posted after review.']);
++
++        return $this->done($request, ['run' => $this->runPayload($run->fresh(['company', 'creator']))]);
++    }
++
++    /** @return array<string, mixed> */
++    private function runPayload(DataMigrationRun $run): array
++    {
++        return [
++            'id' => $run->id,
++            'company' => $run->company?->only(['id', 'name']),
++            'created_by' => $run->creator?->only(['id', 'name']),
++            'source_name' => $run->source_name,
++            'source_hash' => $run->source_hash,
++            'documents_from' => $run->documents_from?->toDateString(),
++            'documents_to' => $run->documents_to?->toDateString(),
++            'opening_balance_as_of' => $run->opening_balance_as_of?->toDateString(),
++            'mode' => $run->mode,
++            'status' => $run->status,
++            'summary' => $run->summary,
++            'error_message' => $run->error_message,
++            'created_at' => $run->created_at?->toISOString(),
++            'completed_at' => $run->completed_at?->toISOString(),
++            'mappings' => $run->relationLoaded('mappings') ? $run->mappings->map(fn (DataMigrationMapping $mapping): array => [
++                'id' => $mapping->id, 'entity_type' => $mapping->entity_type, 'source_table' => $mapping->source_table,
++                'source_key' => $mapping->source_key, 'target_type' => $mapping->target_type, 'target_id' => $mapping->target_id,
++                'decision' => $mapping->decision, 'confidence' => $mapping->confidence, 'payload' => $mapping->payload,
++            ])->values()->all() : null,
++        ];
++    }
++
++    /** @return array<string, list<array{id:int,label:string}>> */
++    private function mappingOptions(int $companyId): array
++    {
++        return [
++            'customer' => CustomerSupplier::query()->where('company_id', $companyId)->where('is_customer', true)->orderBy('name')->get(['id', 'name'])->map(fn (CustomerSupplier $item): array => ['id' => $item->id, 'label' => $item->name])->all(),
++            'supplier' => CustomerSupplier::query()->where('company_id', $companyId)->where('is_supplier', true)->orderBy('name')->get(['id', 'name'])->map(fn (CustomerSupplier $item): array => ['id' => $item->id, 'label' => $item->name])->all(),
++            'product_type' => ProductType::query()->where('company_id', $companyId)->orderBy('name')->get(['id', 'name'])->map(fn (ProductType $item): array => ['id' => $item->id, 'label' => $item->name])->all(),
++            'category' => Diameter::query()->where('company_id', $companyId)->orderBy('millimeters')->get(['id', 'millimeters'])->map(fn (Diameter $item): array => ['id' => $item->id, 'label' => (string) $item->millimeters])->all(),
++            'product' => Product::query()->where('company_id', $companyId)->whereNull('archived_at')->orderBy('name')->get(['id', 'name'])->map(fn (Product $item): array => ['id' => $item->id, 'label' => $item->name])->all(),
++            'warehouse' => Warehouse::query()->where('company_id', $companyId)->orderBy('name')->get(['id', 'name'])->map(fn (Warehouse $item): array => ['id' => $item->id, 'label' => $item->name])->all(),
++            'cashbox' => Cashbox::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name'])->map(fn (Cashbox $item): array => ['id' => $item->id, 'label' => $item->name])->all(),
++            'bank' => Bank::query()->where('company_id', $companyId)->where('is_active', true)->orderBy('name')->get(['id', 'name', 'account_number'])->map(fn (Bank $item): array => ['id' => $item->id, 'label' => trim($item->name.' / '.($item->account_number ?? ''))])->all(),
++        ];
++    }
++
++    private function targetBelongsToRun(DataMigrationRun $run, DataMigrationMapping $mapping, int $targetId): bool
++    {
++        return match ($mapping->entity_type) {
++            'customer' => CustomerSupplier::query()->where('company_id', $run->company_id)->where('is_customer', true)->whereKey($targetId)->exists(),
++            'supplier' => CustomerSupplier::query()->where('company_id', $run->company_id)->where('is_supplier', true)->whereKey($targetId)->exists(),
++            'product_type' => ProductType::query()->where('company_id', $run->company_id)->whereKey($targetId)->exists(),
++            'category' => Diameter::query()->where('company_id', $run->company_id)->whereKey($targetId)->exists(),
++            'product' => Product::query()->where('company_id', $run->company_id)->whereNull('archived_at')->whereKey($targetId)->exists(),
++            'warehouse' => Warehouse::query()->where('company_id', $run->company_id)->whereKey($targetId)->exists(),
++            'cashbox' => Cashbox::query()->where('company_id', $run->company_id)->where('is_active', true)->whereKey($targetId)->exists(),
++            'bank' => Bank::query()->where('company_id', $run->company_id)->where('is_active', true)->whereKey($targetId)->exists(),
++            default => false,
++        };
++    }
++}
+diff --git a/app/Models/DataMigrationMapping.php b/app/Models/DataMigrationMapping.php
+new file mode 100644
+index 0000000..d59a67b
+--- /dev/null
++++ b/app/Models/DataMigrationMapping.php
+@@ -0,0 +1,25 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Models;
++
++use Illuminate\Database\Eloquent\Model;
++use Illuminate\Database\Eloquent\Relations\BelongsTo;
++
++class DataMigrationMapping extends Model
++{
++    protected $fillable = [
++        'run_id', 'entity_type', 'source_table', 'source_key', 'target_type', 'target_id', 'decision', 'confidence', 'payload',
++    ];
++
++    protected function casts(): array
++    {
++        return ['confidence' => 'decimal:4', 'payload' => 'array'];
++    }
++
++    public function run(): BelongsTo
++    {
++        return $this->belongsTo(DataMigrationRun::class, 'run_id');
++    }
++}
+diff --git a/app/Models/DataMigrationRecord.php b/app/Models/DataMigrationRecord.php
+new file mode 100644
+index 0000000..0cdc5b9
+--- /dev/null
++++ b/app/Models/DataMigrationRecord.php
+@@ -0,0 +1,42 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Models;
++
++use Illuminate\Database\Eloquent\Model;
++use Illuminate\Database\Eloquent\Relations\BelongsTo;
++
++class DataMigrationRecord extends Model
++{
++    public const STATUS_PENDING = 'pending';
++
++    public const STATUS_READY = 'ready';
++
++    public const STATUS_CREATED = 'created';
++
++    public const STATUS_EXCLUDED = 'excluded';
++
++    public const STATUS_FAILED = 'failed';
++
++    public const STATUS_NEEDS_REVIEW = 'needs_review';
++
++    protected $fillable = [
++        'run_id', 'entity_type', 'source_table', 'source_id', 'source_date', 'source_number', 'source_payload',
++        'normalized_payload', 'status', 'target_type', 'target_id', 'fingerprint', 'error_message',
++    ];
++
++    protected function casts(): array
++    {
++        return [
++            'source_date' => 'date',
++            'source_payload' => 'array',
++            'normalized_payload' => 'array',
++        ];
++    }
++
++    public function run(): BelongsTo
++    {
++        return $this->belongsTo(DataMigrationRun::class, 'run_id');
++    }
++}
+diff --git a/app/Models/DataMigrationRun.php b/app/Models/DataMigrationRun.php
+new file mode 100644
+index 0000000..bd0c3a5
+--- /dev/null
++++ b/app/Models/DataMigrationRun.php
+@@ -0,0 +1,65 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Models;
++
++use Illuminate\Database\Eloquent\Model;
++use Illuminate\Database\Eloquent\Relations\BelongsTo;
++use Illuminate\Database\Eloquent\Relations\HasMany;
++
++class DataMigrationRun extends Model
++{
++    public const STATUS_UPLOADED = 'uploaded';
++
++    public const STATUS_ANALYZING = 'analyzing';
++
++    public const STATUS_REVIEW = 'review';
++
++    public const STATUS_READY = 'ready';
++
++    public const STATUS_EXECUTING = 'executing';
++
++    public const STATUS_COMPLETED = 'completed';
++
++    public const STATUS_FAILED = 'failed';
++
++    protected $fillable = [
++        'company_id', 'created_by', 'source_system', 'source_name', 'source_disk', 'source_path', 'source_hash',
++        'documents_from', 'documents_to', 'opening_balance_as_of', 'mode', 'status', 'options', 'summary',
++        'error_message', 'started_at', 'completed_at',
++    ];
++
++    protected function casts(): array
++    {
++        return [
++            'documents_from' => 'date',
++            'documents_to' => 'date',
++            'opening_balance_as_of' => 'date',
++            'options' => 'array',
++            'summary' => 'array',
++            'started_at' => 'datetime',
++            'completed_at' => 'datetime',
++        ];
++    }
++
++    public function company(): BelongsTo
++    {
++        return $this->belongsTo(Company::class);
++    }
++
++    public function creator(): BelongsTo
++    {
++        return $this->belongsTo(User::class, 'created_by');
++    }
++
++    public function mappings(): HasMany
++    {
++        return $this->hasMany(DataMigrationMapping::class, 'run_id');
++    }
++
++    public function records(): HasMany
++    {
++        return $this->hasMany(DataMigrationRecord::class, 'run_id');
++    }
++}
+diff --git a/app/Services/LegacyAnalysisService.php b/app/Services/LegacyAnalysisService.php
+new file mode 100644
+index 0000000..d87042b
+--- /dev/null
++++ b/app/Services/LegacyAnalysisService.php
+@@ -0,0 +1,118 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Services;
++
++use Carbon\CarbonImmutable;
++use Illuminate\Validation\ValidationException;
++
++final class LegacyAnalysisService
++{
++    public function __construct(private readonly LegacySqlSnapshotParser $parser) {}
++
++    /**
++     * @return array<string, mixed>
++     */
++    public function analyze(string $path, string $from, string $to): array
++    {
++        $start = CarbonImmutable::parse($from)->startOfDay();
++        $end = CarbonImmutable::parse($to)->endOfDay();
++        if ($start->greaterThan($end)) {
++            throw ValidationException::withMessages(['documents_from' => 'The start date must be before the end date.']);
++        }
++
++        $snapshot = $this->parser->parse($path);
++        $purchaseDetails = collect($snapshot['details_buy'])->groupBy(fn (array $row): string => (string) ($row['id_buy'] ?? ''));
++        $salesDetails = collect($snapshot['details_sales'])->groupBy(fn (array $row): string => (string) ($row['id_sales'] ?? ''));
++        $purchases = collect($snapshot['buy'])->filter(fn (array $row): bool => $this->inRange($row['date'] ?? null, $start, $end));
++        $sales = collect($snapshot['sales'])->filter(fn (array $row): bool => $this->inRange($row['insert_date'] ?? null, $start, $end));
++        $paymentPurchases = $purchases->filter(fn (array $row): bool => $this->isPaymentRow($row));
++        $paymentSales = $sales->filter(fn (array $row): bool => $this->isPaymentRow($row));
++
++        $purchaseClassified = $purchases->filter(function (array $row) use ($purchaseDetails): bool {
++            $details = $purchaseDetails->get((string) ($row['id_buy'] ?? ''), collect());
++
++            return $details->isNotEmpty() && ! empty($row['id_import']) && ! empty($row['id_stores']) && ! empty($row['id_type']);
++        });
++        $salesClassified = $sales->filter(function (array $row) use ($salesDetails): bool {
++            $details = $salesDetails->get((string) ($row['id_sales'] ?? ''), collect());
++
++            return $details->isNotEmpty() && ! empty($row['id_customer']) && ! empty($row['id_stores']);
++        });
++
++        return [
++            'range' => ['from' => $start->toDateString(), 'to' => $end->toDateString()],
++            'source_tables' => collect($snapshot)->map(fn (array $rows): int => count($rows))->all(),
++            'master_counts' => [
++                'customers' => count($snapshot['customer']),
++                'suppliers' => count($snapshot['import']),
++                'product_types' => count($snapshot['type_mm']),
++                'categories' => count($snapshot['categories']),
++                'stores' => count($snapshot['stores']),
++            ],
++            'documents' => [
++                'purchase_candidates' => $purchaseClassified->reject(fn (array $row): bool => $this->isPaymentRow($row))->count(),
++                'purchase_candidate_lines' => $purchaseClassified->reject(fn (array $row): bool => $this->isPaymentRow($row))->sum(fn (array $row): int => $purchaseDetails->get((string) ($row['id_buy'] ?? ''), collect())->count()),
++                'purchase_needs_review' => $purchases->reject(fn (array $row): bool => $this->isPaymentRow($row))->count() - $purchaseClassified->reject(fn (array $row): bool => $this->isPaymentRow($row))->count(),
++                'sales_candidates' => $salesClassified->reject(fn (array $row): bool => $this->isPaymentRow($row))->count(),
++                'sales_candidate_lines' => $salesClassified->reject(fn (array $row): bool => $this->isPaymentRow($row))->sum(fn (array $row): int => $salesDetails->get((string) ($row['id_sales'] ?? ''), collect())->count()),
++                'sales_needs_review' => $sales->reject(fn (array $row): bool => $this->isPaymentRow($row))->count() - $salesClassified->reject(fn (array $row): bool => $this->isPaymentRow($row))->count(),
++                'receipt_candidates' => $paymentSales->count(),
++                'payment_candidates' => $paymentPurchases->count(),
++                'expense_candidates' => collect($snapshot['all_expenses'])->filter(fn (array $row): bool => $this->inRange($row['insert_date'] ?? null, $start, $end))->count(),
++                'bank_operation_candidates' => collect($snapshot['bank_operations'])->filter(fn (array $row): bool => $this->inRange($row['inserted_date'] ?? null, $start, $end))->count(),
++            ],
++            'samples' => [
++                'purchase_review' => $purchases->reject(fn (array $row): bool => $purchaseClassified->contains('id_buy', $row['id_buy'] ?? null))->take(10)->values()->all(),
++                'sales_review' => $sales->reject(fn (array $row): bool => $salesClassified->contains('id_sales', $row['id_sales'] ?? null))->take(10)->values()->all(),
++            ],
++            'warnings' => $this->warnings($snapshot, $purchases, $sales),
++        ];
++    }
++
++    private function inRange(mixed $value, CarbonImmutable $start, CarbonImmutable $end): bool
++    {
++        if ($value === null || trim((string) $value) === '') {
++            return false;
++        }
++        try {
++            $date = CarbonImmutable::parse((string) $value);
++        } catch (\Throwable) {
++            return false;
++        }
++
++        return $date->betweenIncluded($start, $end);
++    }
++
++    private function isPaymentRow(array $row): bool
++    {
++        return str_contains((string) ($row['bayan'] ?? ''), 'دفعة');
++    }
++
++    /** @return list<string> */
++    private function warnings(array $snapshot, $purchases, $sales): array
++    {
++        $warnings = [];
++        $mixedPurchases = $purchases->filter(fn (array $row): bool => empty($row['id_stores']) || empty($row['id_type']))->count();
++        $mixedSales = $sales->filter(fn (array $row): bool => empty($row['id_customer']) || empty($row['id_stores']))->count();
++        if ($mixedPurchases > 0) {
++            $warnings[] = "{$mixedPurchases} purchase records need manual classification.";
++        }
++        if ($mixedSales > 0) {
++            $warnings[] = "{$mixedSales} sales records need manual classification.";
++        }
++        $nonSteel = collect($snapshot['categories'])->filter(fn (array $row): bool => ! is_numeric($row['categories'] ?? null))->count();
++        if ($nonSteel > 0) {
++            $warnings[] = 'The legacy category table mixes diameters with non-steel items; item units and diameter applicability require review.';
++        }
++        if (collect($snapshot['all_expenses'])->isNotEmpty()) {
++            $warnings[] = 'Legacy expenses are staged for review only; each expense requires an explicit target expense account and payment source before posting.';
++        }
++        if (collect($snapshot['bank_operations'])->isNotEmpty()) {
++            $warnings[] = 'Legacy bank operations are analyzed as review evidence only; automatic posting is disabled until each operation is classified as a receipt, payment, or transfer.';
++        }
++
++        return $warnings;
++    }
++}
+diff --git a/app/Services/LegacySqlSnapshotParser.php b/app/Services/LegacySqlSnapshotParser.php
+new file mode 100644
+index 0000000..2289e3b
+--- /dev/null
++++ b/app/Services/LegacySqlSnapshotParser.php
+@@ -0,0 +1,204 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Services;
++
++use RuntimeException;
++
++final class LegacySqlSnapshotParser
++{
++    private const MAX_UNCOMPRESSED_BYTES = 268435456;
++
++    /** @var list<string> */
++    public const ALLOWED_TABLES = [
++        'customer', 'import', 'categories', 'type_mm', 'stores', 'buy', 'details_buy', 'sales', 'details_sales',
++        'store', 'name_treasury', 'treasury', 'name_bank', 'bank_accounts', 'bank_operations', 'all_expenses',
++    ];
++
++    /**
++     * @return array<string, list<array<string, mixed>>>
++     */
++    public function parse(string $path): array
++    {
++        if (! is_file($path) || ! is_readable($path)) {
++            throw new RuntimeException('The legacy source file cannot be read.');
++        }
++        if (! str_ends_with(strtolower($path), '.gz') && filesize($path) > self::MAX_UNCOMPRESSED_BYTES) {
++            throw new RuntimeException('The legacy source file is too large.');
++        }
++
++        $sql = str_ends_with(strtolower($path), '.gz')
++            ? $this->readGzip($path)
++            : file_get_contents($path);
++        if ($sql === false) {
++            throw new RuntimeException('The legacy source file could not be read.');
++        }
++        $tables = array_fill_keys(self::ALLOWED_TABLES, []);
++        $pattern = '/INSERT\\s+INTO\\s+`([^`]+)`\\s*\\((.*?)\\)\\s*VALUES\\s*(.*?);/is';
++
++        preg_match_all($pattern, $sql, $matches, PREG_SET_ORDER);
++        foreach ($matches as $match) {
++            $table = strtolower($match[1]);
++            if (! in_array($table, self::ALLOWED_TABLES, true)) {
++                continue;
++            }
++            $columns = array_map(fn (string $column): string => trim($column, " `\t\r\n"), $this->splitFields($match[2]));
++            foreach ($this->parseRows($match[3]) as $values) {
++                if (count($columns) !== count($values)) {
++                    continue;
++                }
++                $tables[$table][] = array_combine($columns, $values);
++            }
++        }
++
++        return $tables;
++    }
++
++    private function readGzip(string $path): string
++    {
++        $handle = gzopen($path, 'rb');
++        if ($handle === false) {
++            throw new RuntimeException('The compressed legacy source file cannot be opened.');
++        }
++        $contents = '';
++        while (! gzeof($handle)) {
++            $chunk = gzread($handle, 1024 * 1024);
++            if ($chunk === false) {
++                gzclose($handle);
++                throw new RuntimeException('The compressed legacy source file could not be read.');
++            }
++            $contents .= $chunk;
++            if (strlen($contents) > self::MAX_UNCOMPRESSED_BYTES) {
++                gzclose($handle);
++                throw new RuntimeException('The decompressed legacy source file is too large.');
++            }
++        }
++        gzclose($handle);
++
++        return $contents;
++    }
++
++    /** @return list<string> */
++    private function splitFields(string $input): array
++    {
++        $fields = [];
++        $buffer = '';
++        $quoted = false;
++        $escaped = false;
++        $length = strlen($input);
++        for ($index = 0; $index < $length; $index++) {
++            $character = $input[$index];
++            if ($escaped) {
++                $buffer .= $character;
++                $escaped = false;
++
++                continue;
++            }
++            if ($quoted && $character === '\\') {
++                $buffer .= $character;
++                $escaped = true;
++
++                continue;
++            }
++            if ($character === "'") {
++                $quoted = ! $quoted;
++                $buffer .= $character;
++
++                continue;
++            }
++            if (! $quoted && $character === ',') {
++                $fields[] = $buffer;
++                $buffer = '';
++
++                continue;
++            }
++            $buffer .= $character;
++        }
++        $fields[] = $buffer;
++
++        return $fields;
++    }
++
++    /** @return list<list<mixed>> */
++    private function parseRows(string $values): array
++    {
++        $rows = [];
++        $length = strlen($values);
++        $depth = 0;
++        $quoted = false;
++        $escaped = false;
++        $buffer = '';
++        for ($index = 0; $index < $length; $index++) {
++            $character = $values[$index];
++            if ($escaped) {
++                $buffer .= $character;
++                $escaped = false;
++
++                continue;
++            }
++            if ($quoted && $character === '\\') {
++                $buffer .= $character;
++                $escaped = true;
++
++                continue;
++            }
++            if ($character === "'") {
++                $quoted = ! $quoted;
++                if ($depth > 0) {
++                    $buffer .= $character;
++                }
++
++                continue;
++            }
++            if (! $quoted && $character === '(') {
++                $depth++;
++                if ($depth > 1) {
++                    $buffer .= $character;
++                }
++
++                continue;
++            }
++            if (! $quoted && $character === ')') {
++                $depth--;
++                if ($depth === 0) {
++                    $rows[] = array_map(fn (string $value): mixed => $this->literal($value), $this->splitFields($buffer));
++                    $buffer = '';
++                } elseif ($depth > 0) {
++                    $buffer .= $character;
++                }
++
++                continue;
++            }
++            if ($depth > 0) {
++                $buffer .= $character;
++            }
++        }
++
++        return $rows;
++    }
++
++    private function literal(string $value): mixed
++    {
++        $value = trim($value);
++        if (strcasecmp($value, 'NULL') === 0) {
++            return null;
++        }
++        if (strlen($value) >= 2 && $value[0] === "'" && $value[strlen($value) - 1] === "'") {
++            $value = substr($value, 1, -1);
++
++            return strtr($value, [
++                '\\0' => "\0", '\\n' => "\n", '\\r' => "\r", '\\Z' => "\x1a",
++                "\\'" => "'", '\\"' => '"', '\\\\' => '\\',
++            ]);
++        }
++        if (preg_match('/^-?\\d+$/', $value)) {
++            return (int) $value;
++        }
++        if (preg_match('/^-?\\d+\\.\\d+$/', $value)) {
++            return (float) $value;
++        }
++
++        return $value;
++    }
++}
+diff --git a/app/Services/MigrationInvoiceExecutionService.php b/app/Services/MigrationInvoiceExecutionService.php
+new file mode 100644
+index 0000000..a343d87
+--- /dev/null
++++ b/app/Services/MigrationInvoiceExecutionService.php
+@@ -0,0 +1,207 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Services;
++
++use App\Models\Branch;
++use App\Models\Cashbox;
++use App\Models\DataMigrationMapping;
++use App\Models\DataMigrationRecord;
++use App\Models\DataMigrationRun;
++use App\Models\PaymentVoucher;
++use App\Models\PurchaseBill;
++use App\Models\Receipt;
++use App\Models\SalesBill;
++use App\Models\User;
++use App\Models\Warehouse;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Validation\ValidationException;
++
++final class MigrationInvoiceExecutionService
++{
++    public function __construct(private readonly OperationsService $operations, private readonly AccountingService $accounting, private readonly CompanyAccountingPolicyService $policies) {}
++
++    /** @return array<string, int> */
++    public function execute(DataMigrationRun $run, User $actor): array
++    {
++        $this->assertReady($run);
++        $records = $run->records()->whereIn('status', [DataMigrationRecord::STATUS_READY, DataMigrationRecord::STATUS_FAILED])->orderBy('source_date')->orderBy('id')->get();
++        $counts = ['created' => 0, 'skipped' => 0, 'failed' => 0];
++        $company = $run->company()->firstOrFail();
++        if ($records->contains('entity_type', 'sales_document') && $this->policies->vatRate($company) > 0) {
++            throw ValidationException::withMessages(['execution' => 'Disable or map the target VAT policy before importing sales invoices; the legacy sales totals do not contain a separate VAT amount.']);
++        }
++
++        foreach ($records as $record) {
++            if ($record->status === DataMigrationRecord::STATUS_CREATED) {
++                $counts['skipped']++;
++
++                continue;
++            }
++            try {
++                $targetId = DB::transaction(function () use ($run, $record, $actor, $company): int {
++                    $record = DataMigrationRecord::query()->whereKey($record->id)->lockForUpdate()->firstOrFail();
++                    $payload = $record->normalized_payload ?? [];
++                    if ($record->entity_type === 'receipt_document') {
++                        $customer = $this->mappingTarget($run, 'customer', (string) ($payload['customer_source_id'] ?? ''));
++                        $cashbox = $this->cashbox($run, (string) ($payload['cashbox_source_id'] ?? ''));
++                        $receipt = $this->accounting->receive($company, $actor, ['counterparty_type' => 'customer', 'party_id' => $customer, 'cashbox_id' => $cashbox->id, 'receipt_date' => $payload['date'], 'amount' => $payload['amount'], 'notes' => 'Imported from legacy system. '.(string) ($payload['notes'] ?? '')]);
++                        $record->forceFill(['status' => DataMigrationRecord::STATUS_CREATED, 'target_type' => Receipt::class, 'target_id' => $receipt->id, 'error_message' => null])->save();
++
++                        return $receipt->id;
++                    }
++                    if ($record->entity_type === 'payment_document') {
++                        $supplier = $this->mappingTarget($run, 'supplier', (string) ($payload['supplier_source_id'] ?? ''));
++                        $cashbox = $this->cashbox($run, (string) ($payload['cashbox_source_id'] ?? ''));
++                        $voucher = $this->accounting->paySupplier($company, $actor, ['counterparty_type' => 'supplier', 'party_id' => $supplier, 'cashbox_id' => $cashbox->id, 'voucher_date' => $payload['date'], 'amount' => $payload['amount'], 'notes' => 'Imported from legacy system. '.(string) ($payload['notes'] ?? '')]);
++                        $record->forceFill(['status' => DataMigrationRecord::STATUS_CREATED, 'target_type' => PaymentVoucher::class, 'target_id' => $voucher->id, 'error_message' => null])->save();
++
++                        return $voucher->id;
++                    }
++                    $warehouse = $this->warehouse($run, (string) ($payload['warehouse_source_id'] ?? ''));
++                    $branch = Branch::query()->where('company_id', $company->id)->whereKey($warehouse->branch_id)->firstOrFail();
++                    $lines = $this->lines($run, $payload['lines'] ?? []);
++                    if ($record->entity_type === 'purchase_document') {
++                        $supplier = $this->mappingTarget($run, 'supplier', (string) ($payload['supplier_source_id'] ?? ''));
++                        $bill = $this->operations->savePurchase($company, $actor, $this->purchaseData($payload, $supplier, $warehouse, $branch, $lines), true);
++                        $record->forceFill(['status' => DataMigrationRecord::STATUS_CREATED, 'target_type' => PurchaseBill::class, 'target_id' => $bill->id, 'error_message' => null])->save();
++
++                        return $bill->id;
++                    }
++                    $customer = $this->mappingTarget($run, 'customer', (string) ($payload['customer_source_id'] ?? ''));
++                    $bill = $this->operations->saveSales($company, $actor, $this->salesData($payload, $customer, $warehouse, $branch, $lines), true);
++                    $record->forceFill(['status' => DataMigrationRecord::STATUS_CREATED, 'target_type' => SalesBill::class, 'target_id' => $bill->id, 'error_message' => null])->save();
++
++                    return $bill->id;
++                });
++                if ($targetId > 0) {
++                    $counts['created']++;
++                }
++            } catch (\Throwable $exception) {
++                $record->forceFill(['status' => DataMigrationRecord::STATUS_FAILED, 'error_message' => substr($exception->getMessage(), 0, 2000)])->save();
++                $counts['failed']++;
++            }
++        }
++
++        return $counts;
++    }
++
++    private function assertReady(DataMigrationRun $run): void
++    {
++        $unresolved = $run->records()->whereIn('status', [DataMigrationRecord::STATUS_READY, DataMigrationRecord::STATUS_FAILED])->get()->filter(function (DataMigrationRecord $record) use ($run): bool {
++            $payload = $record->normalized_payload ?? [];
++            $partyEntity = in_array($record->entity_type, ['purchase_document', 'payment_document'], true) ? 'supplier' : 'customer';
++            $partyKey = in_array($record->entity_type, ['purchase_document', 'payment_document'], true) ? ($payload['supplier_source_id'] ?? '') : ($payload['customer_source_id'] ?? '');
++            if (! $this->mappingTargetId($run, $partyEntity, (string) $partyKey)) {
++                return true;
++            }
++            if (in_array($record->entity_type, ['purchase_document', 'sales_document'], true) && ! $this->mappingTargetId($run, 'warehouse', (string) ($payload['warehouse_source_id'] ?? ''))) {
++                return true;
++            }
++            if (in_array($record->entity_type, ['receipt_document', 'payment_document'], true)) {
++                return ! $this->mappingTargetId($run, 'cashbox', (string) ($payload['cashbox_source_id'] ?? ''));
++            }
++            foreach ($payload['lines'] ?? [] as $line) {
++                if (! $this->mappingTargetId($run, 'product', (string) ($line['source_type_id'] ?? '').':'.(string) ($line['source_category_id'] ?? ''))) {
++                    return true;
++                }
++            }
++
++            return false;
++        });
++        if ($unresolved->isNotEmpty()) {
++            throw ValidationException::withMessages(['execution' => 'Every invoice, party, warehouse, and product mapping must be approved before execution.']);
++        }
++    }
++
++    private function mappingTarget(DataMigrationRun $run, string $entity, string $sourceKey): int
++    {
++        $target = $this->mappingTargetId($run, $entity, $sourceKey);
++        if (! $target) {
++            throw ValidationException::withMessages(['mapping' => "Missing approved {$entity} mapping for source {$sourceKey}."]);
++        }
++
++        return $target;
++    }
++
++    private function mappingTargetId(DataMigrationRun $run, string $entity, string $sourceKey): ?int
++    {
++        return DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', $entity)->where('source_key', $sourceKey)->where('decision', 'matched')->value('target_id');
++    }
++
++    private function warehouse(DataMigrationRun $run, string $sourceKey): Warehouse
++    {
++        return Warehouse::query()->where('company_id', $run->company_id)->findOrFail($this->mappingTarget($run, 'warehouse', $sourceKey));
++    }
++
++    private function cashbox(DataMigrationRun $run, string $sourceKey): Cashbox
++    {
++        return Cashbox::query()->where('company_id', $run->company_id)->where('is_active', true)->findOrFail($this->mappingTarget($run, 'cashbox', $sourceKey));
++    }
++
++    /** @param list<array<string, mixed>> $sourceLines @return list<array<string, mixed>> */
++    private function lines(DataMigrationRun $run, array $sourceLines): array
++    {
++        return array_map(function (array $line) use ($run): array {
++            return [
++                'product_id' => $this->mappingTarget($run, 'product', (string) ($line['source_type_id'] ?? '').':'.(string) ($line['source_category_id'] ?? '')),
++                'factory_weight' => $line['factory_weight'] ?? null,
++                'actual_weight' => $line['actual_weight'] ?? null,
++                'packages' => $line['packages'] ?? 0,
++                'unit_price' => $line['unit_price'] ?? 0,
++                'notes' => $line['notes'] ?? null,
++            ];
++        }, $sourceLines);
++    }
++
++    /** @param list<array<string, mixed>> $lines @return array<string, mixed> */
++    private function purchaseData(array $payload, int $supplier, Warehouse $warehouse, Branch $branch, array $lines): array
++    {
++        return [
++            'branch_id' => $branch->id,
++            'warehouse_id' => $warehouse->id,
++            'supplier_id' => $supplier,
++            'supplier_bill_number' => $payload['supplier_bill_number'],
++            'supplier_bill_date' => $payload['date'],
++            'warehouse_entry_date' => $payload['date'],
++            'total_factory_weight' => $payload['total_factory_weight'],
++            'total_actual_weight' => $payload['total_actual_weight'],
++            'total_packages' => $payload['total_packages'],
++            'transport_cost' => 0,
++            'loading_cost' => 0,
++            'extra_cost' => 0,
++            'discount' => 0,
++            'payment_method' => 'credit',
++            'notes' => $this->migrationNote($payload),
++            'lines' => $lines,
++        ];
++    }
++
++    /** @param list<array<string, mixed>> $lines @return array<string, mixed> */
++    private function salesData(array $payload, int $customer, Warehouse $warehouse, Branch $branch, array $lines): array
++    {
++        return [
++            'branch_id' => $branch->id,
++            'warehouse_id' => $warehouse->id,
++            'customer_id' => $customer,
++            'customer_bill_number' => $payload['customer_bill_number'],
++            'bill_date' => $payload['date'],
++            'total_actual_weight' => $payload['total_actual_weight'],
++            'total_packages' => $payload['total_packages'],
++            'transport_cost' => $payload['transport_cost'] ?? 0,
++            'loading_cost' => $payload['loading_cost'] ?? 0,
++            'extra_cost' => $payload['extra_cost'] ?? 0,
++            'discount' => 0,
++            'payment_method' => 'credit',
++            'due_date' => $payload['date'],
++            'notes' => $this->migrationNote($payload),
++            'lines' => $lines,
++        ];
++    }
++
++    private function migrationNote(array $payload): string
++    {
++        return trim('Imported from legacy system. '.(string) ($payload['legacy_note'] ?? ''));
++    }
++}
+diff --git a/app/Services/MigrationMappingService.php b/app/Services/MigrationMappingService.php
+new file mode 100644
+index 0000000..e0df347
+--- /dev/null
++++ b/app/Services/MigrationMappingService.php
+@@ -0,0 +1,224 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Services;
++
++use App\Models\Bank;
++use App\Models\Cashbox;
++use App\Models\CustomerSupplier;
++use App\Models\DataMigrationMapping;
++use App\Models\DataMigrationRun;
++use App\Models\Diameter;
++use App\Models\Product;
++use App\Models\ProductType;
++use App\Models\Warehouse;
++use Carbon\CarbonImmutable;
++use Illuminate\Support\Facades\Storage;
++use Illuminate\Support\Str;
++
++final class MigrationMappingService
++{
++    public function __construct(private readonly LegacySqlSnapshotParser $parser) {}
++
++    /** @return array<string, array<string, int>> */
++    public function suggest(DataMigrationRun $run): array
++    {
++        $snapshot = $this->parser->parse(Storage::disk($run->source_disk)->path($run->source_path));
++        $companyId = (int) $run->company_id;
++        $summary = [];
++
++        $summary['customers'] = $this->mapNamed($run, 'customer', 'customer', $snapshot['customer'], 'id_customer', 'name_customer', CustomerSupplier::query()->where('company_id', $companyId)->where('is_customer', true)->pluck('name', 'id')->all(), 'CustomerSupplier');
++        $summary['suppliers'] = $this->mapNamed($run, 'supplier', 'import', $snapshot['import'], 'id_import', 'name', CustomerSupplier::query()->where('company_id', $companyId)->where('is_supplier', true)->pluck('name', 'id')->all(), 'CustomerSupplier');
++        $summary['product_types'] = $this->mapNamed($run, 'product_type', 'type_mm', $snapshot['type_mm'], 'id_type', 'name', ProductType::query()->where('company_id', $companyId)->pluck('name', 'id')->all(), 'ProductType');
++        $summary['categories'] = $this->mapCategories($run, $snapshot['categories'], $companyId);
++        $summary['stores'] = $this->mapNamed($run, 'warehouse', 'stores', $snapshot['stores'], 'id_stores', 'name_stores', Warehouse::query()->where('company_id', $companyId)->pluck('name', 'id')->all(), 'Warehouse');
++        $summary['cashboxes'] = $this->mapNamed($run, 'cashbox', 'name_treasury', $snapshot['name_treasury'], 'id_name_treasury', 'name_treasury', Cashbox::query()->where('company_id', $companyId)->pluck('name', 'id')->all(), 'Cashbox');
++        $bankRows = collect($snapshot['bank_accounts'])->map(function (array $row) use ($snapshot): array {
++            $bank = collect($snapshot['name_bank'])->firstWhere('id_name_bank', $row['id_name_bank'] ?? null);
++            $row['display_name'] = trim((string) ($bank['name_bank'] ?? 'Bank').' / '.(string) ($row['account_number'] ?? ''));
++            $row['source_bank_name'] = $bank['name_bank'] ?? null;
++
++            return $row;
++        })->values()->all();
++        $bankTargets = Bank::query()->where('company_id', $companyId)->get(['id', 'name', 'account_number'])->mapWithKeys(fn (Bank $bank): array => [$bank->id => trim($bank->name.' / '.($bank->account_number ?? ''))])->all();
++        $summary['banks'] = $this->mapNamed($run, 'bank', 'bank_accounts', $bankRows, 'id_bank_accounts', 'display_name', $bankTargets, 'Bank');
++        $summary['products'] = $this->mapProducts($run, $snapshot, $companyId);
++
++        return $summary;
++    }
++
++    /** @param list<array<string, mixed>> $rows @param array<int|string, mixed> $targets @return array<string, int> */
++    private function mapNamed(DataMigrationRun $run, string $entity, string $sourceTable, array $rows, string $sourceKey, string $sourceName, array $targets, string $targetType): array
++    {
++        $normalizedTargets = [];
++        foreach ($targets as $id => $name) {
++            $normalizedTargets[$this->normalize((string) $name)] = (int) $id;
++        }
++        $counts = $this->emptyCounts();
++        foreach ($rows as $row) {
++            $key = (string) ($row[$sourceKey] ?? '');
++            $name = trim((string) ($row[$sourceName] ?? ''));
++            $targetId = $normalizedTargets[$this->normalize($name)] ?? null;
++            $decision = $targetId ? 'matched' : ($name === '' ? 'needs_review' : 'create_required');
++            $existing = $this->findMapping($run, $entity, $sourceTable, $key);
++            $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
++            if ($reviewed) {
++                $targetId = $existing->target_id;
++                $decision = $existing->decision;
++            }
++            $counts[$decision]++;
++            DataMigrationMapping::query()->updateOrCreate(
++                ['run_id' => $run->id, 'entity_type' => $entity, 'source_table' => $sourceTable, 'source_key' => $key],
++                ['target_type' => $targetType, 'target_id' => $targetId, 'decision' => $decision, 'confidence' => $targetId ? 1 : 0, 'payload' => ['source_name' => $name, 'normalized_name' => $this->normalize($name), 'source_attributes' => $this->sourceAttributes($row, $entity), 'reviewed' => $reviewed]],
++            );
++        }
++
++        return $counts;
++    }
++
++    /** @param list<array<string, mixed>> $rows @return array<string, int> */
++    private function mapCategories(DataMigrationRun $run, array $rows, int $companyId): array
++    {
++        $diameters = Diameter::query()->where('company_id', $companyId)->pluck('millimeters', 'id')->all();
++        $normalizedTargets = [];
++        foreach ($diameters as $id => $millimeters) {
++            $normalizedTargets[$this->normalizeNumber($millimeters)] = (int) $id;
++        }
++        $counts = $this->emptyCounts();
++        foreach ($rows as $row) {
++            $key = (string) ($row['id_categories'] ?? '');
++            $value = trim((string) ($row['categories'] ?? ''));
++            $numericValue = $this->diameterValue($value);
++            $normalized = $numericValue !== null ? $this->normalizeNumber($numericValue) : null;
++            $targetId = $normalized !== null ? ($normalizedTargets[$normalized] ?? null) : null;
++            $decision = $numericValue === null ? 'needs_review' : ($targetId ? 'matched' : 'create_required');
++            $existing = $this->findMapping($run, 'category', 'categories', $key);
++            $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
++            if ($reviewed) {
++                $targetId = $existing->target_id;
++                $decision = $existing->decision;
++            }
++            $counts[$decision]++;
++            DataMigrationMapping::query()->updateOrCreate(
++                ['run_id' => $run->id, 'entity_type' => 'category', 'source_table' => 'categories', 'source_key' => $key],
++                ['target_type' => $numericValue !== null ? 'Diameter' : null, 'target_id' => $targetId, 'decision' => $decision, 'confidence' => $targetId ? 1 : 0, 'payload' => ['source_value' => $value, 'source_kind' => $numericValue !== null ? 'diameter_candidate' : 'non_diameter_item', 'normalized_value' => $normalized, 'steel_or_other' => (int) ($row['steel_or_other'] ?? 1), 'reviewed' => $reviewed]],
++            );
++        }
++
++        return $counts;
++    }
++
++    /** @param array<string, list<array<string, mixed>>> $snapshot @return array<string, int> */
++    private function mapProducts(DataMigrationRun $run, array $snapshot, int $companyId): array
++    {
++        $types = collect($snapshot['type_mm'])->keyBy(fn (array $row): string => (string) ($row['id_type'] ?? ''));
++        $categories = collect($snapshot['categories'])->keyBy(fn (array $row): string => (string) ($row['id_categories'] ?? ''));
++        $buyParents = collect($snapshot['buy'])->filter(fn (array $row): bool => $this->inRange($row['date'] ?? null, $run->documents_from, $run->documents_to))->pluck('id_buy')->map(fn ($id): string => (string) $id);
++        $salesParents = collect($snapshot['sales'])->filter(fn (array $row): bool => $this->inRange($row['insert_date'] ?? null, $run->documents_from, $run->documents_to))->pluck('id_sales')->map(fn ($id): string => (string) $id);
++        $pairs = collect($snapshot['details_buy'])->filter(fn (array $row): bool => $buyParents->contains((string) ($row['id_buy'] ?? '')))->merge(collect($snapshot['details_sales'])->filter(fn (array $row): bool => $salesParents->contains((string) ($row['id_sales'] ?? ''))))->map(fn (array $row): string => (string) ($row['id_type'] ?? '').':'.(string) ($row['id_categories'] ?? ''))->unique()->values();
++        $typeMappings = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'product_type')->get()->keyBy('source_key');
++        $categoryMappings = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'category')->get()->keyBy('source_key');
++        $products = Product::query()->where('company_id', $companyId)->get(['id', 'name', 'product_type_id', 'diameter_id'])->keyBy('id');
++        $counts = $this->emptyCounts();
++
++        foreach ($pairs as $pair) {
++            [$typeId, $categoryId] = array_pad(explode(':', $pair, 2), 2, '');
++            $type = $types->get($typeId, []);
++            $category = $categories->get($categoryId, []);
++            $typeMapping = $typeMappings->get($typeId);
++            $categoryMapping = $categoryMappings->get($categoryId);
++            $typeName = trim((string) ($type['name'] ?? ''));
++            $categoryName = trim((string) ($category['categories'] ?? ''));
++            if ($typeName === '' || $categoryName === '' || ! $typeMapping) {
++                $counts['needs_review']++;
++
++                continue;
++            }
++            $numericCategory = $this->diameterValue($categoryName);
++            $targetTypeId = $typeMapping->target_id;
++            $targetDiameterId = $numericCategory !== null && $categoryMapping?->decision === 'matched' ? $categoryMapping->target_id : null;
++            $productName = $numericCategory !== null ? $typeName.' '.(float) $numericCategory.' mm' : $typeName.' / '.$categoryName;
++            $target = $products->first(function (Product $product) use ($targetTypeId, $targetDiameterId, $numericCategory, $productName): bool {
++                if ((int) $product->product_type_id !== (int) $targetTypeId) {
++                    return false;
++                }
++                if ($numericCategory !== null) {
++                    return (int) $product->diameter_id === (int) $targetDiameterId;
++                }
++
++                return $this->normalize((string) $product->name) === $this->normalize($productName);
++            });
++            $decision = $target ? 'matched' : ($typeMapping->decision === 'matched' && ($numericCategory === null || $categoryMapping?->decision === 'matched') ? 'create_required' : 'needs_review');
++            $existing = $this->findMapping($run, 'product', 'legacy_product', $pair);
++            $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
++            if ($reviewed) {
++                $target = $existing->target_id ? $products->get((int) $existing->target_id) : null;
++                $decision = $existing->decision;
++            }
++            $counts[$decision]++;
++            DataMigrationMapping::query()->updateOrCreate(
++                ['run_id' => $run->id, 'entity_type' => 'product', 'source_table' => 'legacy_product', 'source_key' => $pair],
++                ['target_type' => 'Product', 'target_id' => $target?->id, 'decision' => $decision, 'confidence' => $target ? 1 : 0, 'payload' => ['source_name' => $productName, 'source_attributes' => ['source_type_id' => $typeId, 'source_category_id' => $categoryId, 'type_name' => $typeName, 'category_name' => $categoryName, 'diameter_value' => $numericCategory, 'unit' => $numericCategory !== null ? 'ton' : null], 'reviewed' => $reviewed]],
++            );
++        }
++
++        return $counts;
++    }
++
++    /** @return array<string, int> */
++    private function emptyCounts(): array
++    {
++        return ['matched' => 0, 'needs_review' => 0, 'create_required' => 0];
++    }
++
++    private function findMapping(DataMigrationRun $run, string $entity, string $sourceTable, string $sourceKey): ?DataMigrationMapping
++    {
++        return DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', $entity)->where('source_table', $sourceTable)->where('source_key', $sourceKey)->first();
++    }
++
++    private function inRange(mixed $value, mixed $from, mixed $to): bool
++    {
++        if ($value === null || $from === null || $to === null) {
++            return false;
++        }
++        try {
++            return CarbonImmutable::parse((string) $value)->betweenIncluded(CarbonImmutable::parse((string) $from), CarbonImmutable::parse((string) $to));
++        } catch (\Throwable) {
++            return false;
++        }
++    }
++
++    private function diameterValue(string $value): ?float
++    {
++        if (! preg_match('/^\s*([0-9]+(?:\.[0-9]+)?)\s*(?:مم|mm)?\s*$/iu', $value, $matches)) {
++            return null;
++        }
++
++        return (float) $matches[1];
++    }
++
++    private function normalize(string $value): string
++    {
++        return Str::of($value)->lower()->squish()->toString();
++    }
++
++    /** @return array<string, mixed> */
++    private function sourceAttributes(array $row, string $entity): array
++    {
++        return match ($entity) {
++            'customer' => ['phone' => $row['phon'] ?? null, 'address' => $row['address'] ?? null, 'tax_number' => null],
++            'supplier' => ['phone' => null, 'address' => null, 'tax_number' => null],
++            'product_type' => ['kind' => ((int) ($row['steel_or_other'] ?? 1)) === 1 ? 'steel' : 'other'],
++            'warehouse' => ['address' => $row['address'] ?? null],
++            'cashbox' => [],
++            'bank' => ['bank_name' => $row['source_bank_name'] ?? $row['display_name'] ?? null, 'account_number' => $row['account_number'] ?? null],
++            default => [],
++        };
++    }
++
++    private function normalizeNumber(mixed $value): string
++    {
++        return rtrim(rtrim(number_format((float) $value, 2, '.', ''), '0'), '.');
++    }
++}
+diff --git a/app/Services/MigrationMasterDataService.php b/app/Services/MigrationMasterDataService.php
+new file mode 100644
+index 0000000..e8ff3e8
+--- /dev/null
++++ b/app/Services/MigrationMasterDataService.php
+@@ -0,0 +1,149 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Services;
++
++use App\Models\Account;
++use App\Models\Branch;
++use App\Models\Company;
++use App\Models\DataMigrationMapping;
++use App\Models\DataMigrationRun;
++use App\Models\Diameter;
++use App\Models\Product;
++use App\Models\ProductType;
++use App\Models\User;
++use App\Models\Warehouse;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Str;
++use Illuminate\Validation\ValidationException;
++
++final class MigrationMasterDataService
++{
++    public function __construct(private readonly AccountingService $accounting) {}
++
++    /** @return array<string, int> */
++    public function createApproved(DataMigrationRun $run, User $actor): array
++    {
++        $company = Company::query()->findOrFail($run->company_id);
++        $counts = ['customers' => 0, 'suppliers' => 0, 'product_types' => 0, 'diameters' => 0, 'warehouses' => 0];
++
++        DB::transaction(function () use ($run, $actor, $company, &$counts): void {
++            DataMigrationMapping::query()
++                ->where('run_id', $run->id)
++                ->where('decision', 'create_required')
++                ->lockForUpdate()
++                ->get()
++                ->each(function (DataMigrationMapping $mapping) use ($actor, $company, &$counts): void {
++                    $payload = $mapping->payload ?? [];
++                    $attributes = $payload['source_attributes'] ?? [];
++                    $name = trim((string) ($payload['source_name'] ?? ''));
++                    if ($name === '' && $mapping->entity_type !== 'category') {
++                        throw ValidationException::withMessages(['mapping' => 'A source name is required before creating master data.']);
++                    }
++
++                    [$targetId, $countKey] = match ($mapping->entity_type) {
++                        'customer' => [$this->createParty($company, $actor, $name, $attributes, true), 'customers'],
++                        'supplier' => [$this->createParty($company, $actor, $name, $attributes, false), 'suppliers'],
++                        'product_type' => [ProductType::query()->create(['company_id' => $company->id, 'name' => $name, 'kind' => $attributes['kind'] ?? 'other', 'status' => 'active'])->id, 'product_types'],
++                        'category' => [$this->createDiameter($company, (string) ($payload['source_value'] ?? '')), 'diameters'],
++                        'product' => [$this->createProduct($run, $company, $mapping, $name, $attributes), 'products'],
++                        'warehouse' => [$this->createWarehouse($company, $mapping, $name, $attributes), 'warehouses'],
++                        'cashbox' => [$this->createCashbox($company, $actor, $name), 'cashboxes'],
++                        'bank' => [$this->createBank($company, $actor, $attributes), 'banks'],
++                        default => throw ValidationException::withMessages(['mapping' => 'This mapping type cannot be created automatically.']),
++                    };
++                    $payload['reviewed'] = true;
++                    $mapping->forceFill(['target_id' => $targetId, 'decision' => 'matched', 'confidence' => 1, 'target_type' => class_basename($mapping->target_type ?? '') ?: null, 'payload' => $payload])->save();
++                    $counts[$countKey]++;
++                });
++        });
++
++        return $counts;
++    }
++
++    /** @param array<string, mixed> $attributes */
++    private function createParty(Company $company, User $actor, string $name, array $attributes, bool $customer): int
++    {
++        $parentCode = $customer ? '1.2' : '2.1';
++        $parent = Account::query()->where('company_id', $company->id)->where('code', $parentCode)->first();
++        if (! $parent) {
++            throw ValidationException::withMessages(['mapping' => "Target company is missing parent account {$parentCode}."]);
++        }
++        $party = $this->accounting->createParty($company, $actor, [
++            'parent_account_id' => $parent->id,
++            'name' => $name,
++            'phone' => $attributes['phone'] ?? null,
++            'address' => $attributes['address'] ?? null,
++            'tax_number' => $attributes['tax_number'] ?? null,
++            'is_customer' => $customer,
++            'is_supplier' => ! $customer,
++            'opening_balance' => 0,
++        ]);
++
++        return $party->id;
++    }
++
++    private function createDiameter(Company $company, string $value): int
++    {
++        if (! is_numeric($value) || (float) $value <= 0) {
++            throw ValidationException::withMessages(['mapping' => 'Only numeric categories can be created as diameters automatically.']);
++        }
++
++        return Diameter::query()->firstOrCreate(['company_id' => $company->id, 'millimeters' => (float) $value])->id;
++    }
++
++    /** @param array<string, mixed> $attributes */
++    private function createProduct(DataMigrationRun $run, Company $company, DataMigrationMapping $mapping, string $name, array $attributes): int
++    {
++        $typeMapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'product_type')->where('source_key', (string) ($attributes['source_type_id'] ?? ''))->first();
++        if (! $typeMapping?->target_id || $typeMapping->decision !== 'matched') {
++            throw ValidationException::withMessages(['mapping' => 'Approve the product type mapping before creating imported products.']);
++        }
++        $diameterId = null;
++        if (($attributes['diameter_value'] ?? null) !== null) {
++            $categoryMapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'category')->where('source_key', (string) ($attributes['source_category_id'] ?? ''))->first();
++            if (! $categoryMapping?->target_id || $categoryMapping->decision !== 'matched') {
++                throw ValidationException::withMessages(['mapping' => 'Approve the diameter mapping before creating imported steel products.']);
++            }
++            $diameterId = (int) $categoryMapping->target_id;
++        }
++        $sku = Str::limit('LEGACY-'.$run->id.'-'.$mapping->source_key, 76, '');
++        $unit = $attributes['unit'] ?? null;
++        if (! $unit) {
++            throw ValidationException::withMessages(['mapping' => "Choose a unit of measure before creating imported product {$name}."]);
++        }
++        $product = Product::query()->firstOrCreate(
++            ['company_id' => $company->id, 'sku' => $sku],
++            ['product_type_id' => (int) $typeMapping->target_id, 'diameter_id' => $diameterId, 'name' => $name, 'unit' => $unit, 'minimum_stock' => 0, 'status' => 'active'],
++        );
++
++        return $product->id;
++    }
++
++    private function createCashbox(Company $company, User $actor, string $name): int
++    {
++        return $this->accounting->createCashbox($company, $actor, $name)->id;
++    }
++
++    /** @param array<string, mixed> $attributes */
++    private function createBank(Company $company, User $actor, array $attributes): int
++    {
++        return $this->accounting->createBank($company, $actor, (string) ($attributes['bank_name'] ?? 'Imported bank'), $attributes['account_number'] ?? null)->id;
++    }
++
++    /** @param array<string, mixed> $attributes */
++    private function createWarehouse(Company $company, DataMigrationMapping $mapping, string $name, array $attributes): int
++    {
++        $branch = Branch::query()->where('company_id', $company->id)->where('status', 'active')->orderBy('id')->first();
++        if (! $branch) {
++            throw ValidationException::withMessages(['mapping' => 'Create an active branch before creating imported warehouses.']);
++        }
++        $warehouse = Warehouse::query()->firstOrCreate(
++            ['company_id' => $company->id, 'name' => $name],
++            ['branch_id' => $branch->id, 'code' => 'LEGACY-'.$mapping->source_key, 'details' => $attributes['address'] ?? null, 'status' => 'active'],
++        );
++
++        return $warehouse->id;
++    }
++}
+diff --git a/app/Services/MigrationOpeningBalanceService.php b/app/Services/MigrationOpeningBalanceService.php
+new file mode 100644
+index 0000000..4911be0
+--- /dev/null
++++ b/app/Services/MigrationOpeningBalanceService.php
+@@ -0,0 +1,262 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Services;
++
++use App\Models\CustomerSupplier;
++use App\Models\DataMigrationMapping;
++use App\Models\DataMigrationRun;
++use App\Models\Product;
++use App\Models\StockBalance;
++use App\Models\StockMovement;
++use App\Models\User;
++use App\Models\Warehouse;
++use Carbon\CarbonImmutable;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Storage;
++
++final class MigrationOpeningBalanceService
++{
++    public function __construct(private readonly LegacySqlSnapshotParser $parser, private readonly AccountingService $accounting) {}
++
++    /** @return array<string, mixed> */
++    public function post(DataMigrationRun $run, User $actor): array
++    {
++        $company = $run->company()->firstOrFail();
++        $snapshot = $this->parser->parse(Storage::disk($run->source_disk)->path($run->source_path));
++        $cutoff = CarbonImmutable::parse($run->opening_balance_as_of)->endOfDay();
++        $balances = $this->partyBalances($snapshot, $cutoff);
++        $stock = $this->stockBalances($snapshot, $cutoff);
++        $this->assertReadyForPosting($run, $balances, $stock);
++        $result = ['parties_posted' => 0, 'parties_zero' => 0, 'parties_skipped' => 0, 'stock_items_posted' => 0, 'stock_quantity' => 0.0, 'stock_value' => 0.0, 'warnings' => [...$balances['warnings'], ...$stock['warnings']]];
++
++        DB::transaction(function () use ($run, $actor, $company, $balances, $stock, &$result, $cutoff): void {
++            foreach ($balances['items'] as $item) {
++                $mapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', $item['entity'])->where('source_key', $item['source_key'])->where('decision', 'matched')->first();
++                if (! $mapping?->target_id) {
++                    $result['parties_skipped']++;
++                    $result['warnings'][] = "No approved {$item['entity']} mapping for opening balance source {$item['source_key']}.";
++
++                    continue;
++                }
++                $party = CustomerSupplier::query()->where('company_id', $company->id)->lockForUpdate()->find($mapping->target_id);
++                if (! $party) {
++                    throw ValidationException::withMessages(['opening' => "Opening balance target {$mapping->target_id} is outside the target company."]);
++                }
++                $amount = round(abs($item['balance']), 2);
++                if ($amount <= 0) {
++                    $result['parties_zero']++;
++
++                    continue;
++                }
++                if ($party->opening_balance_journal_entry_id || (float) $party->opening_balance > 0) {
++                    throw ValidationException::withMessages(['opening' => "Opening balance for target party {$party->id} already exists; it was not overwritten."]);
++                }
++                $customer = $item['entity'] === 'customer';
++                $direction = $customer ? ($item['balance'] >= 0 ? 'debit' : 'credit') : ($item['balance'] >= 0 ? 'credit' : 'debit');
++                $party->forceFill(['opening_balance' => $amount, 'opening_balance_direction' => $direction, 'opening_balance_date' => $cutoff->toDateString()])->save();
++                $this->accounting->postOpeningBalance($company, $actor, $party);
++                $result['parties_posted']++;
++            }
++
++            $inventoryValue = 0.0;
++            foreach ($stock['items'] as $item) {
++                $mapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'product')->where('source_key', $item['product_source_key'])->where('decision', 'matched')->first();
++                $warehouseMapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'warehouse')->where('source_key', $item['warehouse_source_key'])->where('decision', 'matched')->first();
++                if (! $mapping?->target_id || ! $warehouseMapping?->target_id) {
++                    throw ValidationException::withMessages(['opening' => "Opening stock mapping is incomplete for {$item['product_source_key']} / {$item['warehouse_source_key']}."]);
++                }
++                if ($item['quantity'] <= 0) {
++                    throw ValidationException::withMessages(['opening' => "Opening stock quantity is not positive for {$item['product_source_key']} / {$item['warehouse_source_key']}."]);
++                }
++                $product = Product::query()->where('company_id', $company->id)->find($mapping->target_id);
++                $warehouse = Warehouse::query()->where('company_id', $company->id)->find($warehouseMapping->target_id);
++                if (! $product || ! $warehouse) {
++                    throw ValidationException::withMessages(['opening' => "Opening stock target is outside the target company for {$item['product_source_key']}."]);
++                }
++                $sourceKey = 'opening:'.$run->id.':'.$warehouse->id.':'.$product->id;
++                if (StockMovement::query()->where('company_id', $company->id)->where('source_type', DataMigrationRun::class)->where('source_key', $sourceKey)->exists()) {
++                    continue;
++                }
++                $balance = StockBalance::query()->where('company_id', $company->id)->where('warehouse_id', $warehouse->id)->where('product_id', $product->id)->lockForUpdate()->first();
++                if (! $balance) {
++                    $balance = StockBalance::query()->create(['company_id' => $company->id, 'warehouse_id' => $warehouse->id, 'product_id' => $product->id, 'quantity' => 0, 'inventory_value' => 0, 'minimum_stock' => $product->minimum_stock ?? 0]);
++                    $balance = StockBalance::query()->whereKey($balance->id)->lockForUpdate()->firstOrFail();
++                }
++                if ((float) $balance->quantity !== 0.0 || (float) $balance->inventory_value !== 0.0) {
++                    throw ValidationException::withMessages(['opening' => "Target stock balance already exists for {$product->name} in {$warehouse->name}; opening stock was not merged automatically."]);
++                }
++                $value = round($item['quantity'] * $item['average_cost'], 2);
++                $balance->forceFill(['quantity' => round((float) $balance->quantity + $item['quantity'], 3), 'inventory_value' => round((float) $balance->inventory_value + $value, 2)])->save();
++                StockMovement::query()->create(['company_id' => $company->id, 'warehouse_id' => $warehouse->id, 'product_id' => $product->id, 'user_id' => $actor->id, 'movement_type' => 'opening_balance', 'quantity_delta' => $item['quantity'], 'value_delta' => $value, 'source_type' => DataMigrationRun::class, 'source_id' => $run->id, 'source_key' => $sourceKey, 'notes' => 'Imported opening stock as of '.$cutoff->toDateString()]);
++                $result['stock_items_posted']++;
++                $result['stock_quantity'] += $item['quantity'];
++                $inventoryValue += $value;
++            }
++            if ($inventoryValue > 0 && ! DB::table('journal_entries')->where('company_id', $company->id)->where('source_type', DataMigrationRun::class)->where('source_id', $run->id)->exists()) {
++                $inventory = app(AccountingFoundationService::class)->systemAccount($company, 'inventory_asset');
++                $equity = app(AccountingFoundationService::class)->systemAccount($company, 'opening_balance_equity');
++                $this->accounting->postOperationalJournal($company, $actor, $cutoff->toDateString(), 'Legacy opening inventory '.$run->source_name, DataMigrationRun::class, $run->id, [['account_id' => $inventory->id, 'debit' => round($inventoryValue, 2), 'credit' => 0, 'description' => 'Imported opening inventory'], ['account_id' => $equity->id, 'debit' => 0, 'credit' => round($inventoryValue, 2), 'description' => 'Opening inventory equity']]);
++            }
++            $result['stock_value'] = round($inventoryValue, 2);
++        });
++
++        return $result;
++    }
++
++    /** @return array{items:list<array<string,mixed>>,warnings:list<string>} */
++    private function partyBalances(array $snapshot, CarbonImmutable $cutoff): array
++    {
++        $items = [];
++        $warnings = [];
++        $totals = [];
++        $add = function (string $entity, string $sourceKey, float $amount) use (&$totals): void {
++            $key = $entity.'|'.$sourceKey;
++            $totals[$key] = ($totals[$key] ?? ['entity' => $entity, 'source_key' => $sourceKey, 'balance' => 0.0]);
++            $totals[$key]['balance'] += $amount;
++        };
++        $detailsBuy = collect($snapshot['details_buy'])->groupBy(fn (array $row): string => (string) ($row['id_buy'] ?? ''));
++        $detailsSales = collect($snapshot['details_sales'])->groupBy(fn (array $row): string => (string) ($row['id_sales'] ?? ''));
++        foreach ($snapshot['buy'] as $row) {
++            $date = $this->date($row['date'] ?? null);
++            if (! $date || $date->greaterThan($cutoff)) {
++                continue;
++            }
++            $sourceKey = (string) ($row['id_import'] ?? '');
++            if ($sourceKey === '') {
++                continue;
++            }
++            if ($this->isPaymentRow($row)) {
++                $add('supplier', $sourceKey, -1 * abs((float) ($row['eda3'] ?? 0)));
++
++                continue;
++            }
++            $amount = 0.0;
++            foreach ($detailsBuy->get((string) ($row['id_buy'] ?? ''), collect()) as $line) {
++                $amount += ((float) ($line['kg'] ?? 0) / 1000) * (float) ($line['price'] ?? 0);
++            }
++            $add('supplier', $sourceKey, $amount + (float) ($row['exp'] ?? 0));
++        }
++        foreach ($snapshot['sales'] as $row) {
++            $date = $this->date($row['insert_date'] ?? null);
++            if (! $date || $date->greaterThan($cutoff)) {
++                continue;
++            }
++            $sourceKey = (string) ($row['id_customer'] ?? '');
++            if ($sourceKey === '') {
++                continue;
++            }
++            if ($this->isPaymentRow($row)) {
++                $add('customer', $sourceKey, -1 * (float) ($row['cash'] ?? 0));
++
++                continue;
++            }
++            $amount = (float) ($row['total'] ?? 0);
++            if ($amount <= 0) {
++                foreach ($detailsSales->get((string) ($row['id_sales'] ?? ''), collect()) as $line) {
++                    $amount += (float) ($line['total'] ?? 0);
++                }
++                $amount += (float) ($row['tips'] ?? 0) + (float) ($row['mashal'] ?? 0);
++            }
++            $add('customer', $sourceKey, $amount);
++        }
++        foreach ($totals as $item) {
++            $items[] = $item;
++        }
++
++        return ['items' => $items, 'warnings' => $warnings];
++    }
++
++    /** @return array{items:list<array<string,mixed>>,warnings:list<string>} */
++    private function stockBalances(array $snapshot, CarbonImmutable $cutoff): array
++    {
++        $detailsBuy = collect($snapshot['details_buy'])->keyBy(fn (array $row): string => (string) ($row['id_details_buy'] ?? ''));
++        $detailsSales = collect($snapshot['details_sales'])->keyBy(fn (array $row): string => (string) ($row['id_details_sales'] ?? ''));
++        $buyDates = collect($snapshot['buy'])->keyBy(fn (array $row): string => (string) ($row['id_buy'] ?? ''));
++        $costs = [];
++        foreach ($snapshot['details_buy'] as $line) {
++            $buyHeader = $buyDates->get((string) ($line['id_buy'] ?? '')) ?? [];
++            $buyDate = $this->date($buyHeader['date'] ?? null);
++            if (! $buyDate || $buyDate->greaterThan($cutoff)) {
++                continue;
++            }
++            $qty = (float) ($line['kg'] ?? 0) / 1000;
++            $key = (string) ($line['id_type'] ?? '').':'.(string) ($line['id_categories'] ?? '');
++            $costs[$key]['qty'] = ($costs[$key]['qty'] ?? 0) + $qty;
++            $costs[$key]['value'] = ($costs[$key]['value'] ?? 0) + $qty * (float) ($line['price'] ?? 0);
++        }
++        $stock = [];
++        $warnings = [];
++        foreach ($snapshot['store'] as $row) {
++            $date = $this->date($row['date_add'] ?? null);
++            if (! $date || $date->greaterThan($cutoff)) {
++                continue;
++            }
++            $detail = ! empty($row['id_details_buy']) ? $detailsBuy->get((string) $row['id_details_buy']) : $detailsSales->get((string) ($row['id_details_sales'] ?? ''));
++            if (! $detail) {
++                continue;
++            }
++            $key = (string) ($detail['id_type'] ?? '').':'.(string) ($detail['id_categories'] ?? '');
++            $deltaKg = ! empty($row['buy']) ? (float) $row['buy'] : -1 * (float) ($row['sale'] ?? 0);
++            $compound = $key.'|'.(string) ($row['id_stores'] ?? '');
++            $stock[$compound] ??= ['product_source_key' => $key, 'warehouse_source_key' => (string) ($row['id_stores'] ?? ''), 'quantity' => 0.0, 'average_cost' => 0.0];
++            $stock[$compound]['quantity'] += $deltaKg / 1000;
++            $stock[$compound]['average_cost'] = ($costs[$key]['qty'] ?? 0) > 0 ? ($costs[$key]['value'] / $costs[$key]['qty']) : 0.0;
++        }
++        foreach ($stock as $item) {
++            if ($item['average_cost'] <= 0 && $item['quantity'] > 0) {
++                $warnings[] = "Opening stock {$item['product_source_key']} has no reliable purchase cost; it was not posted.";
++            }
++        }
++
++        return ['items' => array_values($stock), 'warnings' => $warnings];
++    }
++
++    /** @param array{items:list<array<string,mixed>>,warnings:list<string>} $balances @param array{items:list<array<string,mixed>>,warnings:list<string>} $stock */
++    private function assertReadyForPosting(DataMigrationRun $run, array $balances, array $stock): void
++    {
++        $errors = [];
++        foreach ($balances['items'] as $item) {
++            if (abs((float) $item['balance']) <= 0.01) {
++                continue;
++            }
++            $exists = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', $item['entity'])->where('source_key', $item['source_key'])->where('decision', 'matched')->whereNotNull('target_id')->exists();
++            if (! $exists) {
++                $errors[] = "Missing approved {$item['entity']} mapping for opening balance source {$item['source_key']}.";
++            }
++        }
++        foreach ($stock['items'] as $item) {
++            if ((float) $item['quantity'] <= 0 || (float) $item['average_cost'] <= 0) {
++                $errors[] = "Opening stock requires a positive quantity and reliable cost for {$item['product_source_key']}.";
++
++                continue;
++            }
++            foreach ([['warehouse', $item['warehouse_source_key']], ['product', $item['product_source_key']]] as [$entity, $key]) {
++                if (! DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', $entity)->where('source_key', $key)->where('decision', 'matched')->whereNotNull('target_id')->exists()) {
++                    $errors[] = "Missing approved {$entity} mapping for opening stock source {$key}.";
++                }
++            }
++        }
++        if ($errors !== []) {
++            throw ValidationException::withMessages(['opening' => array_slice($errors, 0, 20)]);
++        }
++    }
++
++    private function date(mixed $value): ?CarbonImmutable
++    {
++        if ($value === null || trim((string) $value) === '') {
++            return null;
++        }
++        try {
++            return CarbonImmutable::parse((string) $value)->endOfDay();
++        } catch (\Throwable) {
++            return null;
++        }
++    }
++
++    private function isPaymentRow(array $row): bool
++    {
++        return str_contains((string) ($row['bayan'] ?? ''), 'دفعة');
++    }
++}
+diff --git a/app/Services/MigrationRecordStagingService.php b/app/Services/MigrationRecordStagingService.php
+new file mode 100644
+index 0000000..0cf2cc2
+--- /dev/null
++++ b/app/Services/MigrationRecordStagingService.php
+@@ -0,0 +1,242 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Services;
++
++use App\Models\DataMigrationRecord;
++use App\Models\DataMigrationRun;
++use Carbon\CarbonImmutable;
++use Carbon\CarbonInterface;
++use Illuminate\Support\Facades\Storage;
++
++final class MigrationRecordStagingService
++{
++    public function __construct(private readonly LegacySqlSnapshotParser $parser) {}
++
++    /** @return array<string, int> */
++    public function stage(DataMigrationRun $run): array
++    {
++        $snapshot = $this->parser->parse(Storage::disk($run->source_disk)->path($run->source_path));
++        $from = $run->documents_from->startOfDay();
++        $to = $run->documents_to->endOfDay();
++        $purchaseDetails = collect($snapshot['details_buy'])->groupBy(fn (array $row): string => (string) ($row['id_buy'] ?? ''));
++        $salesDetails = collect($snapshot['details_sales'])->groupBy(fn (array $row): string => (string) ($row['id_sales'] ?? ''));
++        $counts = ['ready' => 0, 'needs_review' => 0];
++
++        foreach ($snapshot['buy'] as $row) {
++            if (! $this->inRange($row['date'] ?? null, $from, $to)) {
++                continue;
++            }
++            if ($this->isPaymentRow($row)) {
++                continue;
++            }
++            $id = (string) ($row['id_buy'] ?? '');
++            $details = $purchaseDetails->get($id, collect())->values()->all();
++            $ready = $details !== [] && ! empty($row['id_import']) && ! empty($row['id_stores']) && ! empty($row['id_type']);
++            $this->upsert($run, 'purchase_document', 'buy', $id, $row['date'] ?? null, 'legacy-buy-'.$id, $row, $this->normalizePurchase($row, $details), $ready);
++            $counts[$ready ? 'ready' : 'needs_review']++;
++        }
++
++        foreach ($snapshot['sales'] as $row) {
++            if (! $this->inRange($row['insert_date'] ?? null, $from, $to)) {
++                continue;
++            }
++            if ($this->isPaymentRow($row)) {
++                continue;
++            }
++            $id = (string) ($row['id_sales'] ?? '');
++            $details = $salesDetails->get($id, collect())->values()->all();
++            $normalized = $this->normalizeSales($row, $details);
++            $calculatedTotal = round((float) $normalized['subtotal'] + (float) $normalized['transport_cost'] + (float) $normalized['loading_cost'], 2);
++            $ready = $details !== [] && ! empty($row['id_customer']) && ! empty($row['id_stores']) && abs((float) $normalized['legacy_total'] - $calculatedTotal) < 0.01;
++            $this->upsert($run, 'sales_document', 'sales', $id, $row['insert_date'] ?? null, 'legacy-sales-'.$id, $row, $normalized, $ready);
++            $counts[$ready ? 'ready' : 'needs_review']++;
++        }
++
++        $counts = [...$counts, ...$this->stagePayments($run, $snapshot, $from, $to), ...$this->stageExpenses($run, $snapshot, $from, $to)];
++
++        return $counts;
++    }
++
++    /** @param array<string, list<array<string, mixed>>> $snapshot @return array<string, int> */
++    private function stagePayments(DataMigrationRun $run, array $snapshot, CarbonInterface $from, CarbonInterface $to): array
++    {
++        $counts = ['receipts_ready' => 0, 'receipts_needs_review' => 0, 'payments_ready' => 0, 'payments_needs_review' => 0];
++        $treasury = collect($snapshot['treasury'])->keyBy(fn (array $row): string => (string) ($row['id_treasury'] ?? ''));
++        foreach ($snapshot['sales'] as $row) {
++            if (! $this->isPaymentRow($row) || ! $this->inRange($row['insert_date'] ?? null, $from, $to)) {
++                continue;
++            }
++            $amount = (float) ($row['cash'] ?? 0);
++            $treasuryRow = $treasury->get((string) ($row['id_cash'] ?? ''));
++            $sourceKey = (string) ($treasuryRow['id_name_treasury'] ?? $row['id_cash'] ?? '');
++            $ready = $amount > 0 && ! empty($row['id_customer']) && $sourceKey !== '';
++            $normalized = ['payment_type' => 'receipt', 'customer_source_id' => (string) ($row['id_customer'] ?? ''), 'cashbox_source_id' => $sourceKey, 'amount' => abs($amount), 'date' => $row['insert_date'] ?? null, 'notes' => $row['bayan'] ?? null, 'allocation_source_id' => $row['id_sales'] ?? null];
++            $this->upsert($run, 'receipt_document', 'sales', (string) ($row['id_sales'] ?? ''), $row['insert_date'] ?? null, 'legacy-receipt-'.($row['id_sales'] ?? ''), $row, $normalized, $ready);
++            $counts[$ready ? 'receipts_ready' : 'receipts_needs_review']++;
++        }
++        foreach ($snapshot['buy'] as $row) {
++            if (! $this->isPaymentRow($row) || ! $this->inRange($row['date'] ?? null, $from, $to)) {
++                continue;
++            }
++            $amount = (float) ($row['eda3'] ?? 0);
++            $treasuryRow = $treasury->get((string) ($row['id_eda3at'] ?? ''));
++            $sourceKey = (string) ($treasuryRow['id_name_treasury'] ?? $row['id_eda3at'] ?? '');
++            $ready = $amount > 0 && ! empty($row['id_import']) && $sourceKey !== '';
++            $normalized = ['payment_type' => 'payment', 'supplier_source_id' => (string) ($row['id_import'] ?? ''), 'cashbox_source_id' => $sourceKey, 'amount' => abs($amount), 'date' => $row['date'] ?? null, 'notes' => $row['bayan'] ?? null, 'allocation_source_id' => $row['id_buy'] ?? null];
++            $this->upsert($run, 'payment_document', 'buy', (string) ($row['id_buy'] ?? ''), $row['date'] ?? null, 'legacy-payment-'.($row['id_buy'] ?? ''), $row, $normalized, $ready);
++            $counts[$ready ? 'payments_ready' : 'payments_needs_review']++;
++        }
++
++        return $counts;
++    }
++
++    private function isPaymentRow(array $row): bool
++    {
++        return str_contains((string) ($row['bayan'] ?? ''), 'دفعة');
++    }
++
++    /** @param array<string, list<array<string, mixed>>> $snapshot @return array<string, int> */
++    private function stageExpenses(DataMigrationRun $run, array $snapshot, CarbonInterface $from, CarbonInterface $to): array
++    {
++        $count = 0;
++        foreach ($snapshot['all_expenses'] as $row) {
++            if (! $this->inRange($row['insert_date'] ?? null, $from, $to)) {
++                continue;
++            }
++            $sourceId = (string) ($row['id_all_expenses'] ?? '');
++            $payload = ['amount' => (float) ($row['amount'] ?? 0), 'date' => $row['insert_date'] ?? null, 'description' => $row['bayan'] ?? null, 'legacy_expense_id' => $row['id_expenses'] ?? null, 'legacy_category_id' => $row['id_category_expenses'] ?? null, 'legacy_vehicle_id' => $row['id_car'] ?? null, 'requires_account_review' => true];
++            $this->upsert($run, 'expense_document', 'all_expenses', $sourceId, $row['insert_date'] ?? null, 'legacy-expense-'.$sourceId, $row, $payload, false);
++            $count++;
++        }
++
++        return ['expense_needs_review' => $count];
++    }
++
++    /** @param list<array<string, mixed>> $rows @return array<string, mixed> */
++    private function normalizePurchase(array $header, array $rows): array
++    {
++        $lines = array_map(fn (array $row): array => $this->normalizeLine($row, false), $rows);
++        $factoryWeight = array_sum(array_column($lines, 'quantity_ton'));
++        $packages = array_sum(array_column($lines, 'packages'));
++        $subtotal = array_sum(array_column($lines, 'line_total'));
++
++        return [
++            'source_document_type' => 'purchase',
++            'supplier_source_id' => (string) ($header['id_import'] ?? ''),
++            'warehouse_source_id' => (string) ($header['id_stores'] ?? ''),
++            'supplier_bill_number' => 'LEGACY-PB-'.($header['id_buy'] ?? ''),
++            'date' => $header['date'] ?? null,
++            'total_factory_weight' => round($factoryWeight, 3),
++            'total_actual_weight' => round($factoryWeight, 3),
++            'total_packages' => round($packages, 3),
++            'subtotal' => round($subtotal, 2),
++            'transport_cost' => 0,
++            'loading_cost' => 0,
++            'extra_cost' => 0,
++            'discount' => 0,
++            'payment_method' => 'credit',
++            'lines' => $lines,
++            'legacy_note' => $header['bayan'] ?? null,
++        ];
++    }
++
++    /** @param list<array<string, mixed>> $rows @return array<string, mixed> */
++    private function normalizeSales(array $header, array $rows): array
++    {
++        $lines = array_map(fn (array $row): array => $this->normalizeLine($row, true), $rows);
++        $headerPackages = (float) ($header['numper'] ?? 0);
++        if ($headerPackages > 0 && $lines !== []) {
++            $lines[array_key_last($lines)]['packages'] = $headerPackages;
++            $lines[array_key_last($lines)]['packages_source_scope'] = 'header';
++        }
++        $actualWeight = array_sum(array_column($lines, 'quantity_ton'));
++        $packages = array_sum(array_column($lines, 'packages'));
++        $transport = (float) ($header['tips'] ?? 0);
++        $loading = (float) ($header['mashal'] ?? 0);
++
++        return [
++            'source_document_type' => 'sales',
++            'customer_source_id' => (string) ($header['id_customer'] ?? ''),
++            'warehouse_source_id' => (string) ($header['id_stores'] ?? ''),
++            'customer_bill_number' => 'LEGACY-SB-'.($header['id_sales'] ?? ''),
++            'date' => $header['insert_date'] ?? null,
++            'total_actual_weight' => round($actualWeight, 3),
++            'total_packages' => round($packages, 3),
++            'subtotal' => round(array_sum(array_column($lines, 'line_total')), 2),
++            'transport_cost' => round($transport, 2),
++            'loading_cost' => round($loading, 2),
++            'extra_cost' => 0,
++            'discount' => 0,
++            'payment_method' => 'credit',
++            'legacy_total' => (float) ($header['total'] ?? 0),
++            'lines' => $lines,
++            'legacy_note' => $header['bayan'] ?? null,
++        ];
++    }
++
++    /** @param array<string, mixed> $row @return array<string, mixed> */
++    private function normalizeLine(array $row, bool $sales): array
++    {
++        $quantityKg = (float) ($row['kg'] ?? 0);
++        $quantityTon = round($quantityKg / 1000, 3);
++        $unitPrice = (float) ($row['price'] ?? 0);
++        $sourceTotal = $sales ? (float) ($row['total'] ?? 0) : 0;
++        $lineTotal = $sourceTotal > 0 ? round($sourceTotal, 2) : round($quantityTon * $unitPrice, 2);
++
++        return [
++            'source_line_id' => $row[$sales ? 'id_details_sales' : 'id_details_buy'] ?? null,
++            'source_type_id' => (string) ($row['id_type'] ?? ''),
++            'source_category_id' => (string) ($row['id_categories'] ?? ''),
++            'source_warehouse_id' => (string) ($row['id_stores'] ?? ''),
++            'quantity_kg' => $quantityKg,
++            'quantity_ton' => $quantityTon,
++            'factory_weight' => $sales ? null : $quantityTon,
++            'actual_weight' => $sales ? $quantityTon : $quantityTon,
++            'packages' => (float) ($row['no'] ?? 0),
++            'unit_price' => $unitPrice,
++            'line_total' => $lineTotal,
++            'notes' => $row['note'] ?? null,
++        ];
++    }
++
++    private function inRange(mixed $value, CarbonInterface $from, CarbonInterface $to): bool
++    {
++        if ($value === null || trim((string) $value) === '') {
++            return false;
++        }
++        try {
++            $date = CarbonImmutable::parse((string) $value);
++        } catch (\Throwable) {
++            return false;
++        }
++
++        return $date->betweenIncluded($from, $to);
++    }
++
++    /** @param array<string, mixed> $header @param array<string, mixed> $normalized */
++    private function upsert(DataMigrationRun $run, string $entity, string $sourceTable, string $sourceId, mixed $date, string $sourceNumber, array $header, array $normalized, bool $ready): void
++    {
++        $targetType = match ($entity) {
++            'purchase_document' => 'PurchaseBill',
++            'sales_document' => 'SalesBill',
++            'receipt_document' => 'Receipt',
++            'payment_document' => 'PaymentVoucher',
++            default => null,
++        };
++        DataMigrationRecord::query()->updateOrCreate(
++            ['run_id' => $run->id, 'entity_type' => $entity, 'source_table' => $sourceTable, 'source_id' => $sourceId],
++            [
++                'source_date' => $date,
++                'source_number' => $sourceNumber,
++                'source_payload' => ['header' => $header, 'normalized' => $normalized],
++                'normalized_payload' => ['source_document_type' => $entity, 'source_id' => $sourceId, 'classification' => $ready ? ($targetType ? 'financial_document_candidate' : 'needs_review') : 'needs_review', ...$normalized],
++                'status' => $ready ? DataMigrationRecord::STATUS_READY : DataMigrationRecord::STATUS_NEEDS_REVIEW,
++                'target_type' => $ready ? $targetType : null,
++                'fingerprint' => hash('sha256', implode('|', [$run->company_id, $run->source_system, $sourceTable, $sourceId])),
++                'error_message' => null,
++            ],
++        );
++    }
++}
+diff --git a/app/Support/PlatformPermissions.php b/app/Support/PlatformPermissions.php
+index 237d847..9621050 100644
+--- a/app/Support/PlatformPermissions.php
++++ b/app/Support/PlatformPermissions.php
+@@ -12,6 +12,7 @@ final class PlatformPermissions
+         'subscriptions.view', 'subscriptions.payments', 'subscriptions.plan_change', 'subscriptions.limits', 'subscription_requests.manage',
+         'plans.manage', 'coupons.manage', 'licenses.view', 'licenses.manage', 'admins.view', 'admins.manage',
+         'settings.view', 'settings.manage', 'reports.view', 'audit.view',
++        'data_migration.view', 'data_migration.manage', 'data_migration.execute',
+     ];
+ 
+     public const ROLES = [
+diff --git a/database/migrations/2026_10_19_000001_create_data_migration_tables.php b/database/migrations/2026_10_19_000001_create_data_migration_tables.php
+new file mode 100644
+index 0000000..6d8f9bd
+--- /dev/null
++++ b/database/migrations/2026_10_19_000001_create_data_migration_tables.php
+@@ -0,0 +1,85 @@
++<?php
++
++declare(strict_types=1);
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    public function up(): void
++    {
++        Schema::create('data_migration_runs', function (Blueprint $table): void {
++            $table->id();
++            $table->foreignId('company_id')->constrained()->restrictOnDelete();
++            $table->foreignId('created_by')->constrained('users')->restrictOnDelete();
++            $table->string('source_system', 80)->default('old-prog');
++            $table->string('source_name', 191);
++            $table->string('source_disk', 80)->default('local');
++            $table->string('source_path', 255);
++            $table->string('source_hash', 64);
++            $table->date('documents_from')->nullable();
++            $table->date('documents_to')->nullable();
++            $table->date('opening_balance_as_of')->nullable();
++            $table->string('mode', 30)->default('draft');
++            $table->string('status', 30)->default('uploaded');
++            $table->json('options')->nullable();
++            $table->json('summary')->nullable();
++            $table->text('error_message')->nullable();
++            $table->timestamp('started_at')->nullable();
++            $table->timestamp('completed_at')->nullable();
++            $table->timestamps();
++
++            $table->index(['company_id', 'status'], 'dm_runs_company_status_idx');
++            $table->index(['source_system', 'source_hash'], 'dm_runs_source_hash_idx');
++        });
++
++        Schema::create('data_migration_mappings', function (Blueprint $table): void {
++            $table->id();
++            $table->foreignId('run_id')->constrained('data_migration_runs')->cascadeOnDelete();
++            $table->string('entity_type', 50);
++            $table->string('source_table', 80);
++            $table->string('source_key', 191);
++            $table->string('target_type', 120)->nullable();
++            $table->unsignedBigInteger('target_id')->nullable();
++            $table->string('decision', 30)->default('suggested');
++            $table->decimal('confidence', 5, 4)->nullable();
++            $table->json('payload')->nullable();
++            $table->timestamps();
++
++            $table->unique(['run_id', 'entity_type', 'source_table', 'source_key'], 'dm_maps_source_unique');
++            $table->index(['run_id', 'entity_type', 'decision'], 'dm_maps_review_idx');
++        });
++
++        Schema::create('data_migration_records', function (Blueprint $table): void {
++            $table->id();
++            $table->foreignId('run_id')->constrained('data_migration_runs')->cascadeOnDelete();
++            $table->string('entity_type', 50);
++            $table->string('source_table', 80);
++            $table->string('source_id', 191);
++            $table->date('source_date')->nullable();
++            $table->string('source_number', 191)->nullable();
++            $table->json('source_payload')->nullable();
++            $table->json('normalized_payload')->nullable();
++            $table->string('status', 30)->default('pending');
++            $table->string('target_type', 120)->nullable();
++            $table->unsignedBigInteger('target_id')->nullable();
++            $table->string('fingerprint', 64)->nullable();
++            $table->text('error_message')->nullable();
++            $table->timestamps();
++
++            $table->unique(['run_id', 'entity_type', 'source_table', 'source_id'], 'dm_records_source_unique');
++            $table->unique(['run_id', 'fingerprint'], 'dm_records_fingerprint_unique');
++            $table->index(['run_id', 'entity_type', 'status'], 'dm_records_status_idx');
++            $table->index(['run_id', 'source_date'], 'dm_records_date_idx');
++        });
++    }
++
++    public function down(): void
++    {
++        Schema::dropIfExists('data_migration_records');
++        Schema::dropIfExists('data_migration_mappings');
++        Schema::dropIfExists('data_migration_runs');
++    }
++};
+diff --git a/resources/js/Pages/SuperAdmin/DataMigration.jsx b/resources/js/Pages/SuperAdmin/DataMigration.jsx
+new file mode 100644
+index 0000000..817ee67
+--- /dev/null
++++ b/resources/js/Pages/SuperAdmin/DataMigration.jsx
+@@ -0,0 +1,73 @@
++import { router, useForm, usePage } from '@inertiajs/react';
++import { usePlatformApi, usePt } from '../../Components/Platform/ui';
++import SuperAdminLayout from '../../Layouts/SuperAdminLayout';
++import { translate } from '../../i18n';
++
++function Metric({ label, value }) {
++    return <div className="border border-[#d7ddd5] bg-white p-4"><p className="text-xs text-[#68736b]">{label}</p><strong className="mt-1 block text-2xl text-[#183c2b]">{value ?? 0}</strong></div>;
++}
++
++export default function DataMigration({ companies = [], runs = { data: [] }, selectedRun = null, mappingOptions = {} }) {
++    const { locale } = usePage().props;
++    const api = usePlatformApi();
++    const { can } = usePt();
++    const t = (key) => translate(locale, key);
++    const form = useForm({ company_id: '', documents_from: '2026-10-01', documents_to: '2026-10-18', opening_balance_as_of: '2026-09-30', mode: 'draft', source: null });
++    const summary = selectedRun?.summary || null;
++    const documents = summary?.documents || {};
++    const master = summary?.master_counts || {};
++
++    function submit(event) {
++        event.preventDefault();
++        form.post('/super-admin/data-migrations', { forceFormData: true, preserveScroll: true });
++    }
++
++    function analyze(run) {
++        router.post(`/super-admin/data-migrations/${run.id}/analyze`, {}, { preserveScroll: true });
++    }
++
++    function saveMapping(mapping, targetId, decision = null, unit = undefined) {
++        const payload = { target_id: targetId || null, decision: decision || (targetId ? 'matched' : 'needs_review') };
++        if (mapping.entity_type === 'product' && unit !== undefined) payload.unit = unit || null;
++        router.put(`/super-admin/data-migrations/${selectedRun.id}/mappings/${mapping.id}`, payload, { preserveScroll: true });
++    }
++
++    function prepareMasters(run) {
++        api.act('post', `/super-admin/data-migrations/${run.id}/prepare-masters`, {});
++    }
++
++    function executeInvoices(run) {
++        api.act('post', `/super-admin/data-migrations/${run.id}/execute-invoices`, {});
++    }
++
++    function prepareOpenings(run) {
++        api.act('post', `/super-admin/data-migrations/${run.id}/prepare-openings`, {});
++    }
++
++    return <SuperAdminLayout title={t('pf_data_migration')}>
++        <div className="flex flex-wrap items-end justify-between gap-4">
++            <div><p className="text-xs uppercase text-[#68736b]">{t('platformWorkspace')}</p><h1 className="mt-1 text-2xl font-semibold">{t('pf_data_migration')}</h1><p className="mt-2 max-w-3xl text-sm text-[#68736b]">{t('pf_migration_intro')}</p></div>
++        </div>
++
++        <section className="mt-8 border border-[#d7ddd5] bg-white p-5">
++            <h2 className="font-semibold text-[#183c2b]">{t('pf_migration_upload')}</h2>
++            <p className="mt-1 text-sm text-[#68736b]">{t('pf_migration_source_hint')}</p>
++            <form onSubmit={submit} className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
++                <label className="text-sm font-medium">{t('pf_migration_company')}<select required value={form.data.company_id} onChange={(event) => form.setData('company_id', event.target.value)} className="mt-1 w-full border border-[#c8c0b7] bg-white px-3 py-2"><option value="">—</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name} · #{company.id}</option>)}</select>{form.errors.company_id && <span className="mt-1 block text-sm text-red-700">{form.errors.company_id}</span>}</label>
++                <label className="text-sm font-medium">{t('pf_migration_from')}<input required type="date" value={form.data.documents_from} onChange={(event) => form.setData('documents_from', event.target.value)} className="mt-1 w-full border border-[#c8c0b7] bg-white px-3 py-2" />{form.errors.documents_from && <span className="mt-1 block text-sm text-red-700">{form.errors.documents_from}</span>}</label>
++                <label className="text-sm font-medium">{t('pf_migration_to')}<input required type="date" value={form.data.documents_to} onChange={(event) => form.setData('documents_to', event.target.value)} className="mt-1 w-full border border-[#c8c0b7] bg-white px-3 py-2" />{form.errors.documents_to && <span className="mt-1 block text-sm text-red-700">{form.errors.documents_to}</span>}</label>
++                <label className="text-sm font-medium">{locale === 'ar' ? 'الرصيد الافتتاحي حتى' : 'Opening balance as of'}<input required type="date" value={form.data.opening_balance_as_of} onChange={(event) => form.setData('opening_balance_as_of', event.target.value)} className="mt-1 w-full border border-[#c8c0b7] bg-white px-3 py-2" />{form.errors.opening_balance_as_of && <span className="mt-1 block text-sm text-red-700">{form.errors.opening_balance_as_of}</span>}</label>
++                <label className="text-sm font-medium md:col-span-2">{t('pf_migration_source')}<input required type="file" accept=".sql,.gz,.txt" onChange={(event) => form.setData('source', event.target.files?.[0] || null)} className="mt-1 block w-full border border-[#c8c0b7] bg-white px-3 py-2 text-sm" />{form.errors.source && <span className="mt-1 block text-sm text-red-700">{form.errors.source}</span>}</label>
++                <div className="md:col-span-2 lg:col-span-3"><button disabled={form.processing} className="bg-[#34795c] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">{t('pf_migration_upload')}</button></div>
++            </form>
++        </section>
++
++        {selectedRun && <section className="mt-8 border border-[#d7ddd5] bg-[#f7f8f5] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-[#183c2b]">{t('pf_migration_summary')}</h2><p className="mt-1 text-sm text-[#68736b]">{selectedRun.source_name} · {selectedRun.status}</p></div><div className="flex flex-wrap gap-2">{selectedRun.status === 'uploaded' && <button type="button" onClick={() => analyze(selectedRun)} className="border border-[#34795c] px-4 py-2 text-sm font-semibold text-[#24543f]">{locale === 'ar' ? 'بدء التحليل' : 'Analyze source'}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && selectedRun.mappings?.some((mapping) => mapping.decision === 'create_required') && <button type="button" onClick={() => prepareMasters(selectedRun)} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'إنشاء البيانات الأساسية المعتمدة' : 'Create approved master data'}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && !summary?.opening_balances && <button type="button" onClick={() => prepareOpenings(selectedRun)} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'ترحيل الأرصدة الافتتاحية والمخزون' : 'Post opening balances and stock'}</button>}{['review', 'ready', 'failed'].includes(selectedRun.status) && can('data_migration.execute') && summary?.records?.ready > 0 && <button type="button" onClick={() => executeInvoices(selectedRun)} className="bg-[#34795c] px-4 py-2 text-sm font-semibold text-white">{locale === 'ar' ? 'تنفيذ المستندات المالية بعد المراجعة' : 'Execute reviewed financial documents'}</button>}</div></div>{selectedRun.error_message && <p className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-800">{selectedRun.error_message}</p>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={locale === 'ar' ? 'مرشحو الشراء' : 'Purchase candidates'} value={documents.purchase_candidates} /><Metric label={locale === 'ar' ? 'شراء يحتاج مراجعة' : 'Purchase review'} value={documents.purchase_needs_review} /><Metric label={locale === 'ar' ? 'مرشحو البيع' : 'Sales candidates'} value={documents.sales_candidates} /><Metric label={locale === 'ar' ? 'بيع يحتاج مراجعة' : 'Sales review'} value={documents.sales_needs_review} /><Metric label={locale === 'ar' ? 'إيصالات قبض' : 'Receipts'} value={documents.receipt_candidates} /><Metric label={locale === 'ar' ? 'سندات صرف' : 'Payment vouchers'} value={documents.payment_candidates} /><Metric label={locale === 'ar' ? 'مصروفات تحتاج مراجعة' : 'Expenses to review'} value={documents.expense_candidates} /><Metric label={locale === 'ar' ? 'حركات بنكية للمراجعة' : 'Bank operations to review'} value={documents.bank_operation_candidates} /></div>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label={locale === 'ar' ? 'العملاء' : 'Customers'} value={master.customers} /><Metric label={locale === 'ar' ? 'الموردون' : 'Suppliers'} value={master.suppliers} /><Metric label={locale === 'ar' ? 'الأنواع' : 'Types'} value={master.product_types} /><Metric label={locale === 'ar' ? 'الفئات/الأقطار' : 'Categories'} value={master.categories} /><Metric label={locale === 'ar' ? 'المخازن القديمة' : 'Legacy stores'} value={master.stores} /></div>}{summary?.opening_balances && <div className="mt-5 border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{locale === 'ar' ? `تم ترحيل ${summary.opening_balances.parties_posted || 0} رصيد طرف و${summary.opening_balances.stock_items_posted || 0} رصيد مخزون. أي تحذيرات تحتاج مراجعة قبل التنفيذ.` : `Posted ${summary.opening_balances.parties_posted || 0} party openings and ${summary.opening_balances.stock_items_posted || 0} stock openings. Review any warnings before execution.`}</div>}{summary?.warnings?.length > 0 && <div className="mt-5 border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>{locale === 'ar' ? 'تنبيهات المراجعة' : 'Review warnings'}</strong><ul className="mt-2 list-disc ps-5">{summary.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}</section>}
++        {summary?.mappings && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'اقتراحات المطابقة' : 'Mapping suggestions'}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{Object.entries(summary.mappings).map(([key, counts]) => <div key={key} className="border border-[#e2e6df] p-3 text-sm"><strong className="block text-[#183c2b]">{key}</strong><span className="mt-2 block text-emerald-800">{locale === 'ar' ? 'مطابق' : 'Matched'}: {counts.matched || 0}</span><span className="block text-amber-800">{locale === 'ar' ? 'مراجعة' : 'Review'}: {counts.needs_review || 0}</span><span className="block text-blue-800">{locale === 'ar' ? 'إنشاء' : 'Create'}: {counts.create_required || 0}</span></div>)}</div><p className="mt-4 text-sm text-[#68736b]">{locale === 'ar' ? 'هذه اقتراحات قابلة للمراجعة. إنشاء البيانات الأساسية يتم في خطوة منفصلة بعد الاعتماد، ولا يتم إنشاء الفواتير أو القيود هنا.' : 'These are reviewable suggestions. Master data creation is a separate approval step; invoices and journals are not created here.'}</p></section>}
++        {summary?.records && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'السجلات المرحلية' : 'Staged records'}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2"><Metric label={locale === 'ar' ? 'جاهزة للمعاينة' : 'Ready for review'} value={summary.records.ready} /><Metric label={locale === 'ar' ? 'تحتاج تصنيفًا يدويًا' : 'Needs manual classification'} value={summary.records.needs_review} /></div><p className="mt-4 text-sm text-[#68736b]">{locale === 'ar' ? 'هذه بيانات مرحلية غير مؤثرة على الحسابات. لن تُنشأ فواتير أو قيود أو حركات مخزون إلا بعد خطوة تنفيذ مستقلة.' : 'These are staged records and do not affect accounting. Invoices, journals, and stock movements require a separate execution step.'}</p></section>}
++        {selectedRun?.mappings?.length > 0 && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'مراجعة المطابقات' : 'Review mappings'}</h3><p className="mt-1 text-sm text-[#68736b]">{locale === 'ar' ? 'اختر كيانًا موجودًا أو اترك السجل ليُنشأ بعد الموافقة على خطوة التنفيذ. الأصناف غير الحديدية تحتاج وحدة قياس صريحة.' : 'Choose an existing target or leave the record for creation after approval. Non-steel products require an explicit unit.'}</p></div></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="border-y border-[#d7ddd5]"><th className="py-3 text-start">{locale === 'ar' ? 'النوع' : 'Entity'}</th><th className="py-3 text-start">{locale === 'ar' ? 'معرف المصدر' : 'Source key'}</th><th className="py-3 text-start">{locale === 'ar' ? 'بيان المصدر' : 'Source value'}</th><th className="py-3 text-start">{locale === 'ar' ? 'القرار والهدف' : 'Decision and target'}</th></tr></thead><tbody>{selectedRun.mappings.map((mapping) => <tr key={mapping.id} className="border-b border-[#e6e9e3]"><td className="py-3">{mapping.entity_type}</td><td className="py-3">{mapping.source_key}</td><td className="py-3">{mapping.payload?.source_name || mapping.payload?.source_value || '—'}</td><td className="py-3"><div className="flex flex-wrap gap-2"><select defaultValue={mapping.target_id || ''} onChange={(event) => saveMapping(mapping, event.target.value)} className="min-w-[220px] border border-[#c8c0b7] bg-white px-2 py-1.5"><option value="">{locale === 'ar' ? 'بدون هدف / إنشاء' : 'No target / create'}</option>{(mappingOptions[mapping.entity_type] || []).map((option) => <option key={option.id} value={option.id}>{option.label} · #{option.id}</option>)}</select>{mapping.entity_type === 'product' && mapping.decision === 'create_required' && <select defaultValue={mapping.payload?.source_attributes?.unit || ''} onChange={(event) => saveMapping(mapping, mapping.target_id, 'create_required', event.target.value)} className="border border-[#c8c0b7] bg-white px-2 py-1.5"><option value="">{locale === 'ar' ? 'اختر الوحدة' : 'Choose unit'}</option>{[['ton', 'طن'], ['kg', 'كجم'], ['gram', 'جرام'], ['piece', 'قطعة'], ['liter', 'لتر'], ['meter', 'متر'], ['box', 'صندوق'], ['bag', 'كيس'], ['other', 'أخرى']].map(([value, label]) => <option key={value} value={value}>{locale === 'ar' ? label : value}</option>)}</select>}{mapping.decision !== 'create_required' && <button type="button" onClick={() => saveMapping(mapping, null, 'create_required')} className="border border-[#9b6a1f] px-2 py-1.5 text-xs text-[#795316]">{locale === 'ar' ? 'إنشاء جديد' : 'Create new'}</button>}<span className="self-center text-xs text-[#68736b]">{mapping.decision}</span></div></td></tr>)}</tbody></table></div></section>}
++
++        <section className="mt-8 border-t border-[#d7ddd5] pt-5"><h2 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'عمليات النقل السابقة' : 'Migration runs'}</h2><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="border-y border-[#d7ddd5] text-start"><th className="py-3 text-start">{t('pf_migration_company')}</th><th className="py-3 text-start">{t('pf_migration_source')}</th><th className="py-3 text-start">{locale === 'ar' ? 'الفترة' : 'Range'}</th><th className="py-3 text-start">{locale === 'ar' ? 'الحالة' : 'Status'}</th><th className="py-3 text-start">{locale === 'ar' ? 'إجراء' : 'Action'}</th></tr></thead><tbody>{runs.data.length === 0 && <tr><td colSpan="5" className="py-6 text-center text-[#68736b]">{t('pf_migration_no_runs')}</td></tr>}{runs.data.map((run) => <tr key={run.id} className="border-b border-[#d7ddd5]"><td className="py-3">{run.company?.name} · #{run.company?.id}</td><td className="py-3">{run.source_name}</td><td className="py-3">{run.documents_from} → {run.documents_to}</td><td className="py-3">{run.status}</td><td className="py-3"><a href={`/super-admin/data-migrations/${run.id}`} className="font-semibold text-[#34795c]">{locale === 'ar' ? 'عرض' : 'View'}</a></td></tr>)}</tbody></table></div></section>
++        {api.stepUpDialog}
++    </SuperAdminLayout>;
++}
+diff --git a/resources/js/i18n-platform.js b/resources/js/i18n-platform.js
+index 91e2430..c7dfeb2 100644
+--- a/resources/js/i18n-platform.js
++++ b/resources/js/i18n-platform.js
+@@ -59,6 +59,7 @@ export const platformEn = {
+     pf_impact_codes: 'The old recovery codes stop working and new ones are shown once.', pf_impact_disable_mfa: 'Your account will rely on the password only.', pf_enroll_title: 'Set up your authenticator app', pf_enroll_steps: 'Add the key below to an authenticator app (or paste the link into one), then enter the 6-digit code to confirm.',
+     pf_secret_key: 'Secret key', pf_otpauth: 'Setup link', pf_confirm_enroll: 'Confirm and enable', pf_mfa_challenge: 'Two-step verification', pf_mfa_challenge_copy: 'Enter the code from your authenticator app or a recovery code to continue.',
+     platformOverview: 'Platform overview',
++    pf_nav_data_migration: 'Data migration', pf_data_migration: 'Data migration', pf_migration_intro: 'Import legacy operational data safely. Files are analyzed before any company data is changed.', pf_migration_company: 'Target company', pf_migration_source: 'Legacy source file', pf_migration_from: 'Documents from', pf_migration_to: 'Documents to', pf_migration_upload: 'Upload and analyze', pf_migration_no_runs: 'No migration runs yet.', pf_migration_source_hint: 'SQL or compressed SQL dump. It is stored privately and never executed.', pf_migration_summary: 'Analysis summary', pf_migration_candidates: 'Candidates', pf_migration_review: 'Needs review', pf_migration_master: 'Master data', pf_migration_no_source: 'Choose a source file first.',
+ };
+ 
+ export const platformAr = {
+@@ -121,4 +122,5 @@ export const platformAr = {
+     pf_impact_codes: 'تتوقف رموز الاسترداد القديمة وتُعرض رموز جديدة مرة واحدة.', pf_impact_disable_mfa: 'سيعتمد حسابك على كلمة المرور وحدها.', pf_enroll_title: 'إعداد تطبيق المصادقة', pf_enroll_steps: 'أضف المفتاح أدناه إلى تطبيق مصادقة (أو الصق الرابط فيه) ثم أدخل الرمز المكوّن من 6 أرقام للتأكيد.',
+     pf_secret_key: 'المفتاح السري', pf_otpauth: 'رابط الإعداد', pf_confirm_enroll: 'تأكيد وتفعيل', pf_mfa_challenge: 'التحقق بخطوتين', pf_mfa_challenge_copy: 'أدخل الرمز من تطبيق المصادقة أو رمز استرداد للمتابعة.',
+     platformOverview: 'نظرة عامة على المنصة',
++    pf_nav_data_migration: 'نقل البيانات', pf_data_migration: 'نقل البيانات', pf_migration_intro: 'انقل البيانات التشغيلية القديمة بأمان. يتم تحليل الملفات قبل تغيير أي بيانات في الشركة.', pf_migration_company: 'الشركة المستهدفة', pf_migration_source: 'ملف المصدر القديم', pf_migration_from: 'المستندات من', pf_migration_to: 'المستندات إلى', pf_migration_upload: 'رفع وتحليل', pf_migration_no_runs: 'لا توجد عمليات نقل بعد.', pf_migration_source_hint: 'ملف SQL أو SQL مضغوط. يُحفظ خاصًا ولا يتم تنفيذه.', pf_migration_summary: 'ملخص التحليل', pf_migration_candidates: 'مرشحة', pf_migration_review: 'تحتاج مراجعة', pf_migration_master: 'البيانات الأساسية', pf_migration_no_source: 'اختر ملف المصدر أولًا.',
+ };
+diff --git a/resources/js/navigation.js b/resources/js/navigation.js
+index e1c5894..e6505c4 100644
+--- a/resources/js/navigation.js
++++ b/resources/js/navigation.js
+@@ -75,6 +75,7 @@ export const platformNavigation = [
+         { id: 'platform-companies', label: 'pf_nav_companies', href: '/super-admin/companies', permission: 'platform.companies.view', icon: 'branches' },
+         { id: 'platform-registrations', label: 'pf_nav_registrations', href: '/super-admin/registrations', permission: 'platform.registrations.manage', icon: 'list' },
+         { id: 'platform-requests', label: 'pf_nav_requests', href: '/super-admin/requests', permission: 'platform.subscription_requests.manage', icon: 'document' },
++        { id: 'platform-data-migration', label: 'pf_nav_data_migration', href: '/super-admin/data-migrations', permission: 'platform.data_migration.view', icon: 'activity' },
+     ] },
+     { id: 'platform-commercial', label: 'pf_group_commercial', icon: 'ledger', expanded: true, items: [
+         { id: 'platform-subscriptions', label: 'pf_nav_subscriptions', href: '/super-admin/subscriptions', permission: 'platform.subscriptions.view', icon: 'document' },
+diff --git a/routes/platform.php b/routes/platform.php
+index bd14f46..f2fbe00 100644
+--- a/routes/platform.php
++++ b/routes/platform.php
+@@ -5,6 +5,7 @@
+ use App\Http\Controllers\Platform\CatalogController;
+ use App\Http\Controllers\Platform\CompanyController;
+ use App\Http\Controllers\Platform\DashboardController;
++use App\Http\Controllers\Platform\DataMigrationController;
+ use App\Http\Controllers\Platform\DurationController;
+ use App\Http\Controllers\Platform\LicenseController;
+ use App\Http\Controllers\Platform\MfaController;
+@@ -38,6 +39,15 @@
+             Route::post("/companies/{company}/{$action}", [CompanyController::class, $action])->middleware(['platform.can:companies.lifecycle', 'platform.stepup', 'throttle:platform.write'])->name("companies.{$action}");
+         }
+ 
++        Route::get('/data-migrations', [DataMigrationController::class, 'index'])->middleware('platform.can:data_migration.view')->name('data-migrations.index');
++        Route::post('/data-migrations', [DataMigrationController::class, 'store'])->middleware(['platform.can:data_migration.manage', 'throttle:platform.write'])->name('data-migrations.store');
++        Route::get('/data-migrations/{run}', [DataMigrationController::class, 'show'])->middleware('platform.can:data_migration.view')->name('data-migrations.show');
++        Route::post('/data-migrations/{run}/analyze', [DataMigrationController::class, 'analyze'])->middleware(['platform.can:data_migration.manage', 'throttle:platform.write'])->name('data-migrations.analyze');
++        Route::put('/data-migrations/{run}/mappings/{mapping}', [DataMigrationController::class, 'updateMapping'])->middleware(['platform.can:data_migration.manage', 'throttle:platform.write'])->name('data-migrations.mappings.update');
++        Route::post('/data-migrations/{run}/prepare-masters', [DataMigrationController::class, 'prepareMasters'])->middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->name('data-migrations.prepare-masters');
++        Route::post('/data-migrations/{run}/prepare-openings', [DataMigrationController::class, 'prepareOpeningBalances'])->middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->name('data-migrations.prepare-openings');
++        Route::post('/data-migrations/{run}/execute-invoices', [DataMigrationController::class, 'executeInvoices'])->middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->name('data-migrations.execute-invoices');
++
+         Route::get('/registrations', [PlatformRegistrationController::class, 'index'])->middleware('platform.can:registrations.manage')->name('registrations.index');
+         Route::post('/registrations/{registration}/approve', [PlatformRegistrationController::class, 'approve'])->middleware(['platform.can:registrations.manage', 'throttle:platform.write'])->name('registrations.approve');
+         Route::post('/registrations/{registration}/reject', [PlatformRegistrationController::class, 'reject'])->middleware(['platform.can:registrations.manage', 'throttle:platform.write'])->name('registrations.reject');
+diff --git a/tests/Feature/DataMigrationCenterTest.php b/tests/Feature/DataMigrationCenterTest.php
+new file mode 100644
+index 0000000..e1eeb0b
+--- /dev/null
++++ b/tests/Feature/DataMigrationCenterTest.php
+@@ -0,0 +1,200 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Tests\Feature;
++
++use App\Models\Account;
++use App\Models\Branch;
++use App\Models\Company;
++use App\Models\CustomerSupplier;
++use App\Models\DataMigrationMapping;
++use App\Models\DataMigrationRecord;
++use App\Models\DataMigrationRun;
++use App\Models\Diameter;
++use App\Models\Product;
++use App\Models\ProductType;
++use App\Models\PurchaseBill;
++use App\Models\User;
++use App\Models\Warehouse;
++use App\Services\AccountingFoundationService;
++use App\Services\AccountingService;
++use App\Services\MigrationInvoiceExecutionService;
++use App\Services\MigrationMasterDataService;
++use App\Services\MigrationOpeningBalanceService;
++use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Http\UploadedFile;
++use Illuminate\Support\Facades\Storage;
++use Tests\TestCase;
++
++final class DataMigrationCenterTest extends TestCase
++{
++    use RefreshDatabase;
++
++    private int $sequence = 0;
++
++    private function admin(string $role): User
++    {
++        $this->sequence++;
++
++        return User::query()->create([
++            'name' => "Migration Admin {$this->sequence}",
++            'email' => "migration-{$this->sequence}@example.test",
++            'password' => 'Correct-horse-1',
++            'account_type' => 'super_admin',
++            'platform_role' => $role,
++            'status' => 'active',
++        ]);
++    }
++
++    public function test_only_platform_owner_can_view_and_analyze_a_source(): void
++    {
++        Storage::fake('local');
++        $company = Company::query()->create(['name' => 'Target company', 'status' => 'active']);
++        $account = Account::query()->create(['company_id' => $company->id, 'code' => '1201', 'name' => 'Customers', 'account_type' => 'asset']);
++        $targetParty = CustomerSupplier::query()->create(['company_id' => $company->id, 'account_id' => $account->id, 'parent_account_id' => $account->id, 'name' => 'Customer', 'is_customer' => true, 'status' => 'active']);
++        $owner = $this->admin('owner');
++        $support = $this->admin('support');
++
++        $this->actingAs($support)->get('/super-admin/data-migrations')->assertForbidden();
++        $this->actingAs($owner)->get('/super-admin/data-migrations')->assertOk();
++
++        $sourceSql = <<<'SQL'
++INSERT INTO `customer` (`id_customer`, `name_customer`) VALUES (1, 'Customer');
++INSERT INTO `buy` (`id_buy`, `date`, `id_import`, `id_type`, `id_stores`) VALUES (10, '2026-10-02', 2, 3, 5);
++INSERT INTO `details_buy` (`id_details_buy`, `id_buy`, `id_categories`, `id_type`, `id_stores`, `kg`, `no`, `price`, `note`) VALUES (100, 10, 4, 3, 5, 1000, 1, 20, 'ok');
++SQL;
++        $source = UploadedFile::fake()->createWithContent('legacy.sql', $sourceSql);
++        $this->actingAs($owner)->post('/super-admin/data-migrations', [
++            'company_id' => $company->id,
++            'documents_from' => '2026-10-01',
++            'documents_to' => '2026-10-18',
++            'opening_balance_as_of' => '2026-09-30',
++            'mode' => 'draft',
++            'source' => $source,
++        ])->assertRedirect();
++
++        $run = DataMigrationRun::query()->firstOrFail();
++        $this->assertSame(DataMigrationRun::STATUS_UPLOADED, $run->status);
++        Storage::disk('local')->assertExists($run->source_path);
++        $this->assertDatabaseMissing('data_migration_records', ['run_id' => $run->id]);
++
++        $this->actingAs($owner)->postJson("/super-admin/data-migrations/{$run->id}/analyze")
++            ->assertOk()
++            ->assertJsonPath('run.status', DataMigrationRun::STATUS_REVIEW)
++            ->assertJsonPath('run.summary.master_counts.customers', 1)
++            ->assertJsonPath('run.summary.mappings.customers.matched', 1);
++
++        $this->actingAs($owner)->postJson("/super-admin/data-migrations/{$run->id}/analyze")->assertOk();
++        $this->assertDatabaseCount('data_migration_records', 1);
++        $this->assertDatabaseCount('data_migration_mappings', 1);
++
++        $mapping = DataMigrationMapping::query()->firstOrFail();
++        $foreignCompany = Company::query()->create(['name' => 'Foreign company', 'status' => 'active']);
++        $foreignAccount = Account::query()->create(['company_id' => $foreignCompany->id, 'code' => '1201', 'name' => 'Customers', 'account_type' => 'asset']);
++        $foreignParty = CustomerSupplier::query()->create(['company_id' => $foreignCompany->id, 'account_id' => $foreignAccount->id, 'parent_account_id' => $foreignAccount->id, 'name' => 'Customer', 'is_customer' => true, 'status' => 'active']);
++        $this->actingAs($owner)->putJson("/super-admin/data-migrations/{$run->id}/mappings/{$mapping->id}", ['decision' => 'matched', 'target_id' => $foreignParty->id])->assertStatus(422);
++        $this->actingAs($owner)->putJson("/super-admin/data-migrations/{$run->id}/mappings/{$mapping->id}", ['decision' => 'matched', 'target_id' => $targetParty->id])->assertOk();
++
++        $parent = Account::query()->create(['company_id' => $company->id, 'code' => '1.2', 'name' => 'Current assets', 'account_type' => 'asset', 'is_system' => true, 'is_active' => true]);
++        $createMapping = DataMigrationMapping::query()->create([
++            'run_id' => $run->id, 'entity_type' => 'customer', 'source_table' => 'customer', 'source_key' => '2',
++            'target_type' => 'CustomerSupplier', 'decision' => 'create_required', 'confidence' => 0,
++            'payload' => ['source_name' => 'New customer', 'source_attributes' => ['phone' => '01000000000']],
++        ]);
++        $counts = app(MigrationMasterDataService::class)->createApproved($run, $owner);
++        $this->assertSame(1, $counts['customers']);
++        $this->assertSame('matched', $createMapping->fresh()->decision);
++        $this->assertDatabaseHas('customer_suppliers', ['company_id' => $company->id, 'name' => 'New customer', 'is_customer' => 1]);
++
++        $this->assertDatabaseHas('audit_logs', ['event' => 'platform.data_migration_uploaded']);
++        $this->assertDatabaseHas('audit_logs', ['event' => 'platform.data_migration_analyzed']);
++    }
++
++    public function test_payment_rows_are_staged_as_receipts_without_writing_accounting_data(): void
++    {
++        Storage::fake('local');
++        $company = Company::query()->create(['name' => 'Payment staging company', 'status' => 'active']);
++        $owner = $this->admin('owner');
++        $sourceSql = <<<'SQL'
++INSERT INTO `customer` (`id_customer`, `name_customer`) VALUES (1, 'Customer');
++INSERT INTO `name_treasury` (`id_name_treasury`, `name_treasury`) VALUES (1, 'Main cashbox');
++INSERT INTO `treasury` (`id_treasury`, `id_name_treasury`) VALUES (2, 1);
++INSERT INTO `sales` (`id_sales`, `insert_date`, `id_customer`, `bayan`, `cash`, `id_cash`) VALUES (50, '2026-10-05', 1, 'دفعة من العميل', 1250, 2);
++SQL;
++        $source = UploadedFile::fake()->createWithContent('payments.sql', $sourceSql);
++
++        $this->actingAs($owner)->post('/super-admin/data-migrations', ['company_id' => $company->id, 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'source' => $source])->assertRedirect();
++        $run = DataMigrationRun::query()->firstOrFail();
++        $this->actingAs($owner)->postJson("/super-admin/data-migrations/{$run->id}/analyze")->assertOk()->assertJsonPath('run.summary.documents.receipt_candidates', 1);
++
++        $record = DataMigrationRecord::query()->where('entity_type', 'receipt_document')->firstOrFail();
++        $this->assertSame(DataMigrationRecord::STATUS_READY, $record->status);
++        $this->assertSame('1', $record->normalized_payload['cashbox_source_id']);
++        $this->assertDatabaseMissing('receipts', ['company_id' => $company->id]);
++    }
++
++    public function test_approved_purchase_record_is_executed_once_with_journal_and_stock(): void
++    {
++        $company = Company::query()->create(['name' => 'Execution company', 'status' => 'active']);
++        $owner = $this->admin('owner');
++        app(AccountingFoundationService::class)->seedCompany($company, $owner);
++        $branch = Branch::query()->create(['company_id' => $company->id, 'code' => 'MAIN', 'name' => 'Main', 'status' => 'active']);
++        $warehouse = Warehouse::query()->create(['company_id' => $company->id, 'branch_id' => $branch->id, 'code' => 'WH1', 'name' => 'Main warehouse', 'status' => 'active']);
++        $supplierParent = Account::query()->where('company_id', $company->id)->where('code', '2.1')->firstOrFail();
++        $supplier = app(AccountingService::class)->createParty($company, $owner, ['parent_account_id' => $supplierParent->id, 'name' => 'Imported supplier', 'is_customer' => false, 'is_supplier' => true]);
++        $type = ProductType::query()->create(['company_id' => $company->id, 'name' => 'Imported steel', 'kind' => 'steel', 'status' => 'active']);
++        $diameter = Diameter::query()->create(['company_id' => $company->id, 'millimeters' => 12]);
++        $product = Product::query()->create(['company_id' => $company->id, 'product_type_id' => $type->id, 'diameter_id' => $diameter->id, 'sku' => 'LEGACY-1-1:1', 'name' => 'Imported steel 12 mm', 'unit' => 'ton', 'minimum_stock' => 0, 'status' => 'active']);
++        $run = DataMigrationRun::query()->create(['company_id' => $company->id, 'created_by' => $owner->id, 'source_name' => 'legacy.sql', 'source_disk' => 'local', 'source_path' => 'unused.sql', 'source_hash' => str_repeat('a', 64), 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_READY]);
++        DataMigrationMapping::query()->insert([
++            ['run_id' => $run->id, 'entity_type' => 'supplier', 'source_table' => 'import', 'source_key' => '7', 'target_type' => 'CustomerSupplier', 'target_id' => $supplier->id, 'decision' => 'matched', 'confidence' => 1, 'created_at' => now(), 'updated_at' => now()],
++            ['run_id' => $run->id, 'entity_type' => 'warehouse', 'source_table' => 'stores', 'source_key' => '2', 'target_type' => 'Warehouse', 'target_id' => $warehouse->id, 'decision' => 'matched', 'confidence' => 1, 'created_at' => now(), 'updated_at' => now()],
++            ['run_id' => $run->id, 'entity_type' => 'product', 'source_table' => 'legacy_product', 'source_key' => '3:4', 'target_type' => 'Product', 'target_id' => $product->id, 'decision' => 'matched', 'confidence' => 1, 'created_at' => now(), 'updated_at' => now()],
++        ]);
++        DataMigrationRecord::query()->create(['run_id' => $run->id, 'entity_type' => 'purchase_document', 'source_table' => 'buy', 'source_id' => '10', 'source_date' => '2026-10-02', 'source_number' => 'legacy-buy-10', 'normalized_payload' => ['source_document_type' => 'purchase', 'supplier_source_id' => '7', 'warehouse_source_id' => '2', 'supplier_bill_number' => 'LEGACY-PB-10', 'date' => '2026-10-02', 'total_factory_weight' => 1, 'total_actual_weight' => 1, 'total_packages' => 1, 'lines' => [['source_type_id' => '3', 'source_category_id' => '4', 'factory_weight' => 1, 'actual_weight' => 1, 'packages' => 1, 'unit_price' => 100, 'notes' => 'legacy']], 'legacy_note' => 'Legacy purchase'], 'status' => DataMigrationRecord::STATUS_READY, 'target_type' => 'PurchaseBill', 'fingerprint' => str_repeat('b', 64)]);
++
++        $counts = app(MigrationInvoiceExecutionService::class)->execute($run, $owner);
++        $this->assertSame(1, $counts['created']);
++        $this->assertDatabaseHas('purchase_bills', ['company_id' => $company->id, 'status' => 'approved', 'supplier_bill_number' => 'LEGACY-PB-10']);
++        $this->assertDatabaseHas('journal_entries', ['company_id' => $company->id, 'source_type' => PurchaseBill::class]);
++        $this->assertDatabaseHas('stock_movements', ['company_id' => $company->id, 'product_id' => $product->id, 'movement_type' => 'purchase_in']);
++        $this->assertSame(DataMigrationRecord::STATUS_CREATED, DataMigrationRecord::query()->firstOrFail()->status);
++    }
++
++    public function test_opening_balances_post_party_and_stock_once_from_cutoff_snapshot(): void
++    {
++        Storage::fake('local');
++        $company = Company::query()->create(['name' => 'Opening company', 'status' => 'active']);
++        $owner = $this->admin('owner');
++        app(AccountingFoundationService::class)->seedCompany($company, $owner);
++        $branch = Branch::query()->create(['company_id' => $company->id, 'code' => 'MAIN', 'name' => 'Main', 'status' => 'active']);
++        $warehouse = Warehouse::query()->create(['company_id' => $company->id, 'branch_id' => $branch->id, 'code' => 'WH1', 'name' => 'Main warehouse', 'status' => 'active']);
++        $supplierParent = Account::query()->where('company_id', $company->id)->where('code', '2.1')->firstOrFail();
++        $supplier = app(AccountingService::class)->createParty($company, $owner, ['parent_account_id' => $supplierParent->id, 'name' => 'Opening supplier', 'is_customer' => false, 'is_supplier' => true]);
++        $type = ProductType::query()->create(['company_id' => $company->id, 'name' => 'Opening steel', 'kind' => 'steel', 'status' => 'active']);
++        $diameter = Diameter::query()->create(['company_id' => $company->id, 'millimeters' => 12]);
++        $product = Product::query()->create(['company_id' => $company->id, 'product_type_id' => $type->id, 'diameter_id' => $diameter->id, 'sku' => 'OPENING-1', 'name' => 'Opening steel 12 mm', 'unit' => 'ton', 'minimum_stock' => 0, 'status' => 'active']);
++        $sourceSql = <<<'SQL'
++INSERT INTO `buy` (`id_buy`, `date`, `id_import`, `id_stores`, `bayan`, `exp`) VALUES (1, '2026-09-30', 7, 2, 'purchase', 0);
++INSERT INTO `details_buy` (`id_details_buy`, `id_buy`, `id_categories`, `id_type`, `kg`, `price`) VALUES (10, 1, 4, 3, 1000, 100);
++INSERT INTO `store` (`id_stoer`, `id_stores`, `id_details_buy`, `buy`, `date_add`) VALUES (1, 2, 10, '1000', '2026-09-30');
++SQL;
++        $path = 'data-migrations/'.$company->id.'/opening.sql';
++        Storage::disk('local')->put($path, $sourceSql);
++        $run = DataMigrationRun::query()->create(['company_id' => $company->id, 'created_by' => $owner->id, 'source_name' => 'opening.sql', 'source_disk' => 'local', 'source_path' => $path, 'source_hash' => hash('sha256', $sourceSql), 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_REVIEW]);
++        DataMigrationMapping::query()->insert([
++            ['run_id' => $run->id, 'entity_type' => 'supplier', 'source_table' => 'import', 'source_key' => '7', 'target_type' => 'CustomerSupplier', 'target_id' => $supplier->id, 'decision' => 'matched', 'confidence' => 1, 'created_at' => now(), 'updated_at' => now()],
++            ['run_id' => $run->id, 'entity_type' => 'warehouse', 'source_table' => 'stores', 'source_key' => '2', 'target_type' => 'Warehouse', 'target_id' => $warehouse->id, 'decision' => 'matched', 'confidence' => 1, 'created_at' => now(), 'updated_at' => now()],
++            ['run_id' => $run->id, 'entity_type' => 'product', 'source_table' => 'legacy_product', 'source_key' => '3:4', 'target_type' => 'Product', 'target_id' => $product->id, 'decision' => 'matched', 'confidence' => 1, 'created_at' => now(), 'updated_at' => now()],
++        ]);
++
++        $result = app(MigrationOpeningBalanceService::class)->post($run, $owner);
++        $this->assertSame(1, $result['parties_posted']);
++        $this->assertSame(1, $result['stock_items_posted']);
++        $this->assertDatabaseHas('customer_suppliers', ['id' => $supplier->id, 'opening_balance' => 100, 'opening_balance_direction' => 'credit']);
++        $this->assertDatabaseHas('stock_balances', ['warehouse_id' => $warehouse->id, 'product_id' => $product->id, 'quantity' => 1, 'inventory_value' => 100]);
++        $this->assertDatabaseHas('stock_movements', ['source_type' => DataMigrationRun::class, 'source_id' => $run->id, 'movement_type' => 'opening_balance']);
++        $this->assertDatabaseHas('journal_entries', ['source_type' => DataMigrationRun::class, 'source_id' => $run->id]);
++    }
++}
+diff --git a/tests/Unit/LegacySqlSnapshotParserTest.php b/tests/Unit/LegacySqlSnapshotParserTest.php
+new file mode 100644
+index 0000000..4115747
+--- /dev/null
++++ b/tests/Unit/LegacySqlSnapshotParserTest.php
+@@ -0,0 +1,62 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Tests\Unit;
++
++use App\Services\LegacyAnalysisService;
++use App\Services\LegacySqlSnapshotParser;
++use PHPUnit\Framework\TestCase;
++
++final class LegacySqlSnapshotParserTest extends TestCase
++{
++    public function test_parser_reads_only_allowed_insert_tables_and_preserves_values(): void
++    {
++        $path = tempnam(sys_get_temp_dir(), 'ezaki-legacy-');
++        file_put_contents($path, <<<'SQL'
++CREATE TABLE `customer` (`id_customer` int, `name_customer` varchar(60));
++INSERT INTO `customer` (`id_customer`, `name_customer`) VALUES (1, 'عميل، أول'), (2, 'O\'Reilly');
++INSERT INTO `users` (`id`, `name`) VALUES (99, 'must not be read');
++SQL);
++
++        try {
++            $tables = (new LegacySqlSnapshotParser)->parse($path);
++            $this->assertCount(2, $tables['customer']);
++            $this->assertSame(1, $tables['customer'][0]['id_customer']);
++            $this->assertSame('عميل، أول', $tables['customer'][0]['name_customer']);
++            $this->assertSame("O'Reilly", $tables['customer'][1]['name_customer']);
++            $this->assertArrayNotHasKey('users', $tables);
++        } finally {
++            @unlink($path);
++        }
++    }
++
++    public function test_analysis_classifies_invoice_candidates_and_review_records(): void
++    {
++        $path = tempnam(sys_get_temp_dir(), 'ezaki-legacy-');
++        file_put_contents($path, <<<'SQL'
++INSERT INTO `customer` (`id_customer`, `name_customer`) VALUES (1, 'Customer');
++INSERT INTO `import` (`id_import`, `name`) VALUES (2, 'Supplier');
++INSERT INTO `type_mm` (`id_type`, `name`) VALUES (3, 'Steel');
++INSERT INTO `categories` (`id_categories`, `categories`) VALUES (4, '12');
++INSERT INTO `stores` (`id_stores`, `name_stores`) VALUES (5, 'Main');
++INSERT INTO `buy` (`id_buy`, `date`, `id_import`, `id_type`, `id_stores`) VALUES (10, '2026-10-02', 2, 3, 5), (11, '2026-10-03', 2, NULL, NULL);
++INSERT INTO `details_buy` (`id_details_buy`, `id_buy`, `id_categories`, `id_type`, `id_stores`, `kg`, `no`, `price`, `note`) VALUES (100, 10, 4, 3, 5, 1000, 1, 20, 'ok');
++INSERT INTO `sales` (`id_sales`, `insert_date`, `id_customer`, `id_stores`) VALUES (20, '2026-10-04', 1, 5), (21, '2026-10-05', NULL, NULL);
++INSERT INTO `details_sales` (`id_details_sales`, `id_sales`, `id_categories`, `id_type`, `id_stores`, `kg`, `price`, `total`, `note`) VALUES (200, 20, 4, 3, 5, 500, 25, 12500, 'ok');
++SQL);
++
++        try {
++            $summary = (new LegacyAnalysisService(new LegacySqlSnapshotParser))->analyze($path, '2026-10-01', '2026-10-18');
++            $this->assertSame(1, $summary['documents']['purchase_candidates']);
++            $this->assertSame(1, $summary['documents']['purchase_candidate_lines']);
++            $this->assertSame(1, $summary['documents']['purchase_needs_review']);
++            $this->assertSame(1, $summary['documents']['sales_candidates']);
++            $this->assertSame(1, $summary['documents']['sales_candidate_lines']);
++            $this->assertSame(1, $summary['documents']['sales_needs_review']);
++            $this->assertSame(1, $summary['master_counts']['customers']);
++        } finally {
++            @unlink($path);
++        }
++    }
++}

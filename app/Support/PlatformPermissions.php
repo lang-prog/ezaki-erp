@@ -12,6 +12,7 @@ final class PlatformPermissions
         'subscriptions.view', 'subscriptions.payments', 'subscriptions.plan_change', 'subscriptions.limits', 'subscription_requests.manage',
         'plans.manage', 'coupons.manage', 'licenses.view', 'licenses.manage', 'admins.view', 'admins.manage',
         'settings.view', 'settings.manage', 'reports.view', 'audit.view',
+        'data_migration.view', 'data_migration.manage', 'data_migration.execute',
     ];
 
     public const ROLES = [

@@ -75,6 +75,7 @@ export const platformNavigation = [
         { id: 'platform-companies', label: 'pf_nav_companies', href: '/super-admin/companies', permission: 'platform.companies.view', icon: 'branches' },
         { id: 'platform-registrations', label: 'pf_nav_registrations', href: '/super-admin/registrations', permission: 'platform.registrations.manage', icon: 'list' },
         { id: 'platform-requests', label: 'pf_nav_requests', href: '/super-admin/requests', permission: 'platform.subscription_requests.manage', icon: 'document' },
+        { id: 'platform-data-migration', label: 'pf_nav_data_migration', href: '/super-admin/data-migrations', permission: 'platform.data_migration.view', icon: 'activity' },
     ] },
     { id: 'platform-commercial', label: 'pf_group_commercial', icon: 'ledger', expanded: true, items: [
         { id: 'platform-subscriptions', label: 'pf_nav_subscriptions', href: '/super-admin/subscriptions', permission: 'platform.subscriptions.view', icon: 'document' },
