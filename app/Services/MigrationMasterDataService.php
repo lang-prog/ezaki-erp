@@ -86,11 +86,27 @@ final class MigrationMasterDataService
 
     private function createDiameter(Company $company, string $value): int
     {
-        if (! is_numeric($value) || (float) $value <= 0) {
+        $numericValue = $this->diameterValue($value);
+        if ($numericValue === null || $numericValue <= 0) {
             throw ValidationException::withMessages(['mapping' => 'Only numeric categories can be created as diameters automatically.']);
         }
 
-        return Diameter::query()->firstOrCreate(['company_id' => $company->id, 'millimeters' => (float) $value])->id;
+        return Diameter::query()->firstOrCreate(['company_id' => $company->id, 'millimeters' => $numericValue])->id;
+    }
+
+    private function diameterValue(string $value): ?float
+    {
+        $normalized = strtr(trim($value), [
+            '٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4',
+            '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
+            '٫' => '.', '٬' => ',',
+        ]);
+
+        if (! preg_match('/^\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:مم|ملم|mm|㎜)?\s*$/iu', $normalized, $matches)) {
+            return null;
+        }
+
+        return (float) str_replace(',', '.', $matches[1]);
     }
 
     /** @param array<string, mixed> $attributes */

@@ -111,6 +111,20 @@ SQL;
         $this->assertDatabaseHas('audit_logs', ['event' => 'platform.data_migration_analyzed']);
     }
 
+    public function test_legacy_diameter_with_mm_suffix_is_created_as_numeric_value(): void
+    {
+        $company = Company::query()->create(['name' => 'Diameter company', 'status' => 'active']);
+        $owner = $this->admin('owner');
+        $run = DataMigrationRun::query()->create(['company_id' => $company->id, 'created_by' => $owner->id, 'source_name' => 'legacy.sql', 'source_disk' => 'local', 'source_path' => 'unused.sql', 'source_hash' => str_repeat('d', 64), 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_REVIEW]);
+        $mapping = DataMigrationMapping::query()->create(['run_id' => $run->id, 'entity_type' => 'category', 'source_table' => 'categories', 'source_key' => '7', 'target_type' => 'Diameter', 'decision' => 'create_required', 'confidence' => 0, 'payload' => ['source_value' => '٨مم']]);
+
+        $counts = app(MigrationMasterDataService::class)->createApproved($run, $owner);
+
+        $this->assertSame(1, $counts['diameters']);
+        $this->assertDatabaseHas('diameters', ['company_id' => $company->id, 'millimeters' => 8]);
+        $this->assertSame('matched', $mapping->fresh()->decision);
+    }
+
     public function test_payment_rows_are_staged_as_receipts_without_writing_accounting_data(): void
     {
         Storage::fake('local');
