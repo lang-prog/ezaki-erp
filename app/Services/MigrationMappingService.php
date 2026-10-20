@@ -92,12 +92,20 @@ final class MigrationMappingService
             $numericValue = $this->diameterValue($value);
             $normalized = $numericValue !== null ? $this->normalizeNumber($numericValue) : null;
             $targetId = $normalized !== null ? ($normalizedTargets[$normalized] ?? null) : null;
-            $decision = $numericValue === null ? 'needs_review' : ($targetId ? 'matched' : 'create_required');
+            // A text category such as "سلك رباط" or "اسمنت" is a product
+            // attribute, not a Diameter. It must never be sent to the
+            // automatic Diameter creator. The related product still needs a
+            // user-selected unit and is handled by mapProducts().
+            $decision = $numericValue === null ? 'excluded' : ($targetId ? 'matched' : 'create_required');
             $existing = $this->findMapping($run, 'category', 'categories', $key);
             $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
             if ($reviewed) {
                 $targetId = $existing->target_id;
                 $decision = $existing->decision;
+                if ($numericValue === null && in_array($decision, ['create_required', 'needs_review'], true)) {
+                    $decision = 'excluded';
+                    $targetId = null;
+                }
             }
             $counts[$decision]++;
             DataMigrationMapping::query()->updateOrCreate(
@@ -152,7 +160,11 @@ final class MigrationMappingService
 
                 return $this->normalize((string) $product->name) === $this->normalize($productName);
             });
-            $decision = $target ? 'matched' : ($typeMapping->decision === 'matched' && ($numericCategory === null || $categoryMapping?->decision === 'matched') ? 'create_required' : 'needs_review');
+            $categoryApproved = $numericCategory === null
+                ? in_array($categoryMapping?->decision, ['excluded', 'matched'], true)
+                : $categoryMapping?->decision === 'matched';
+            $typeApproved = in_array($typeMapping->decision, ['matched', 'create_required'], true);
+            $decision = $target ? 'matched' : ($typeApproved && $categoryApproved ? 'create_required' : 'needs_review');
             if ($reviewed) {
                 $target = $existing->target_id ? $products->get((int) $existing->target_id) : null;
                 $decision = $existing->decision;
@@ -170,7 +182,7 @@ final class MigrationMappingService
     /** @return array<string, int> */
     private function emptyCounts(): array
     {
-        return ['matched' => 0, 'needs_review' => 0, 'create_required' => 0];
+        return ['matched' => 0, 'needs_review' => 0, 'create_required' => 0, 'excluded' => 0];
     }
 
     private function findMapping(DataMigrationRun $run, string $entity, string $sourceTable, string $sourceKey): ?DataMigrationMapping

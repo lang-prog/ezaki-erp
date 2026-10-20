@@ -1,0 +1,304 @@
+diff --git a/app/Services/MigrationMappingService.php b/app/Services/MigrationMappingService.php
+index 3d5a24c..f8b514c 100644
+--- a/app/Services/MigrationMappingService.php
++++ b/app/Services/MigrationMappingService.php
+@@ -92,12 +92,20 @@ private function mapCategories(DataMigrationRun $run, array $rows, int $companyI
+             $numericValue = $this->diameterValue($value);
+             $normalized = $numericValue !== null ? $this->normalizeNumber($numericValue) : null;
+             $targetId = $normalized !== null ? ($normalizedTargets[$normalized] ?? null) : null;
+-            $decision = $numericValue === null ? 'needs_review' : ($targetId ? 'matched' : 'create_required');
++            // A text category such as "سلك رباط" or "اسمنت" is a product
++            // attribute, not a Diameter. It must never be sent to the
++            // automatic Diameter creator. The related product still needs a
++            // user-selected unit and is handled by mapProducts().
++            $decision = $numericValue === null ? 'excluded' : ($targetId ? 'matched' : 'create_required');
+             $existing = $this->findMapping($run, 'category', 'categories', $key);
+             $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
+             if ($reviewed) {
+                 $targetId = $existing->target_id;
+                 $decision = $existing->decision;
++                if ($numericValue === null && in_array($decision, ['create_required', 'needs_review'], true)) {
++                    $decision = 'excluded';
++                    $targetId = null;
++                }
+             }
+             $counts[$decision]++;
+             DataMigrationMapping::query()->updateOrCreate(
+@@ -152,7 +160,11 @@ private function mapProducts(DataMigrationRun $run, array $snapshot, int $compan
+ 
+                 return $this->normalize((string) $product->name) === $this->normalize($productName);
+             });
+-            $decision = $target ? 'matched' : ($typeMapping->decision === 'matched' && ($numericCategory === null || $categoryMapping?->decision === 'matched') ? 'create_required' : 'needs_review');
++            $categoryApproved = $numericCategory === null
++                ? in_array($categoryMapping?->decision, ['excluded', 'matched'], true)
++                : $categoryMapping?->decision === 'matched';
++            $typeApproved = in_array($typeMapping->decision, ['matched', 'create_required'], true);
++            $decision = $target ? 'matched' : ($typeApproved && $categoryApproved ? 'create_required' : 'needs_review');
+             if ($reviewed) {
+                 $target = $existing->target_id ? $products->get((int) $existing->target_id) : null;
+                 $decision = $existing->decision;
+@@ -170,7 +182,7 @@ private function mapProducts(DataMigrationRun $run, array $snapshot, int $compan
+     /** @return array<string, int> */
+     private function emptyCounts(): array
+     {
+-        return ['matched' => 0, 'needs_review' => 0, 'create_required' => 0];
++        return ['matched' => 0, 'needs_review' => 0, 'create_required' => 0, 'excluded' => 0];
+     }
+ 
+     private function findMapping(DataMigrationRun $run, string $entity, string $sourceTable, string $sourceKey): ?DataMigrationMapping
+diff --git a/app/Services/MigrationMasterDataService.php b/app/Services/MigrationMasterDataService.php
+index bac380a..09ae111 100644
+--- a/app/Services/MigrationMasterDataService.php
++++ b/app/Services/MigrationMasterDataService.php
+@@ -14,6 +14,7 @@
+ use App\Models\ProductType;
+ use App\Models\User;
+ use App\Models\Warehouse;
++use Illuminate\Support\Collection;
+ use Illuminate\Support\Facades\DB;
+ use Illuminate\Support\Str;
+ use Illuminate\Validation\ValidationException;
+@@ -26,42 +27,113 @@ public function __construct(private readonly AccountingService $accounting) {}
+     public function createApproved(DataMigrationRun $run, User $actor): array
+     {
+         $company = Company::query()->findOrFail($run->company_id);
+-        $counts = ['customers' => 0, 'suppliers' => 0, 'product_types' => 0, 'diameters' => 0, 'warehouses' => 0];
++        $counts = ['customers' => 0, 'suppliers' => 0, 'product_types' => 0, 'diameters' => 0, 'warehouses' => 0, 'products' => 0, 'cashboxes' => 0, 'banks' => 0];
++        $this->excludeTextCategories($run);
+ 
+         DB::transaction(function () use ($run, $actor, $company, &$counts): void {
+-            DataMigrationMapping::query()
++            $mappings = DataMigrationMapping::query()
+                 ->where('run_id', $run->id)
+                 ->where('decision', 'create_required')
+                 ->lockForUpdate()
+                 ->get()
+-                ->each(function (DataMigrationMapping $mapping) use ($actor, $company, &$counts): void {
+-                    $payload = $mapping->payload ?? [];
+-                    $attributes = $payload['source_attributes'] ?? [];
+-                    $name = trim((string) ($payload['source_name'] ?? ''));
+-                    if ($name === '' && $mapping->entity_type !== 'category') {
+-                        throw ValidationException::withMessages(['mapping' => 'A source name is required before creating master data.']);
+-                    }
+-
+-                    [$targetId, $countKey] = match ($mapping->entity_type) {
+-                        'customer' => [$this->createParty($company, $actor, $name, $attributes, true), 'customers'],
+-                        'supplier' => [$this->createParty($company, $actor, $name, $attributes, false), 'suppliers'],
+-                        'product_type' => [ProductType::query()->create(['company_id' => $company->id, 'name' => $name, 'kind' => $attributes['kind'] ?? 'other', 'status' => 'active'])->id, 'product_types'],
+-                        'category' => [$this->createDiameter($company, (string) ($payload['source_value'] ?? '')), 'diameters'],
+-                        'product' => [$this->createProduct($run, $company, $mapping, $name, $attributes), 'products'],
+-                        'warehouse' => [$this->createWarehouse($company, $mapping, $name, $attributes), 'warehouses'],
+-                        'cashbox' => [$this->createCashbox($company, $actor, $name), 'cashboxes'],
+-                        'bank' => [$this->createBank($company, $actor, $attributes), 'banks'],
+-                        default => throw ValidationException::withMessages(['mapping' => 'This mapping type cannot be created automatically.']),
+-                    };
+-                    $payload['reviewed'] = true;
+-                    $mapping->forceFill(['target_id' => $targetId, 'decision' => 'matched', 'confidence' => 1, 'target_type' => class_basename($mapping->target_type ?? '') ?: null, 'payload' => $payload])->save();
+-                    $counts[$countKey]++;
+-                });
++                ->sortBy(fn (DataMigrationMapping $mapping): int => $this->creationPriority($mapping->entity_type));
++            $this->assertCreatable($run, $company, $mappings);
++            $mappings->each(function (DataMigrationMapping $mapping) use ($actor, $company, &$counts): void {
++                $payload = $mapping->payload ?? [];
++                $attributes = $payload['source_attributes'] ?? [];
++                $name = trim((string) ($payload['source_name'] ?? ''));
++                if ($name === '' && $mapping->entity_type !== 'category') {
++                    throw ValidationException::withMessages(['mapping' => 'A source name is required before creating master data.']);
++                }
++
++                [$targetId, $countKey] = match ($mapping->entity_type) {
++                    'customer' => [$this->createParty($company, $actor, $name, $attributes, true), 'customers'],
++                    'supplier' => [$this->createParty($company, $actor, $name, $attributes, false), 'suppliers'],
++                    'product_type' => [ProductType::query()->create(['company_id' => $company->id, 'name' => $name, 'kind' => $attributes['kind'] ?? 'other', 'status' => 'active'])->id, 'product_types'],
++                    'category' => [$this->createDiameter($company, (string) ($payload['source_value'] ?? '')), 'diameters'],
++                    'product' => [$this->createProduct($run, $company, $mapping, $name, $attributes), 'products'],
++                    'warehouse' => [$this->createWarehouse($company, $mapping, $name, $attributes), 'warehouses'],
++                    'cashbox' => [$this->createCashbox($company, $actor, $name), 'cashboxes'],
++                    'bank' => [$this->createBank($company, $actor, $attributes), 'banks'],
++                    default => throw ValidationException::withMessages(['mapping' => 'This mapping type cannot be created automatically.']),
++                };
++                $payload['reviewed'] = true;
++                $mapping->forceFill(['target_id' => $targetId, 'decision' => 'matched', 'confidence' => 1, 'target_type' => class_basename($mapping->target_type ?? '') ?: null, 'payload' => $payload])->save();
++                $counts[$countKey]++;
++            });
+         });
+ 
+         return $counts;
+     }
+ 
++    private function creationPriority(string $entity): int
++    {
++        return ['customer' => 10, 'supplier' => 20, 'product_type' => 30, 'category' => 40, 'warehouse' => 50, 'cashbox' => 60, 'bank' => 70, 'product' => 80][$entity] ?? 90;
++    }
++
++    /** @param Collection<int, DataMigrationMapping> $mappings */
++    private function assertCreatable(DataMigrationRun $run, Company $company, $mappings): void
++    {
++        $errors = [];
++        $activeBranch = Branch::query()->where('company_id', $company->id)->where('status', 'active')->exists();
++        foreach ($mappings as $mapping) {
++            $payload = $mapping->payload ?? [];
++            $attributes = $payload['source_attributes'] ?? [];
++            $name = trim((string) ($payload['source_name'] ?? ''));
++            $sourceValue = (string) ($payload['source_value'] ?? '');
++            if ($mapping->entity_type !== 'category' && $name === '') {
++                $errors[] = "{$mapping->entity_type} {$mapping->source_key}: source name is empty";
++            }
++            if ($mapping->entity_type === 'category' && $this->diameterValue($sourceValue) === null) {
++                $errors[] = "category {$mapping->source_key}: '{$sourceValue}' is not a numeric diameter; re-analyze the source before creating master data";
++            }
++            if (in_array($mapping->entity_type, ['customer', 'supplier'], true)) {
++                $parentCode = $mapping->entity_type === 'customer' ? '1.2' : '2.1';
++                if (! Account::query()->where('company_id', $company->id)->where('code', $parentCode)->exists()) {
++                    $errors[] = "{$mapping->entity_type} {$mapping->source_key}: target company is missing parent account {$parentCode}";
++                }
++            }
++            if ($mapping->entity_type === 'warehouse' && ! $activeBranch) {
++                $errors[] = "warehouse {$mapping->source_key}: target company has no active branch";
++            }
++            if ($mapping->entity_type === 'product') {
++                if (! ($attributes['unit'] ?? null)) {
++                    $errors[] = "product {$mapping->source_key}: choose a unit of measure";
++                }
++                $typeMapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'product_type')->where('source_key', (string) ($attributes['source_type_id'] ?? ''))->first();
++                if (! $typeMapping || ! in_array($typeMapping->decision, ['matched', 'create_required'], true)) {
++                    $errors[] = "product {$mapping->source_key}: approve product type source ".($attributes['source_type_id'] ?? '');
++                }
++                if (($attributes['diameter_value'] ?? null) !== null) {
++                    $categoryMapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'category')->where('source_key', (string) ($attributes['source_category_id'] ?? ''))->first();
++                    if (! $categoryMapping || ! in_array($categoryMapping->decision, ['matched', 'create_required'], true)) {
++                        $errors[] = "product {$mapping->source_key}: approve numeric diameter source ".($attributes['source_category_id'] ?? '');
++                    }
++                }
++            }
++        }
++        if ($errors !== []) {
++            throw ValidationException::withMessages(['mapping' => array_slice($errors, 0, 50)]);
++        }
++    }
++
++    private function excludeTextCategories(DataMigrationRun $run): void
++    {
++        DataMigrationMapping::query()
++            ->where('run_id', $run->id)
++            ->where('entity_type', 'category')
++            ->get()
++            ->each(function (DataMigrationMapping $mapping): void {
++                $payload = $mapping->payload ?? [];
++                if ($this->diameterValue((string) ($payload['source_value'] ?? '')) !== null) {
++                    return;
++                }
++                $payload['reviewed'] = true;
++                $payload['source_kind'] = 'non_diameter_item';
++                $mapping->forceFill(['target_id' => null, 'target_type' => null, 'decision' => 'excluded', 'payload' => $payload])->save();
++            });
++    }
++
+     /** @param array<string, mixed> $attributes */
+     private function createParty(Company $company, User $actor, string $name, array $attributes, bool $customer): int
+     {
+diff --git a/resources/js/Pages/SuperAdmin/DataMigration.jsx b/resources/js/Pages/SuperAdmin/DataMigration.jsx
+index e191595..815e375 100644
+--- a/resources/js/Pages/SuperAdmin/DataMigration.jsx
++++ b/resources/js/Pages/SuperAdmin/DataMigration.jsx
+@@ -1,5 +1,6 @@
++import { useState } from 'react';
+ import { router, useForm, usePage } from '@inertiajs/react';
+-import { usePlatformApi, usePt } from '../../Components/Platform/ui';
++import { failureMessage, Notice, usePlatformApi, usePt } from '../../Components/Platform/ui';
+ import SuperAdminLayout from '../../Layouts/SuperAdminLayout';
+ import { translate } from '../../i18n';
+ 
+@@ -12,6 +13,7 @@ export default function DataMigration({ companies = [], runs = { data: [] }, sel
+     const api = usePlatformApi();
+     const { can } = usePt();
+     const t = (key) => translate(locale, key);
++    const [actionError, setActionError] = useState('');
+     const form = useForm({ company_id: '', documents_from: '2026-10-01', documents_to: '2026-10-18', opening_balance_as_of: '2026-09-30', mode: 'draft', source: null });
+     const summary = selectedRun?.summary || null;
+     const documents = summary?.documents || {};
+@@ -33,15 +35,24 @@ export default function DataMigration({ companies = [], runs = { data: [] }, sel
+     }
+ 
+     function prepareMasters(run) {
+-        api.act('post', `/super-admin/data-migrations/${run.id}/prepare-masters`, {});
++        return api.act('post', `/super-admin/data-migrations/${run.id}/prepare-masters`, {});
+     }
+ 
+     function executeInvoices(run) {
+-        api.act('post', `/super-admin/data-migrations/${run.id}/execute-invoices`, {});
++        return api.act('post', `/super-admin/data-migrations/${run.id}/execute-invoices`, {});
+     }
+ 
+     function prepareOpenings(run) {
+-        api.act('post', `/super-admin/data-migrations/${run.id}/prepare-openings`, {});
++        return api.act('post', `/super-admin/data-migrations/${run.id}/prepare-openings`, {});
++    }
++
++    async function runAction(action) {
++        setActionError('');
++        try {
++            await action();
++        } catch (error) {
++            setActionError(failureMessage(error, t));
++        }
+     }
+ 
+     return <SuperAdminLayout title={t('pf_data_migration')}>
+@@ -62,7 +73,7 @@ export default function DataMigration({ companies = [], runs = { data: [] }, sel
+             </form>
+         </section>
+ 
+-        {selectedRun && <section className="mt-8 border border-[#d7ddd5] bg-[#f7f8f5] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-[#183c2b]">{t('pf_migration_summary')}</h2><p className="mt-1 text-sm text-[#68736b]">{selectedRun.source_name} · {selectedRun.status}</p></div><div className="flex flex-wrap gap-2">{['uploaded', 'review', 'failed'].includes(selectedRun.status) && <button type="button" onClick={() => analyze(selectedRun)} className="border border-[#34795c] px-4 py-2 text-sm font-semibold text-[#24543f]">{selectedRun.status === 'uploaded' ? (locale === 'ar' ? 'بدء التحليل' : 'Analyze source') : (locale === 'ar' ? 'إعادة التحليل' : 'Re-analyze source')}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && selectedRun.mappings?.some((mapping) => mapping.decision === 'create_required') && <button type="button" onClick={() => prepareMasters(selectedRun)} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'إنشاء البيانات الأساسية المعتمدة' : 'Create approved master data'}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && !summary?.opening_balances && <button type="button" onClick={() => prepareOpenings(selectedRun)} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'ترحيل الأرصدة الافتتاحية والمخزون' : 'Post opening balances and stock'}</button>}{['review', 'ready', 'failed'].includes(selectedRun.status) && can('data_migration.execute') && summary?.records?.ready > 0 && <button type="button" onClick={() => executeInvoices(selectedRun)} className="bg-[#34795c] px-4 py-2 text-sm font-semibold text-white">{locale === 'ar' ? 'تنفيذ المستندات المالية بعد المراجعة' : 'Execute reviewed financial documents'}</button>}</div></div>{selectedRun.error_message && <p className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-800">{selectedRun.error_message}</p>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={locale === 'ar' ? 'مرشحو الشراء' : 'Purchase candidates'} value={documents.purchase_candidates} /><Metric label={locale === 'ar' ? 'شراء يحتاج مراجعة' : 'Purchase review'} value={documents.purchase_needs_review} /><Metric label={locale === 'ar' ? 'مرشحو البيع' : 'Sales candidates'} value={documents.sales_candidates} /><Metric label={locale === 'ar' ? 'بيع يحتاج مراجعة' : 'Sales review'} value={documents.sales_needs_review} /><Metric label={locale === 'ar' ? 'إيصالات قبض' : 'Receipts'} value={documents.receipt_candidates} /><Metric label={locale === 'ar' ? 'سندات صرف' : 'Payment vouchers'} value={documents.payment_candidates} /><Metric label={locale === 'ar' ? 'مصروفات تحتاج مراجعة' : 'Expenses to review'} value={documents.expense_candidates} /><Metric label={locale === 'ar' ? 'حركات بنكية للمراجعة' : 'Bank operations to review'} value={documents.bank_operation_candidates} /></div>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label={locale === 'ar' ? 'العملاء' : 'Customers'} value={master.customers} /><Metric label={locale === 'ar' ? 'الموردون' : 'Suppliers'} value={master.suppliers} /><Metric label={locale === 'ar' ? 'الأنواع' : 'Types'} value={master.product_types} /><Metric label={locale === 'ar' ? 'الفئات/الأقطار' : 'Categories'} value={master.categories} /><Metric label={locale === 'ar' ? 'المخازن القديمة' : 'Legacy stores'} value={master.stores} /></div>}{summary?.opening_balances && <div className="mt-5 border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{locale === 'ar' ? `تم ترحيل ${summary.opening_balances.parties_posted || 0} رصيد طرف و${summary.opening_balances.stock_items_posted || 0} رصيد مخزون. أي تحذيرات تحتاج مراجعة قبل التنفيذ.` : `Posted ${summary.opening_balances.parties_posted || 0} party openings and ${summary.opening_balances.stock_items_posted || 0} stock openings. Review any warnings before execution.`}</div>}{summary?.warnings?.length > 0 && <div className="mt-5 border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>{locale === 'ar' ? 'تنبيهات المراجعة' : 'Review warnings'}</strong><ul className="mt-2 list-disc ps-5">{summary.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}</section>}
++        {selectedRun && <section className="mt-8 border border-[#d7ddd5] bg-[#f7f8f5] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-[#183c2b]">{t('pf_migration_summary')}</h2><p className="mt-1 text-sm text-[#68736b]">{selectedRun.source_name} · {selectedRun.status}</p></div><div className="flex flex-wrap gap-2">{['uploaded', 'review', 'failed'].includes(selectedRun.status) && <button type="button" onClick={() => analyze(selectedRun)} className="border border-[#34795c] px-4 py-2 text-sm font-semibold text-[#24543f]">{selectedRun.status === 'uploaded' ? (locale === 'ar' ? 'بدء التحليل' : 'Analyze source') : (locale === 'ar' ? 'إعادة التحليل' : 'Re-analyze source')}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && selectedRun.mappings?.some((mapping) => mapping.decision === 'create_required') && <button type="button" onClick={() => runAction(() => prepareMasters(selectedRun))} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'إنشاء البيانات الأساسية المعتمدة' : 'Create approved master data'}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && !summary?.opening_balances && <button type="button" onClick={() => runAction(() => prepareOpenings(selectedRun))} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'ترحيل الأرصدة الافتتاحية والمخزون' : 'Post opening balances and stock'}</button>}{['review', 'ready', 'failed'].includes(selectedRun.status) && can('data_migration.execute') && summary?.records?.ready > 0 && <button type="button" onClick={() => runAction(() => executeInvoices(selectedRun))} className="bg-[#34795c] px-4 py-2 text-sm font-semibold text-white">{locale === 'ar' ? 'تنفيذ المستندات المالية بعد المراجعة' : 'Execute reviewed financial documents'}</button>}</div></div>{actionError && <Notice type="error">{actionError}</Notice>}{selectedRun.error_message && <p className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-800">{selectedRun.error_message}</p>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={locale === 'ar' ? 'مرشحو الشراء' : 'Purchase candidates'} value={documents.purchase_candidates} /><Metric label={locale === 'ar' ? 'شراء يحتاج مراجعة' : 'Purchase review'} value={documents.purchase_needs_review} /><Metric label={locale === 'ar' ? 'مرشحو البيع' : 'Sales candidates'} value={documents.sales_candidates} /><Metric label={locale === 'ar' ? 'بيع يحتاج مراجعة' : 'Sales review'} value={documents.sales_needs_review} /><Metric label={locale === 'ar' ? 'إيصالات قبض' : 'Receipts'} value={documents.receipt_candidates} /><Metric label={locale === 'ar' ? 'سندات صرف' : 'Payment vouchers'} value={documents.payment_candidates} /><Metric label={locale === 'ar' ? 'مصروفات تحتاج مراجعة' : 'Expenses to review'} value={documents.expense_candidates} /><Metric label={locale === 'ar' ? 'حركات بنكية للمراجعة' : 'Bank operations to review'} value={documents.bank_operation_candidates} /></div>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label={locale === 'ar' ? 'العملاء' : 'Customers'} value={master.customers} /><Metric label={locale === 'ar' ? 'الموردون' : 'Suppliers'} value={master.suppliers} /><Metric label={locale === 'ar' ? 'الأنواع' : 'Types'} value={master.product_types} /><Metric label={locale === 'ar' ? 'الفئات/الأقطار' : 'Categories'} value={master.categories} /><Metric label={locale === 'ar' ? 'المخازن القديمة' : 'Legacy stores'} value={master.stores} /></div>}{summary?.opening_balances && <div className="mt-5 border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{locale === 'ar' ? `تم ترحيل ${summary.opening_balances.parties_posted || 0} رصيد طرف و${summary.opening_balances.stock_items_posted || 0} رصيد مخزون. أي تحذيرات تحتاج مراجعة قبل التنفيذ.` : `Posted ${summary.opening_balances.parties_posted || 0} party openings and ${summary.opening_balances.stock_items_posted || 0} stock openings. Review any warnings before execution.`}</div>}{summary?.warnings?.length > 0 && <div className="mt-5 border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>{locale === 'ar' ? 'تنبيهات المراجعة' : 'Review warnings'}</strong><ul className="mt-2 list-disc ps-5">{summary.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}</section>}
+         {summary?.mappings && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'اقتراحات المطابقة' : 'Mapping suggestions'}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{Object.entries(summary.mappings).map(([key, counts]) => <div key={key} className="border border-[#e2e6df] p-3 text-sm"><strong className="block text-[#183c2b]">{key}</strong><span className="mt-2 block text-emerald-800">{locale === 'ar' ? 'مطابق' : 'Matched'}: {counts.matched || 0}</span><span className="block text-amber-800">{locale === 'ar' ? 'مراجعة' : 'Review'}: {counts.needs_review || 0}</span><span className="block text-blue-800">{locale === 'ar' ? 'إنشاء' : 'Create'}: {counts.create_required || 0}</span></div>)}</div><p className="mt-4 text-sm text-[#68736b]">{locale === 'ar' ? 'هذه اقتراحات قابلة للمراجعة. إنشاء البيانات الأساسية يتم في خطوة منفصلة بعد الاعتماد، ولا يتم إنشاء الفواتير أو القيود هنا.' : 'These are reviewable suggestions. Master data creation is a separate approval step; invoices and journals are not created here.'}</p></section>}
+         {summary?.records && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'السجلات المرحلية' : 'Staged records'}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2"><Metric label={locale === 'ar' ? 'جاهزة للمعاينة' : 'Ready for review'} value={summary.records.ready} /><Metric label={locale === 'ar' ? 'تحتاج تصنيفًا يدويًا' : 'Needs manual classification'} value={summary.records.needs_review} /></div><p className="mt-4 text-sm text-[#68736b]">{locale === 'ar' ? 'هذه بيانات مرحلية غير مؤثرة على الحسابات. لن تُنشأ فواتير أو قيود أو حركات مخزون إلا بعد خطوة تنفيذ مستقلة.' : 'These are staged records and do not affect accounting. Invoices, journals, and stock movements require a separate execution step.'}</p></section>}
+         {selectedRun?.mappings?.length > 0 && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'مراجعة المطابقات' : 'Review mappings'}</h3><p className="mt-1 text-sm text-[#68736b]">{locale === 'ar' ? 'اختر كيانًا موجودًا أو اترك السجل ليُنشأ بعد الموافقة على خطوة التنفيذ. الأصناف غير الحديدية تحتاج وحدة قياس صريحة.' : 'Choose an existing target or leave the record for creation after approval. Non-steel products require an explicit unit.'}</p></div></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="border-y border-[#d7ddd5]"><th className="py-3 text-start">{locale === 'ar' ? 'النوع' : 'Entity'}</th><th className="py-3 text-start">{locale === 'ar' ? 'معرف المصدر' : 'Source key'}</th><th className="py-3 text-start">{locale === 'ar' ? 'بيان المصدر' : 'Source value'}</th><th className="py-3 text-start">{locale === 'ar' ? 'القرار والهدف' : 'Decision and target'}</th></tr></thead><tbody>{selectedRun.mappings.map((mapping) => <tr key={mapping.id} className="border-b border-[#e6e9e3]"><td className="py-3">{mapping.entity_type}</td><td className="py-3">{mapping.source_key}</td><td className="py-3">{mapping.payload?.source_name || mapping.payload?.source_value || '—'}</td><td className="py-3"><div className="flex flex-wrap gap-2"><select defaultValue={mapping.target_id || ''} onChange={(event) => saveMapping(mapping, event.target.value)} className="min-w-[220px] border border-[#c8c0b7] bg-white px-2 py-1.5"><option value="">{locale === 'ar' ? 'بدون هدف / إنشاء' : 'No target / create'}</option>{(mappingOptions[mapping.entity_type] || []).map((option) => <option key={option.id} value={option.id}>{option.label} · #{option.id}</option>)}</select>{mapping.entity_type === 'product' && mapping.decision === 'create_required' && <select defaultValue={mapping.payload?.source_attributes?.unit || ''} onChange={(event) => saveMapping(mapping, mapping.target_id, 'create_required', event.target.value)} className="border border-[#c8c0b7] bg-white px-2 py-1.5"><option value="">{locale === 'ar' ? 'اختر الوحدة' : 'Choose unit'}</option>{[['ton', 'طن'], ['kg', 'كجم'], ['gram', 'جرام'], ['piece', 'قطعة'], ['liter', 'لتر'], ['meter', 'متر'], ['box', 'صندوق'], ['bag', 'كيس'], ['other', 'أخرى']].map(([value, label]) => <option key={value} value={value}>{locale === 'ar' ? label : value}</option>)}</select>}{mapping.decision !== 'create_required' && <button type="button" onClick={() => saveMapping(mapping, null, 'create_required')} className="border border-[#9b6a1f] px-2 py-1.5 text-xs text-[#795316]">{locale === 'ar' ? 'إنشاء جديد' : 'Create new'}</button>}<span className="self-center text-xs text-[#68736b]">{mapping.decision}</span></div></td></tr>)}</tbody></table></div></section>}
+diff --git a/tests/Feature/DataMigrationCenterTest.php b/tests/Feature/DataMigrationCenterTest.php
+index c9f8618..3740c0e 100644
+--- a/tests/Feature/DataMigrationCenterTest.php
++++ b/tests/Feature/DataMigrationCenterTest.php
+@@ -26,6 +26,7 @@
+ use Illuminate\Foundation\Testing\RefreshDatabase;
+ use Illuminate\Http\UploadedFile;
+ use Illuminate\Support\Facades\Storage;
++use Illuminate\Validation\ValidationException;
+ use Tests\TestCase;
+ 
+ final class DataMigrationCenterTest extends TestCase
+@@ -145,11 +146,35 @@ public function test_non_steel_product_can_be_created_without_a_diameter_mapping
+         $summary = app(MigrationMappingService::class)->suggest($run);
+ 
+         $mapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'product')->firstOrFail();
++        $category = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'category')->firstOrFail();
+         $this->assertSame(1, $summary['products']['create_required']);
+         $this->assertSame('create_required', $mapping->decision);
++        $this->assertSame('excluded', $category->decision);
+         $this->assertNull($mapping->payload['source_attributes']['unit']);
+     }
+ 
++    public function test_master_data_preflight_reports_missing_non_steel_unit_without_partial_writes(): void
++    {
++        $company = Company::query()->create(['name' => 'Master preflight company', 'status' => 'active']);
++        $owner = $this->admin('owner');
++        $run = DataMigrationRun::query()->create(['company_id' => $company->id, 'created_by' => $owner->id, 'source_name' => 'legacy.sql', 'source_disk' => 'local', 'source_path' => 'unused.sql', 'source_hash' => str_repeat('e', 64), 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_REVIEW]);
++        DataMigrationMapping::query()->insert([
++            ['run_id' => $run->id, 'entity_type' => 'product_type', 'source_table' => 'type_mm', 'source_key' => '3', 'target_type' => 'ProductType', 'decision' => 'create_required', 'confidence' => 0, 'payload' => json_encode(['source_name' => 'سلك رباط', 'source_attributes' => ['kind' => 'other']], JSON_UNESCAPED_UNICODE), 'created_at' => now(), 'updated_at' => now()],
++            ['run_id' => $run->id, 'entity_type' => 'category', 'source_table' => 'categories', 'source_key' => '10', 'target_type' => null, 'decision' => 'create_required', 'confidence' => 0, 'payload' => json_encode(['source_value' => 'سلك رباط'], JSON_UNESCAPED_UNICODE), 'created_at' => now(), 'updated_at' => now()],
++            ['run_id' => $run->id, 'entity_type' => 'product', 'source_table' => 'legacy_product', 'source_key' => '3:10', 'target_type' => 'Product', 'decision' => 'create_required', 'confidence' => 0, 'payload' => json_encode(['source_name' => 'سلك رباط / سلك رباط', 'source_attributes' => ['source_type_id' => '3', 'source_category_id' => '10', 'diameter_value' => null, 'unit' => null]], JSON_UNESCAPED_UNICODE), 'created_at' => now(), 'updated_at' => now()],
++        ]);
++
++        try {
++            app(MigrationMasterDataService::class)->createApproved($run, $owner);
++            $this->fail('Expected master-data preflight to reject a product without a unit.');
++        } catch (ValidationException $exception) {
++            $this->assertStringContainsString('choose a unit of measure', implode(' ', $exception->errors()['mapping'] ?? []));
++        }
++
++        $this->assertDatabaseMissing('product_types', ['company_id' => $company->id, 'name' => 'سلك رباط']);
++        $this->assertSame('excluded', DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'category')->value('decision'));
++    }
++
+     public function test_payment_rows_are_staged_as_receipts_without_writing_accounting_data(): void
+     {
+         Storage::fake('local');

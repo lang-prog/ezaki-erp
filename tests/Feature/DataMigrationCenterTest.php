@@ -26,6 +26,7 @@ use App\Services\MigrationOpeningBalanceService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 final class DataMigrationCenterTest extends TestCase
@@ -145,9 +146,33 @@ SQL;
         $summary = app(MigrationMappingService::class)->suggest($run);
 
         $mapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'product')->firstOrFail();
+        $category = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'category')->firstOrFail();
         $this->assertSame(1, $summary['products']['create_required']);
         $this->assertSame('create_required', $mapping->decision);
+        $this->assertSame('excluded', $category->decision);
         $this->assertNull($mapping->payload['source_attributes']['unit']);
+    }
+
+    public function test_master_data_preflight_reports_missing_non_steel_unit_without_partial_writes(): void
+    {
+        $company = Company::query()->create(['name' => 'Master preflight company', 'status' => 'active']);
+        $owner = $this->admin('owner');
+        $run = DataMigrationRun::query()->create(['company_id' => $company->id, 'created_by' => $owner->id, 'source_name' => 'legacy.sql', 'source_disk' => 'local', 'source_path' => 'unused.sql', 'source_hash' => str_repeat('e', 64), 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_REVIEW]);
+        DataMigrationMapping::query()->insert([
+            ['run_id' => $run->id, 'entity_type' => 'product_type', 'source_table' => 'type_mm', 'source_key' => '3', 'target_type' => 'ProductType', 'decision' => 'create_required', 'confidence' => 0, 'payload' => json_encode(['source_name' => 'سلك رباط', 'source_attributes' => ['kind' => 'other']], JSON_UNESCAPED_UNICODE), 'created_at' => now(), 'updated_at' => now()],
+            ['run_id' => $run->id, 'entity_type' => 'category', 'source_table' => 'categories', 'source_key' => '10', 'target_type' => null, 'decision' => 'create_required', 'confidence' => 0, 'payload' => json_encode(['source_value' => 'سلك رباط'], JSON_UNESCAPED_UNICODE), 'created_at' => now(), 'updated_at' => now()],
+            ['run_id' => $run->id, 'entity_type' => 'product', 'source_table' => 'legacy_product', 'source_key' => '3:10', 'target_type' => 'Product', 'decision' => 'create_required', 'confidence' => 0, 'payload' => json_encode(['source_name' => 'سلك رباط / سلك رباط', 'source_attributes' => ['source_type_id' => '3', 'source_category_id' => '10', 'diameter_value' => null, 'unit' => null]], JSON_UNESCAPED_UNICODE), 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        try {
+            app(MigrationMasterDataService::class)->createApproved($run, $owner);
+            $this->fail('Expected master-data preflight to reject a product without a unit.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString('choose a unit of measure', implode(' ', $exception->errors()['mapping'] ?? []));
+        }
+
+        $this->assertDatabaseMissing('product_types', ['company_id' => $company->id, 'name' => 'سلك رباط']);
+        $this->assertSame('excluded', DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'category')->value('decision'));
     }
 
     public function test_payment_rows_are_staged_as_receipts_without_writing_accounting_data(): void
