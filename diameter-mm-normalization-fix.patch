@@ -1,0 +1,83 @@
+diff --git a/app/Services/MigrationMappingService.php b/app/Services/MigrationMappingService.php
+index e0df347..6c3fb3d 100644
+--- a/app/Services/MigrationMappingService.php
++++ b/app/Services/MigrationMappingService.php
+@@ -191,11 +191,17 @@ private function inRange(mixed $value, mixed $from, mixed $to): bool
+ 
+     private function diameterValue(string $value): ?float
+     {
+-        if (! preg_match('/^\s*([0-9]+(?:\.[0-9]+)?)\s*(?:مم|mm)?\s*$/iu', $value, $matches)) {
++        $normalized = strtr(trim($value), [
++            '٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4',
++            '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
++            '٫' => '.', '٬' => ',',
++        ]);
++
++        if (! preg_match('/^\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:مم|ملم|mm|㎜)?\s*$/iu', $normalized, $matches)) {
+             return null;
+         }
+ 
+-        return (float) $matches[1];
++        return (float) str_replace(',', '.', $matches[1]);
+     }
+ 
+     private function normalize(string $value): string
+diff --git a/app/Services/MigrationMasterDataService.php b/app/Services/MigrationMasterDataService.php
+index e8ff3e8..bac380a 100644
+--- a/app/Services/MigrationMasterDataService.php
++++ b/app/Services/MigrationMasterDataService.php
+@@ -86,11 +86,27 @@ private function createParty(Company $company, User $actor, string $name, array
+ 
+     private function createDiameter(Company $company, string $value): int
+     {
+-        if (! is_numeric($value) || (float) $value <= 0) {
++        $numericValue = $this->diameterValue($value);
++        if ($numericValue === null || $numericValue <= 0) {
+             throw ValidationException::withMessages(['mapping' => 'Only numeric categories can be created as diameters automatically.']);
+         }
+ 
+-        return Diameter::query()->firstOrCreate(['company_id' => $company->id, 'millimeters' => (float) $value])->id;
++        return Diameter::query()->firstOrCreate(['company_id' => $company->id, 'millimeters' => $numericValue])->id;
++    }
++
++    private function diameterValue(string $value): ?float
++    {
++        $normalized = strtr(trim($value), [
++            '٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4',
++            '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
++            '٫' => '.', '٬' => ',',
++        ]);
++
++        if (! preg_match('/^\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:مم|ملم|mm|㎜)?\s*$/iu', $normalized, $matches)) {
++            return null;
++        }
++
++        return (float) str_replace(',', '.', $matches[1]);
+     }
+ 
+     /** @param array<string, mixed> $attributes */
+diff --git a/tests/Feature/DataMigrationCenterTest.php b/tests/Feature/DataMigrationCenterTest.php
+index e1eeb0b..b66d5c4 100644
+--- a/tests/Feature/DataMigrationCenterTest.php
++++ b/tests/Feature/DataMigrationCenterTest.php
+@@ -111,6 +111,20 @@ public function test_only_platform_owner_can_view_and_analyze_a_source(): void
+         $this->assertDatabaseHas('audit_logs', ['event' => 'platform.data_migration_analyzed']);
+     }
+ 
++    public function test_legacy_diameter_with_mm_suffix_is_created_as_numeric_value(): void
++    {
++        $company = Company::query()->create(['name' => 'Diameter company', 'status' => 'active']);
++        $owner = $this->admin('owner');
++        $run = DataMigrationRun::query()->create(['company_id' => $company->id, 'created_by' => $owner->id, 'source_name' => 'legacy.sql', 'source_disk' => 'local', 'source_path' => 'unused.sql', 'source_hash' => str_repeat('d', 64), 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_REVIEW]);
++        $mapping = DataMigrationMapping::query()->create(['run_id' => $run->id, 'entity_type' => 'category', 'source_table' => 'categories', 'source_key' => '7', 'target_type' => 'Diameter', 'decision' => 'create_required', 'confidence' => 0, 'payload' => ['source_value' => '٨مم']]);
++
++        $counts = app(MigrationMasterDataService::class)->createApproved($run, $owner);
++
++        $this->assertSame(1, $counts['diameters']);
++        $this->assertDatabaseHas('diameters', ['company_id' => $company->id, 'millimeters' => 8]);
++        $this->assertSame('matched', $mapping->fresh()->decision);
++    }
++
+     public function test_payment_rows_are_staged_as_receipts_without_writing_accounting_data(): void
+     {
+         Storage::fake('local');

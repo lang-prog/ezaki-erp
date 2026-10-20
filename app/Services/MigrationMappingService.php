@@ -135,6 +135,9 @@ final class MigrationMappingService
 
                 continue;
             }
+            $existing = $this->findMapping($run, 'product', 'legacy_product', $pair);
+            $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
+            $preservedUnit = data_get($existing?->payload, 'source_attributes.unit');
             $numericCategory = $this->diameterValue($categoryName);
             $targetTypeId = $typeMapping->target_id;
             $targetDiameterId = $numericCategory !== null && $categoryMapping?->decision === 'matched' ? $categoryMapping->target_id : null;
@@ -150,8 +153,6 @@ final class MigrationMappingService
                 return $this->normalize((string) $product->name) === $this->normalize($productName);
             });
             $decision = $target ? 'matched' : ($typeMapping->decision === 'matched' && ($numericCategory === null || $categoryMapping?->decision === 'matched') ? 'create_required' : 'needs_review');
-            $existing = $this->findMapping($run, 'product', 'legacy_product', $pair);
-            $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
             if ($reviewed) {
                 $target = $existing->target_id ? $products->get((int) $existing->target_id) : null;
                 $decision = $existing->decision;
@@ -159,7 +160,7 @@ final class MigrationMappingService
             $counts[$decision]++;
             DataMigrationMapping::query()->updateOrCreate(
                 ['run_id' => $run->id, 'entity_type' => 'product', 'source_table' => 'legacy_product', 'source_key' => $pair],
-                ['target_type' => 'Product', 'target_id' => $target?->id, 'decision' => $decision, 'confidence' => $target ? 1 : 0, 'payload' => ['source_name' => $productName, 'source_attributes' => ['source_type_id' => $typeId, 'source_category_id' => $categoryId, 'type_name' => $typeName, 'category_name' => $categoryName, 'diameter_value' => $numericCategory, 'unit' => $numericCategory !== null ? 'ton' : null], 'reviewed' => $reviewed]],
+                ['target_type' => 'Product', 'target_id' => $target?->id, 'decision' => $decision, 'confidence' => $target ? 1 : 0, 'payload' => ['source_name' => $productName, 'source_attributes' => ['source_type_id' => $typeId, 'source_category_id' => $categoryId, 'type_name' => $typeName, 'category_name' => $categoryName, 'diameter_value' => $numericCategory, 'unit' => $numericCategory !== null ? 'ton' : $preservedUnit], 'reviewed' => $reviewed]],
             );
         }
 

@@ -1,0 +1,181 @@
+diff --git a/app/Http/Controllers/Platform/DataMigrationController.php b/app/Http/Controllers/Platform/DataMigrationController.php
+index 4b796b9..12afd6c 100644
+--- a/app/Http/Controllers/Platform/DataMigrationController.php
++++ b/app/Http/Controllers/Platform/DataMigrationController.php
+@@ -150,6 +150,8 @@ public function updateMapping(DataMigrationRun $run, DataMigrationMapping $mappi
+     public function analyze(DataMigrationRun $run, Request $request, LegacyAnalysisService $analysis, MigrationMappingService $mapping, MigrationRecordStagingService $staging, AuditRecorder $audit): JsonResponse|RedirectResponse
+     {
+         $run->load('company');
++        $existingSummary = $run->summary ?? [];
++        abort_if(array_key_exists('opening_balances', $existingSummary) || array_key_exists('invoice_execution', $existingSummary), 409, 'This migration cannot be re-analyzed after opening balances or financial documents have been posted.');
+         $run->forceFill(['status' => DataMigrationRun::STATUS_ANALYZING, 'error_message' => null, 'started_at' => now()])->save();
+ 
+         try {
+diff --git a/app/Services/MigrationInvoiceExecutionService.php b/app/Services/MigrationInvoiceExecutionService.php
+index a343d87..dfd595c 100644
+--- a/app/Services/MigrationInvoiceExecutionService.php
++++ b/app/Services/MigrationInvoiceExecutionService.php
+@@ -89,29 +89,33 @@ public function execute(DataMigrationRun $run, User $actor): array
+ 
+     private function assertReady(DataMigrationRun $run): void
+     {
+-        $unresolved = $run->records()->whereIn('status', [DataMigrationRecord::STATUS_READY, DataMigrationRecord::STATUS_FAILED])->get()->filter(function (DataMigrationRecord $record) use ($run): bool {
++        $unresolved = $run->records()->whereIn('status', [DataMigrationRecord::STATUS_READY, DataMigrationRecord::STATUS_FAILED])->get()->map(function (DataMigrationRecord $record) use ($run): ?string {
+             $payload = $record->normalized_payload ?? [];
+             $partyEntity = in_array($record->entity_type, ['purchase_document', 'payment_document'], true) ? 'supplier' : 'customer';
+             $partyKey = in_array($record->entity_type, ['purchase_document', 'payment_document'], true) ? ($payload['supplier_source_id'] ?? '') : ($payload['customer_source_id'] ?? '');
+             if (! $this->mappingTargetId($run, $partyEntity, (string) $partyKey)) {
+-                return true;
++                return "{$record->entity_type} {$record->source_id}: {$partyEntity} source {$partyKey}";
+             }
+             if (in_array($record->entity_type, ['purchase_document', 'sales_document'], true) && ! $this->mappingTargetId($run, 'warehouse', (string) ($payload['warehouse_source_id'] ?? ''))) {
+-                return true;
++                return "{$record->entity_type} {$record->source_id}: warehouse source ".($payload['warehouse_source_id'] ?? '');
+             }
+-            if (in_array($record->entity_type, ['receipt_document', 'payment_document'], true)) {
+-                return ! $this->mappingTargetId($run, 'cashbox', (string) ($payload['cashbox_source_id'] ?? ''));
++            if (in_array($record->entity_type, ['receipt_document', 'payment_document'], true) && ! $this->mappingTargetId($run, 'cashbox', (string) ($payload['cashbox_source_id'] ?? ''))) {
++                return "{$record->entity_type} {$record->source_id}: cashbox source ".($payload['cashbox_source_id'] ?? '');
+             }
+             foreach ($payload['lines'] ?? [] as $line) {
+-                if (! $this->mappingTargetId($run, 'product', (string) ($line['source_type_id'] ?? '').':'.(string) ($line['source_category_id'] ?? ''))) {
+-                    return true;
++                $productKey = (string) ($line['source_type_id'] ?? '').':'.(string) ($line['source_category_id'] ?? '');
++                if (! $this->mappingTargetId($run, 'product', $productKey)) {
++                    return "{$record->entity_type} {$record->source_id}: product source {$productKey}";
+                 }
+             }
+ 
+-            return false;
+-        });
++            return null;
++        })->filter()->unique()->values();
+         if ($unresolved->isNotEmpty()) {
+-            throw ValidationException::withMessages(['execution' => 'Every invoice, party, warehouse, and product mapping must be approved before execution.']);
++            throw ValidationException::withMessages(['execution' => [
++                'Every invoice, party, warehouse, and product mapping must be approved before execution.',
++                'Unresolved mappings: '.$unresolved->take(20)->implode('; ').($unresolved->count() > 20 ? '; …' : ''),
++            ]]);
+         }
+     }
+ 
+diff --git a/app/Services/MigrationMappingService.php b/app/Services/MigrationMappingService.php
+index 6c3fb3d..3d5a24c 100644
+--- a/app/Services/MigrationMappingService.php
++++ b/app/Services/MigrationMappingService.php
+@@ -135,6 +135,9 @@ private function mapProducts(DataMigrationRun $run, array $snapshot, int $compan
+ 
+                 continue;
+             }
++            $existing = $this->findMapping($run, 'product', 'legacy_product', $pair);
++            $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
++            $preservedUnit = data_get($existing?->payload, 'source_attributes.unit');
+             $numericCategory = $this->diameterValue($categoryName);
+             $targetTypeId = $typeMapping->target_id;
+             $targetDiameterId = $numericCategory !== null && $categoryMapping?->decision === 'matched' ? $categoryMapping->target_id : null;
+@@ -150,8 +153,6 @@ private function mapProducts(DataMigrationRun $run, array $snapshot, int $compan
+                 return $this->normalize((string) $product->name) === $this->normalize($productName);
+             });
+             $decision = $target ? 'matched' : ($typeMapping->decision === 'matched' && ($numericCategory === null || $categoryMapping?->decision === 'matched') ? 'create_required' : 'needs_review');
+-            $existing = $this->findMapping($run, 'product', 'legacy_product', $pair);
+-            $reviewed = (bool) data_get($existing?->payload, 'reviewed', false);
+             if ($reviewed) {
+                 $target = $existing->target_id ? $products->get((int) $existing->target_id) : null;
+                 $decision = $existing->decision;
+@@ -159,7 +160,7 @@ private function mapProducts(DataMigrationRun $run, array $snapshot, int $compan
+             $counts[$decision]++;
+             DataMigrationMapping::query()->updateOrCreate(
+                 ['run_id' => $run->id, 'entity_type' => 'product', 'source_table' => 'legacy_product', 'source_key' => $pair],
+-                ['target_type' => 'Product', 'target_id' => $target?->id, 'decision' => $decision, 'confidence' => $target ? 1 : 0, 'payload' => ['source_name' => $productName, 'source_attributes' => ['source_type_id' => $typeId, 'source_category_id' => $categoryId, 'type_name' => $typeName, 'category_name' => $categoryName, 'diameter_value' => $numericCategory, 'unit' => $numericCategory !== null ? 'ton' : null], 'reviewed' => $reviewed]],
++                ['target_type' => 'Product', 'target_id' => $target?->id, 'decision' => $decision, 'confidence' => $target ? 1 : 0, 'payload' => ['source_name' => $productName, 'source_attributes' => ['source_type_id' => $typeId, 'source_category_id' => $categoryId, 'type_name' => $typeName, 'category_name' => $categoryName, 'diameter_value' => $numericCategory, 'unit' => $numericCategory !== null ? 'ton' : $preservedUnit], 'reviewed' => $reviewed]],
+             );
+         }
+ 
+diff --git a/resources/js/Pages/SuperAdmin/DataMigration.jsx b/resources/js/Pages/SuperAdmin/DataMigration.jsx
+index 817ee67..e191595 100644
+--- a/resources/js/Pages/SuperAdmin/DataMigration.jsx
++++ b/resources/js/Pages/SuperAdmin/DataMigration.jsx
+@@ -62,7 +62,7 @@ export default function DataMigration({ companies = [], runs = { data: [] }, sel
+             </form>
+         </section>
+ 
+-        {selectedRun && <section className="mt-8 border border-[#d7ddd5] bg-[#f7f8f5] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-[#183c2b]">{t('pf_migration_summary')}</h2><p className="mt-1 text-sm text-[#68736b]">{selectedRun.source_name} · {selectedRun.status}</p></div><div className="flex flex-wrap gap-2">{selectedRun.status === 'uploaded' && <button type="button" onClick={() => analyze(selectedRun)} className="border border-[#34795c] px-4 py-2 text-sm font-semibold text-[#24543f]">{locale === 'ar' ? 'بدء التحليل' : 'Analyze source'}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && selectedRun.mappings?.some((mapping) => mapping.decision === 'create_required') && <button type="button" onClick={() => prepareMasters(selectedRun)} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'إنشاء البيانات الأساسية المعتمدة' : 'Create approved master data'}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && !summary?.opening_balances && <button type="button" onClick={() => prepareOpenings(selectedRun)} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'ترحيل الأرصدة الافتتاحية والمخزون' : 'Post opening balances and stock'}</button>}{['review', 'ready', 'failed'].includes(selectedRun.status) && can('data_migration.execute') && summary?.records?.ready > 0 && <button type="button" onClick={() => executeInvoices(selectedRun)} className="bg-[#34795c] px-4 py-2 text-sm font-semibold text-white">{locale === 'ar' ? 'تنفيذ المستندات المالية بعد المراجعة' : 'Execute reviewed financial documents'}</button>}</div></div>{selectedRun.error_message && <p className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-800">{selectedRun.error_message}</p>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={locale === 'ar' ? 'مرشحو الشراء' : 'Purchase candidates'} value={documents.purchase_candidates} /><Metric label={locale === 'ar' ? 'شراء يحتاج مراجعة' : 'Purchase review'} value={documents.purchase_needs_review} /><Metric label={locale === 'ar' ? 'مرشحو البيع' : 'Sales candidates'} value={documents.sales_candidates} /><Metric label={locale === 'ar' ? 'بيع يحتاج مراجعة' : 'Sales review'} value={documents.sales_needs_review} /><Metric label={locale === 'ar' ? 'إيصالات قبض' : 'Receipts'} value={documents.receipt_candidates} /><Metric label={locale === 'ar' ? 'سندات صرف' : 'Payment vouchers'} value={documents.payment_candidates} /><Metric label={locale === 'ar' ? 'مصروفات تحتاج مراجعة' : 'Expenses to review'} value={documents.expense_candidates} /><Metric label={locale === 'ar' ? 'حركات بنكية للمراجعة' : 'Bank operations to review'} value={documents.bank_operation_candidates} /></div>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label={locale === 'ar' ? 'العملاء' : 'Customers'} value={master.customers} /><Metric label={locale === 'ar' ? 'الموردون' : 'Suppliers'} value={master.suppliers} /><Metric label={locale === 'ar' ? 'الأنواع' : 'Types'} value={master.product_types} /><Metric label={locale === 'ar' ? 'الفئات/الأقطار' : 'Categories'} value={master.categories} /><Metric label={locale === 'ar' ? 'المخازن القديمة' : 'Legacy stores'} value={master.stores} /></div>}{summary?.opening_balances && <div className="mt-5 border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{locale === 'ar' ? `تم ترحيل ${summary.opening_balances.parties_posted || 0} رصيد طرف و${summary.opening_balances.stock_items_posted || 0} رصيد مخزون. أي تحذيرات تحتاج مراجعة قبل التنفيذ.` : `Posted ${summary.opening_balances.parties_posted || 0} party openings and ${summary.opening_balances.stock_items_posted || 0} stock openings. Review any warnings before execution.`}</div>}{summary?.warnings?.length > 0 && <div className="mt-5 border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>{locale === 'ar' ? 'تنبيهات المراجعة' : 'Review warnings'}</strong><ul className="mt-2 list-disc ps-5">{summary.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}</section>}
++        {selectedRun && <section className="mt-8 border border-[#d7ddd5] bg-[#f7f8f5] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-[#183c2b]">{t('pf_migration_summary')}</h2><p className="mt-1 text-sm text-[#68736b]">{selectedRun.source_name} · {selectedRun.status}</p></div><div className="flex flex-wrap gap-2">{['uploaded', 'review', 'failed'].includes(selectedRun.status) && <button type="button" onClick={() => analyze(selectedRun)} className="border border-[#34795c] px-4 py-2 text-sm font-semibold text-[#24543f]">{selectedRun.status === 'uploaded' ? (locale === 'ar' ? 'بدء التحليل' : 'Analyze source') : (locale === 'ar' ? 'إعادة التحليل' : 'Re-analyze source')}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && selectedRun.mappings?.some((mapping) => mapping.decision === 'create_required') && <button type="button" onClick={() => prepareMasters(selectedRun)} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'إنشاء البيانات الأساسية المعتمدة' : 'Create approved master data'}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && !summary?.opening_balances && <button type="button" onClick={() => prepareOpenings(selectedRun)} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'ترحيل الأرصدة الافتتاحية والمخزون' : 'Post opening balances and stock'}</button>}{['review', 'ready', 'failed'].includes(selectedRun.status) && can('data_migration.execute') && summary?.records?.ready > 0 && <button type="button" onClick={() => executeInvoices(selectedRun)} className="bg-[#34795c] px-4 py-2 text-sm font-semibold text-white">{locale === 'ar' ? 'تنفيذ المستندات المالية بعد المراجعة' : 'Execute reviewed financial documents'}</button>}</div></div>{selectedRun.error_message && <p className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-800">{selectedRun.error_message}</p>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={locale === 'ar' ? 'مرشحو الشراء' : 'Purchase candidates'} value={documents.purchase_candidates} /><Metric label={locale === 'ar' ? 'شراء يحتاج مراجعة' : 'Purchase review'} value={documents.purchase_needs_review} /><Metric label={locale === 'ar' ? 'مرشحو البيع' : 'Sales candidates'} value={documents.sales_candidates} /><Metric label={locale === 'ar' ? 'بيع يحتاج مراجعة' : 'Sales review'} value={documents.sales_needs_review} /><Metric label={locale === 'ar' ? 'إيصالات قبض' : 'Receipts'} value={documents.receipt_candidates} /><Metric label={locale === 'ar' ? 'سندات صرف' : 'Payment vouchers'} value={documents.payment_candidates} /><Metric label={locale === 'ar' ? 'مصروفات تحتاج مراجعة' : 'Expenses to review'} value={documents.expense_candidates} /><Metric label={locale === 'ar' ? 'حركات بنكية للمراجعة' : 'Bank operations to review'} value={documents.bank_operation_candidates} /></div>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label={locale === 'ar' ? 'العملاء' : 'Customers'} value={master.customers} /><Metric label={locale === 'ar' ? 'الموردون' : 'Suppliers'} value={master.suppliers} /><Metric label={locale === 'ar' ? 'الأنواع' : 'Types'} value={master.product_types} /><Metric label={locale === 'ar' ? 'الفئات/الأقطار' : 'Categories'} value={master.categories} /><Metric label={locale === 'ar' ? 'المخازن القديمة' : 'Legacy stores'} value={master.stores} /></div>}{summary?.opening_balances && <div className="mt-5 border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{locale === 'ar' ? `تم ترحيل ${summary.opening_balances.parties_posted || 0} رصيد طرف و${summary.opening_balances.stock_items_posted || 0} رصيد مخزون. أي تحذيرات تحتاج مراجعة قبل التنفيذ.` : `Posted ${summary.opening_balances.parties_posted || 0} party openings and ${summary.opening_balances.stock_items_posted || 0} stock openings. Review any warnings before execution.`}</div>}{summary?.warnings?.length > 0 && <div className="mt-5 border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>{locale === 'ar' ? 'تنبيهات المراجعة' : 'Review warnings'}</strong><ul className="mt-2 list-disc ps-5">{summary.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}</section>}
+         {summary?.mappings && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'اقتراحات المطابقة' : 'Mapping suggestions'}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{Object.entries(summary.mappings).map(([key, counts]) => <div key={key} className="border border-[#e2e6df] p-3 text-sm"><strong className="block text-[#183c2b]">{key}</strong><span className="mt-2 block text-emerald-800">{locale === 'ar' ? 'مطابق' : 'Matched'}: {counts.matched || 0}</span><span className="block text-amber-800">{locale === 'ar' ? 'مراجعة' : 'Review'}: {counts.needs_review || 0}</span><span className="block text-blue-800">{locale === 'ar' ? 'إنشاء' : 'Create'}: {counts.create_required || 0}</span></div>)}</div><p className="mt-4 text-sm text-[#68736b]">{locale === 'ar' ? 'هذه اقتراحات قابلة للمراجعة. إنشاء البيانات الأساسية يتم في خطوة منفصلة بعد الاعتماد، ولا يتم إنشاء الفواتير أو القيود هنا.' : 'These are reviewable suggestions. Master data creation is a separate approval step; invoices and journals are not created here.'}</p></section>}
+         {summary?.records && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'السجلات المرحلية' : 'Staged records'}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2"><Metric label={locale === 'ar' ? 'جاهزة للمعاينة' : 'Ready for review'} value={summary.records.ready} /><Metric label={locale === 'ar' ? 'تحتاج تصنيفًا يدويًا' : 'Needs manual classification'} value={summary.records.needs_review} /></div><p className="mt-4 text-sm text-[#68736b]">{locale === 'ar' ? 'هذه بيانات مرحلية غير مؤثرة على الحسابات. لن تُنشأ فواتير أو قيود أو حركات مخزون إلا بعد خطوة تنفيذ مستقلة.' : 'These are staged records and do not affect accounting. Invoices, journals, and stock movements require a separate execution step.'}</p></section>}
+         {selectedRun?.mappings?.length > 0 && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'مراجعة المطابقات' : 'Review mappings'}</h3><p className="mt-1 text-sm text-[#68736b]">{locale === 'ar' ? 'اختر كيانًا موجودًا أو اترك السجل ليُنشأ بعد الموافقة على خطوة التنفيذ. الأصناف غير الحديدية تحتاج وحدة قياس صريحة.' : 'Choose an existing target or leave the record for creation after approval. Non-steel products require an explicit unit.'}</p></div></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="border-y border-[#d7ddd5]"><th className="py-3 text-start">{locale === 'ar' ? 'النوع' : 'Entity'}</th><th className="py-3 text-start">{locale === 'ar' ? 'معرف المصدر' : 'Source key'}</th><th className="py-3 text-start">{locale === 'ar' ? 'بيان المصدر' : 'Source value'}</th><th className="py-3 text-start">{locale === 'ar' ? 'القرار والهدف' : 'Decision and target'}</th></tr></thead><tbody>{selectedRun.mappings.map((mapping) => <tr key={mapping.id} className="border-b border-[#e6e9e3]"><td className="py-3">{mapping.entity_type}</td><td className="py-3">{mapping.source_key}</td><td className="py-3">{mapping.payload?.source_name || mapping.payload?.source_value || '—'}</td><td className="py-3"><div className="flex flex-wrap gap-2"><select defaultValue={mapping.target_id || ''} onChange={(event) => saveMapping(mapping, event.target.value)} className="min-w-[220px] border border-[#c8c0b7] bg-white px-2 py-1.5"><option value="">{locale === 'ar' ? 'بدون هدف / إنشاء' : 'No target / create'}</option>{(mappingOptions[mapping.entity_type] || []).map((option) => <option key={option.id} value={option.id}>{option.label} · #{option.id}</option>)}</select>{mapping.entity_type === 'product' && mapping.decision === 'create_required' && <select defaultValue={mapping.payload?.source_attributes?.unit || ''} onChange={(event) => saveMapping(mapping, mapping.target_id, 'create_required', event.target.value)} className="border border-[#c8c0b7] bg-white px-2 py-1.5"><option value="">{locale === 'ar' ? 'اختر الوحدة' : 'Choose unit'}</option>{[['ton', 'طن'], ['kg', 'كجم'], ['gram', 'جرام'], ['piece', 'قطعة'], ['liter', 'لتر'], ['meter', 'متر'], ['box', 'صندوق'], ['bag', 'كيس'], ['other', 'أخرى']].map(([value, label]) => <option key={value} value={value}>{locale === 'ar' ? label : value}</option>)}</select>}{mapping.decision !== 'create_required' && <button type="button" onClick={() => saveMapping(mapping, null, 'create_required')} className="border border-[#9b6a1f] px-2 py-1.5 text-xs text-[#795316]">{locale === 'ar' ? 'إنشاء جديد' : 'Create new'}</button>}<span className="self-center text-xs text-[#68736b]">{mapping.decision}</span></div></td></tr>)}</tbody></table></div></section>}
+diff --git a/tests/Feature/DataMigrationCenterTest.php b/tests/Feature/DataMigrationCenterTest.php
+index b66d5c4..c9f8618 100644
+--- a/tests/Feature/DataMigrationCenterTest.php
++++ b/tests/Feature/DataMigrationCenterTest.php
+@@ -20,6 +20,7 @@
+ use App\Services\AccountingFoundationService;
+ use App\Services\AccountingService;
+ use App\Services\MigrationInvoiceExecutionService;
++use App\Services\MigrationMappingService;
+ use App\Services\MigrationMasterDataService;
+ use App\Services\MigrationOpeningBalanceService;
+ use Illuminate\Foundation\Testing\RefreshDatabase;
+@@ -125,6 +126,30 @@ public function test_legacy_diameter_with_mm_suffix_is_created_as_numeric_value(
+         $this->assertSame('matched', $mapping->fresh()->decision);
+     }
+ 
++    public function test_non_steel_product_can_be_created_without_a_diameter_mapping(): void
++    {
++        Storage::fake('local');
++        $company = Company::query()->create(['name' => 'Non steel company', 'status' => 'active']);
++        $owner = $this->admin('owner');
++        ProductType::query()->create(['company_id' => $company->id, 'name' => 'مواد بناء', 'kind' => 'other', 'status' => 'active']);
++        $sourceSql = <<<'SQL'
++INSERT INTO `type_mm` (`id_type`, `name`) VALUES (3, 'مواد بناء');
++INSERT INTO `categories` (`id_categories`, `categories`, `steel_or_other`) VALUES (10, 'سلك رباط', 2);
++INSERT INTO `buy` (`id_buy`, `date`, `id_import`, `id_stores`, `id_type`) VALUES (1, '2026-10-02', 2, 5, 3);
++INSERT INTO `details_buy` (`id_details_buy`, `id_buy`, `id_categories`, `id_type`, `kg`, `no`, `price`) VALUES (1, 1, 10, 3, 100, 1, 20);
++SQL;
++        $path = 'data-migrations/'.$company->id.'/non-steel.sql';
++        Storage::disk('local')->put($path, $sourceSql);
++        $run = DataMigrationRun::query()->create(['company_id' => $company->id, 'created_by' => $owner->id, 'source_name' => 'non-steel.sql', 'source_disk' => 'local', 'source_path' => $path, 'source_hash' => hash('sha256', $sourceSql), 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_REVIEW]);
++
++        $summary = app(MigrationMappingService::class)->suggest($run);
++
++        $mapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'product')->firstOrFail();
++        $this->assertSame(1, $summary['products']['create_required']);
++        $this->assertSame('create_required', $mapping->decision);
++        $this->assertNull($mapping->payload['source_attributes']['unit']);
++    }
++
+     public function test_payment_rows_are_staged_as_receipts_without_writing_accounting_data(): void
+     {
+         Storage::fake('local');
+@@ -211,4 +236,31 @@ public function test_opening_balances_post_party_and_stock_once_from_cutoff_snap
+         $this->assertDatabaseHas('stock_movements', ['source_type' => DataMigrationRun::class, 'source_id' => $run->id, 'movement_type' => 'opening_balance']);
+         $this->assertDatabaseHas('journal_entries', ['source_type' => DataMigrationRun::class, 'source_id' => $run->id]);
+     }
++
++    public function test_reanalysis_is_blocked_after_opening_balances_are_posted(): void
++    {
++        Storage::fake('local');
++        $company = Company::query()->create(['name' => 'Locked migration company', 'status' => 'active']);
++        $owner = $this->admin('owner');
++        $path = 'data-migrations/'.$company->id.'/locked.sql';
++        Storage::disk('local')->put($path, 'SELECT 1');
++        $run = DataMigrationRun::query()->create([
++            'company_id' => $company->id,
++            'created_by' => $owner->id,
++            'source_name' => 'locked.sql',
++            'source_disk' => 'local',
++            'source_path' => $path,
++            'source_hash' => str_repeat('c', 64),
++            'documents_from' => '2026-10-01',
++            'documents_to' => '2026-10-18',
++            'opening_balance_as_of' => '2026-09-30',
++            'mode' => 'draft',
++            'status' => DataMigrationRun::STATUS_REVIEW,
++            'summary' => ['opening_balances' => ['parties_posted' => 1]],
++        ]);
++
++        $this->actingAs($owner)->postJson("/super-admin/data-migrations/{$run->id}/analyze")
++            ->assertStatus(409);
++        $this->assertSame(DataMigrationRun::STATUS_REVIEW, $run->fresh()->status);
++    }
+ }

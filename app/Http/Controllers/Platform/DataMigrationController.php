@@ -150,6 +150,8 @@ class DataMigrationController extends PlatformController
     public function analyze(DataMigrationRun $run, Request $request, LegacyAnalysisService $analysis, MigrationMappingService $mapping, MigrationRecordStagingService $staging, AuditRecorder $audit): JsonResponse|RedirectResponse
     {
         $run->load('company');
+        $existingSummary = $run->summary ?? [];
+        abort_if(array_key_exists('opening_balances', $existingSummary) || array_key_exists('invoice_execution', $existingSummary), 409, 'This migration cannot be re-analyzed after opening balances or financial documents have been posted.');
         $run->forceFill(['status' => DataMigrationRun::STATUS_ANALYZING, 'error_message' => null, 'started_at' => now()])->save();
 
         try {

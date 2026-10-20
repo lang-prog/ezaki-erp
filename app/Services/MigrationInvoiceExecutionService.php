@@ -89,29 +89,33 @@ final class MigrationInvoiceExecutionService
 
     private function assertReady(DataMigrationRun $run): void
     {
-        $unresolved = $run->records()->whereIn('status', [DataMigrationRecord::STATUS_READY, DataMigrationRecord::STATUS_FAILED])->get()->filter(function (DataMigrationRecord $record) use ($run): bool {
+        $unresolved = $run->records()->whereIn('status', [DataMigrationRecord::STATUS_READY, DataMigrationRecord::STATUS_FAILED])->get()->map(function (DataMigrationRecord $record) use ($run): ?string {
             $payload = $record->normalized_payload ?? [];
             $partyEntity = in_array($record->entity_type, ['purchase_document', 'payment_document'], true) ? 'supplier' : 'customer';
             $partyKey = in_array($record->entity_type, ['purchase_document', 'payment_document'], true) ? ($payload['supplier_source_id'] ?? '') : ($payload['customer_source_id'] ?? '');
             if (! $this->mappingTargetId($run, $partyEntity, (string) $partyKey)) {
-                return true;
+                return "{$record->entity_type} {$record->source_id}: {$partyEntity} source {$partyKey}";
             }
             if (in_array($record->entity_type, ['purchase_document', 'sales_document'], true) && ! $this->mappingTargetId($run, 'warehouse', (string) ($payload['warehouse_source_id'] ?? ''))) {
-                return true;
+                return "{$record->entity_type} {$record->source_id}: warehouse source ".($payload['warehouse_source_id'] ?? '');
             }
-            if (in_array($record->entity_type, ['receipt_document', 'payment_document'], true)) {
-                return ! $this->mappingTargetId($run, 'cashbox', (string) ($payload['cashbox_source_id'] ?? ''));
+            if (in_array($record->entity_type, ['receipt_document', 'payment_document'], true) && ! $this->mappingTargetId($run, 'cashbox', (string) ($payload['cashbox_source_id'] ?? ''))) {
+                return "{$record->entity_type} {$record->source_id}: cashbox source ".($payload['cashbox_source_id'] ?? '');
             }
             foreach ($payload['lines'] ?? [] as $line) {
-                if (! $this->mappingTargetId($run, 'product', (string) ($line['source_type_id'] ?? '').':'.(string) ($line['source_category_id'] ?? ''))) {
-                    return true;
+                $productKey = (string) ($line['source_type_id'] ?? '').':'.(string) ($line['source_category_id'] ?? '');
+                if (! $this->mappingTargetId($run, 'product', $productKey)) {
+                    return "{$record->entity_type} {$record->source_id}: product source {$productKey}";
                 }
             }
 
-            return false;
-        });
+            return null;
+        })->filter()->unique()->values();
         if ($unresolved->isNotEmpty()) {
-            throw ValidationException::withMessages(['execution' => 'Every invoice, party, warehouse, and product mapping must be approved before execution.']);
+            throw ValidationException::withMessages(['execution' => [
+                'Every invoice, party, warehouse, and product mapping must be approved before execution.',
+                'Unresolved mappings: '.$unresolved->take(20)->implode('; ').($unresolved->count() > 20 ? '; …' : ''),
+            ]]);
         }
     }
 

@@ -20,6 +20,7 @@ use App\Models\Warehouse;
 use App\Services\AccountingFoundationService;
 use App\Services\AccountingService;
 use App\Services\MigrationInvoiceExecutionService;
+use App\Services\MigrationMappingService;
 use App\Services\MigrationMasterDataService;
 use App\Services\MigrationOpeningBalanceService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -125,6 +126,30 @@ SQL;
         $this->assertSame('matched', $mapping->fresh()->decision);
     }
 
+    public function test_non_steel_product_can_be_created_without_a_diameter_mapping(): void
+    {
+        Storage::fake('local');
+        $company = Company::query()->create(['name' => 'Non steel company', 'status' => 'active']);
+        $owner = $this->admin('owner');
+        ProductType::query()->create(['company_id' => $company->id, 'name' => 'مواد بناء', 'kind' => 'other', 'status' => 'active']);
+        $sourceSql = <<<'SQL'
+INSERT INTO `type_mm` (`id_type`, `name`) VALUES (3, 'مواد بناء');
+INSERT INTO `categories` (`id_categories`, `categories`, `steel_or_other`) VALUES (10, 'سلك رباط', 2);
+INSERT INTO `buy` (`id_buy`, `date`, `id_import`, `id_stores`, `id_type`) VALUES (1, '2026-10-02', 2, 5, 3);
+INSERT INTO `details_buy` (`id_details_buy`, `id_buy`, `id_categories`, `id_type`, `kg`, `no`, `price`) VALUES (1, 1, 10, 3, 100, 1, 20);
+SQL;
+        $path = 'data-migrations/'.$company->id.'/non-steel.sql';
+        Storage::disk('local')->put($path, $sourceSql);
+        $run = DataMigrationRun::query()->create(['company_id' => $company->id, 'created_by' => $owner->id, 'source_name' => 'non-steel.sql', 'source_disk' => 'local', 'source_path' => $path, 'source_hash' => hash('sha256', $sourceSql), 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30', 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_REVIEW]);
+
+        $summary = app(MigrationMappingService::class)->suggest($run);
+
+        $mapping = DataMigrationMapping::query()->where('run_id', $run->id)->where('entity_type', 'product')->firstOrFail();
+        $this->assertSame(1, $summary['products']['create_required']);
+        $this->assertSame('create_required', $mapping->decision);
+        $this->assertNull($mapping->payload['source_attributes']['unit']);
+    }
+
     public function test_payment_rows_are_staged_as_receipts_without_writing_accounting_data(): void
     {
         Storage::fake('local');
@@ -210,5 +235,32 @@ SQL;
         $this->assertDatabaseHas('stock_balances', ['warehouse_id' => $warehouse->id, 'product_id' => $product->id, 'quantity' => 1, 'inventory_value' => 100]);
         $this->assertDatabaseHas('stock_movements', ['source_type' => DataMigrationRun::class, 'source_id' => $run->id, 'movement_type' => 'opening_balance']);
         $this->assertDatabaseHas('journal_entries', ['source_type' => DataMigrationRun::class, 'source_id' => $run->id]);
+    }
+
+    public function test_reanalysis_is_blocked_after_opening_balances_are_posted(): void
+    {
+        Storage::fake('local');
+        $company = Company::query()->create(['name' => 'Locked migration company', 'status' => 'active']);
+        $owner = $this->admin('owner');
+        $path = 'data-migrations/'.$company->id.'/locked.sql';
+        Storage::disk('local')->put($path, 'SELECT 1');
+        $run = DataMigrationRun::query()->create([
+            'company_id' => $company->id,
+            'created_by' => $owner->id,
+            'source_name' => 'locked.sql',
+            'source_disk' => 'local',
+            'source_path' => $path,
+            'source_hash' => str_repeat('c', 64),
+            'documents_from' => '2026-10-01',
+            'documents_to' => '2026-10-18',
+            'opening_balance_as_of' => '2026-09-30',
+            'mode' => 'draft',
+            'status' => DataMigrationRun::STATUS_REVIEW,
+            'summary' => ['opening_balances' => ['parties_posted' => 1]],
+        ]);
+
+        $this->actingAs($owner)->postJson("/super-admin/data-migrations/{$run->id}/analyze")
+            ->assertStatus(409);
+        $this->assertSame(DataMigrationRun::STATUS_REVIEW, $run->fresh()->status);
     }
 }
