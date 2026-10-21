@@ -23,7 +23,8 @@ class DataMigrationRecord extends Model
 
     protected $fillable = [
         'run_id', 'entity_type', 'source_table', 'source_id', 'source_date', 'source_number', 'source_payload',
-        'normalized_payload', 'status', 'target_type', 'target_id', 'fingerprint', 'error_message',
+        'normalized_payload', 'status', 'review_code', 'exclusion_reason', 'attempts', 'result', 'executed_at',
+        'target_type', 'target_id', 'fingerprint', 'error_message',
     ];
 
     protected function casts(): array
@@ -32,6 +33,8 @@ class DataMigrationRecord extends Model
             'source_date' => 'date',
             'source_payload' => 'array',
             'normalized_payload' => 'array',
+            'result' => 'array',
+            'executed_at' => 'datetime',
         ];
     }
 

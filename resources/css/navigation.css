@@ -288,6 +288,12 @@ body { font-size: var(--ez-font-size); line-height: var(--ez-readable-line); }
 /* Super Admin platform pages (logical properties only) */
 .impact-box { border: 1px solid var(--erp-border, #cbd5e1); border-inline-start: 4px solid #b45309; background: #fffbeb; border-radius: 8px; padding: 12px 14px; margin-block: 12px; }
 .impact-box > strong { display: block; margin-block-end: 6px; }
+.stage-rail { display: flex; flex-wrap: wrap; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.stage-rail > li { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.blocker-list { margin-block: 10px; padding-inline-start: 20px; display: grid; gap: 8px; }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-block: 10px; }
+.summary-card { border: 1px solid var(--erp-border, #cbd5e1); border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px; font-size: 0.875rem; }
+.field-error { color: #b91c1c; font-size: 0.875rem; }
 .impact-list { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
 .impact-list dt { color: #475569; }
 .impact-list dd { margin: 0; font-weight: 600; }

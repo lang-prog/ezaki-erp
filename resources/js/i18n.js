@@ -2,6 +2,7 @@ import { accountingAr, accountingEn } from './i18n-accounting.js';
 import { platformAr, platformEn } from './i18n-platform.js';
 import { subscriptionAr, subscriptionEn } from './i18n-subscription.js';
 import { durationsAr, durationsEn } from './i18n-durations.js';
+import { migrationAr, migrationEn } from './i18n-migration.js';
 
 const strings = {
     en: {
@@ -118,8 +119,8 @@ const strings = {
     },
 };
 
-Object.assign(strings.en, accountingEn, platformEn, subscriptionEn, durationsEn);
-Object.assign(strings.ar, accountingAr, platformAr, subscriptionAr, durationsAr);
+Object.assign(strings.en, accountingEn, platformEn, subscriptionEn, durationsEn, migrationEn);
+Object.assign(strings.ar, accountingAr, platformAr, subscriptionAr, durationsAr, migrationAr);
 
 export const catalog = strings;
 

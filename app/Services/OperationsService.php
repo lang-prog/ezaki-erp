@@ -856,7 +856,12 @@ class OperationsService
 
     private function lineProduct(Company $company, array $line): Product
     {
-        return $this->productResolver->resolve($company, $line);
+        $product = $this->productResolver->resolve($company, $line);
+        if (($product->quantity_basis ?? 'weight') !== 'weight') {
+            throw ValidationException::withMessages(['lines' => "Product {$product->name} is quantified by {$product->quantity_basis}; weight-based bill lines would mix units."]);
+        }
+
+        return $product;
     }
 
     private function ownedId(string $table, Company $company, int $id): int

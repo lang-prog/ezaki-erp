@@ -1,84 +1,70 @@
 import { useState } from 'react';
-import { router, useForm, usePage } from '@inertiajs/react';
-import { failureMessage, Notice, usePlatformApi, usePt } from '../../Components/Platform/ui';
+import { useForm } from '@inertiajs/react';
 import SuperAdminLayout from '../../Layouts/SuperAdminLayout';
-import { translate } from '../../i18n';
+import { PageHeader, Pagination, StatusBadge, usePt } from '../../Components/Platform/ui';
 
-function Metric({ label, value }) {
-    return <div className="border border-[#d7ddd5] bg-white p-4"><p className="text-xs text-[#68736b]">{label}</p><strong className="mt-1 block text-2xl text-[#183c2b]">{value ?? 0}</strong></div>;
+const TONE = { failed_terminal: 'failed', failed_recoverable: 'warning', completed: 'approved', signed_off: 'approved', archived: 'archived', completed_with_review: 'warning' };
+
+function nextDayOf(value) {
+    const base = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(base.getTime())) return '';
+    base.setUTCDate(base.getUTCDate() + 1);
+
+    return base.toISOString().slice(0, 10);
 }
 
-export default function DataMigration({ companies = [], runs = { data: [] }, selectedRun = null, mappingOptions = {} }) {
-    const { locale } = usePage().props;
-    const api = usePlatformApi();
-    const { can } = usePt();
-    const t = (key) => translate(locale, key);
-    const [actionError, setActionError] = useState('');
-    const form = useForm({ company_id: '', documents_from: '2026-10-01', documents_to: '2026-10-18', opening_balance_as_of: '2026-09-30', mode: 'draft', source: null });
-    const summary = selectedRun?.summary || null;
-    const documents = summary?.documents || {};
-    const master = summary?.master_counts || {};
+export default function DataMigration({ companies = [], runs = { data: [], links: [] }, limits = {} }) {
+    const { t, can, date, dateTime } = usePt();
+    const manage = can('data_migration.manage');
+    const form = useForm({ company_id: '', documents_from: '2026-10-01', documents_to: '2026-10-18', opening_balance_as_of: '2026-09-30', gap_reason: '', customer_start_balance_sign: '', supplier_start_balance_sign: '', source: null });
+    const [submitted, setSubmitted] = useState(false);
+    const data = form.data;
+    const gap = Boolean(data.opening_balance_as_of && data.documents_from && data.documents_from !== nextDayOf(data.opening_balance_as_of));
+    const errors = form.errors || {};
+    const field = (name) => errors[name] && <span className="field-error" role="alert">{errors[name]}</span>;
+    const set = (name) => (event) => form.setData(name, event.target.value);
 
     function submit(event) {
         event.preventDefault();
-        form.post('/super-admin/data-migrations', { forceFormData: true, preserveScroll: true });
+        if (form.processing || submitted) return;
+        setSubmitted(true);
+        form.post('/super-admin/data-migrations', { forceFormData: true, preserveScroll: true, onFinish: () => setSubmitted(false) });
     }
 
-    function analyze(run) {
-        router.post(`/super-admin/data-migrations/${run.id}/analyze`, {}, { preserveScroll: true });
-    }
-
-    function saveMapping(mapping, targetId, decision = null, unit = undefined) {
-        const payload = { target_id: targetId || null, decision: decision || (targetId ? 'matched' : 'needs_review') };
-        if (mapping.entity_type === 'product' && unit !== undefined) payload.unit = unit || null;
-        router.put(`/super-admin/data-migrations/${selectedRun.id}/mappings/${mapping.id}`, payload, { preserveScroll: true });
-    }
-
-    function prepareMasters(run) {
-        return api.act('post', `/super-admin/data-migrations/${run.id}/prepare-masters`, {});
-    }
-
-    function executeInvoices(run) {
-        return api.act('post', `/super-admin/data-migrations/${run.id}/execute-invoices`, {});
-    }
-
-    function prepareOpenings(run) {
-        return api.act('post', `/super-admin/data-migrations/${run.id}/prepare-openings`, {});
-    }
-
-    async function runAction(action) {
-        setActionError('');
-        try {
-            await action();
-        } catch (error) {
-            setActionError(failureMessage(error, t));
-        }
-    }
-
-    return <SuperAdminLayout title={t('pf_data_migration')}>
-        <div className="flex flex-wrap items-end justify-between gap-4">
-            <div><p className="text-xs uppercase text-[#68736b]">{t('platformWorkspace')}</p><h1 className="mt-1 text-2xl font-semibold">{t('pf_data_migration')}</h1><p className="mt-2 max-w-3xl text-sm text-[#68736b]">{t('pf_migration_intro')}</p></div>
-        </div>
-
-        <section className="mt-8 border border-[#d7ddd5] bg-white p-5">
-            <h2 className="font-semibold text-[#183c2b]">{t('pf_migration_upload')}</h2>
-            <p className="mt-1 text-sm text-[#68736b]">{t('pf_migration_source_hint')}</p>
-            <form onSubmit={submit} className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                <label className="text-sm font-medium">{t('pf_migration_company')}<select required value={form.data.company_id} onChange={(event) => form.setData('company_id', event.target.value)} className="mt-1 w-full border border-[#c8c0b7] bg-white px-3 py-2"><option value="">—</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name} · #{company.id}</option>)}</select>{form.errors.company_id && <span className="mt-1 block text-sm text-red-700">{form.errors.company_id}</span>}</label>
-                <label className="text-sm font-medium">{t('pf_migration_from')}<input required type="date" value={form.data.documents_from} onChange={(event) => form.setData('documents_from', event.target.value)} className="mt-1 w-full border border-[#c8c0b7] bg-white px-3 py-2" />{form.errors.documents_from && <span className="mt-1 block text-sm text-red-700">{form.errors.documents_from}</span>}</label>
-                <label className="text-sm font-medium">{t('pf_migration_to')}<input required type="date" value={form.data.documents_to} onChange={(event) => form.setData('documents_to', event.target.value)} className="mt-1 w-full border border-[#c8c0b7] bg-white px-3 py-2" />{form.errors.documents_to && <span className="mt-1 block text-sm text-red-700">{form.errors.documents_to}</span>}</label>
-                <label className="text-sm font-medium">{locale === 'ar' ? 'الرصيد الافتتاحي حتى' : 'Opening balance as of'}<input required type="date" value={form.data.opening_balance_as_of} onChange={(event) => form.setData('opening_balance_as_of', event.target.value)} className="mt-1 w-full border border-[#c8c0b7] bg-white px-3 py-2" />{form.errors.opening_balance_as_of && <span className="mt-1 block text-sm text-red-700">{form.errors.opening_balance_as_of}</span>}</label>
-                <label className="text-sm font-medium md:col-span-2">{t('pf_migration_source')}<input required type="file" accept=".sql,.gz,.txt" onChange={(event) => form.setData('source', event.target.files?.[0] || null)} className="mt-1 block w-full border border-[#c8c0b7] bg-white px-3 py-2 text-sm" />{form.errors.source && <span className="mt-1 block text-sm text-red-700">{form.errors.source}</span>}</label>
-                <div className="md:col-span-2 lg:col-span-3"><button disabled={form.processing} className="bg-[#34795c] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">{t('pf_migration_upload')}</button></div>
-            </form>
+    return <SuperAdminLayout title={t('mg_title')}>
+        <PageHeader title={t('mg_title')} intro={t('mg_intro')} />
+        {manage && <form className="erp-section posting-form" onSubmit={submit} aria-labelledby="mg-upload-title">
+            <h2 id="mg-upload-title">{t('mg_upload_title')}</h2>
+            <div className="posting-form__grid">
+                <label className="field"><span>{t('mg_company')}</span><select required name="company_id" value={data.company_id} onChange={set('company_id')}><option value="">—</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name} · #{company.id}</option>)}</select>{field('company_id')}</label>
+                <label className="field"><span>{t('mg_cutoff')}</span><input required type="date" name="opening_balance_as_of" value={data.opening_balance_as_of} onChange={set('opening_balance_as_of')} />{field('opening_balance_as_of')}</label>
+                <label className="field"><span>{t('mg_from')}</span><input required type="date" name="documents_from" value={data.documents_from} onChange={set('documents_from')} />{field('documents_from')}</label>
+                <label className="field"><span>{t('mg_to')}</span><input required type="date" name="documents_to" value={data.documents_to} onChange={set('documents_to')} />{field('documents_to')}</label>
+                {gap && <label className="field field--wide"><span>{t('mg_gap_reason')}</span><input required minLength={5} maxLength={500} name="gap_reason" value={data.gap_reason} onChange={set('gap_reason')} /><small>{t('mg_gap_hint')}</small>{field('gap_reason')}</label>}
+                <label className="field"><span>{t('mg_cust_sign')}</span><select name="customer_start_balance_sign" value={data.customer_start_balance_sign} onChange={set('customer_start_balance_sign')}><option value="">{t('mg_sign_choose')}</option><option value="debit_positive">{t('mg_sign_debit_positive')}</option><option value="debit_negative">{t('mg_sign_debit_negative')}</option></select>{field('customer_start_balance_sign')}</label>
+                <label className="field"><span>{t('mg_supp_sign')}</span><select name="supplier_start_balance_sign" value={data.supplier_start_balance_sign} onChange={set('supplier_start_balance_sign')}><option value="">{t('mg_sign_choose')}</option><option value="credit_positive">{t('mg_sign_credit_positive')}</option><option value="credit_negative">{t('mg_sign_credit_negative')}</option></select>{field('supplier_start_balance_sign')}</label>
+                <label className="field field--wide"><span>{t('mg_source_file')}</span><input required type="file" name="source" accept=".sql,.gz" onChange={(event) => form.setData('source', event.target.files?.[0] || null)} /><small>{t('mg_source_hint').replace('{mb}', String(Math.round((limits.max_upload_kb || 0) / 1024))).replace('{days}', String(limits.retention_days ?? ''))}</small>{field('source')}</label>
+            </div>
+            <p className="permission-note">{t('mg_sign_hint')}</p>
+            <button type="submit" disabled={form.processing || submitted} className="erp-button erp-button--primary">{form.processing ? t('mg_working') : t('mg_upload_submit')}</button>
+        </form>}
+        <section className="erp-section" aria-label={t('mg_runs')}>
+            <h2>{t('mg_runs')}</h2>
+            <div className="erp-table-wrap"><table className="erp-table">
+                <thead><tr><th>{t('mg_company')}</th><th>{t('mg_source_file')}</th><th>{t('mg_period')}</th><th>{t('status')}</th><th>{t('mg_created_by')}</th><th className="no-print">{t('actions')}</th></tr></thead>
+                <tbody>
+                    {runs.data.length === 0 && <tr><td colSpan={6} className="empty-cell">{t('mg_runs_empty')}</td></tr>}
+                    {runs.data.map((run) => <tr key={run.id}>
+                        <td>{run.company?.name} · #{run.company?.id}</td>
+                        <td>{run.source_name}<small className="table-subline">{dateTime(run.created_at)}</small></td>
+                        <td>{date(run.documents_from)} → {date(run.documents_to)}</td>
+                        <td><StatusBadge status={TONE[run.status] ?? 'info'} label={t(`mg_status_${run.status}`)} /></td>
+                        <td>{run.created_by?.name ?? '—'}</td>
+                        <td className="no-print"><a className="table-action" href={`/super-admin/data-migrations/${run.id}`}>{t('mg_open')}</a></td>
+                    </tr>)}
+                </tbody>
+            </table></div>
+            <Pagination links={runs.links} />
         </section>
-
-        {selectedRun && <section className="mt-8 border border-[#d7ddd5] bg-[#f7f8f5] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-[#183c2b]">{t('pf_migration_summary')}</h2><p className="mt-1 text-sm text-[#68736b]">{selectedRun.source_name} · {selectedRun.status}</p></div><div className="flex flex-wrap gap-2">{['uploaded', 'review', 'failed'].includes(selectedRun.status) && <button type="button" onClick={() => analyze(selectedRun)} className="border border-[#34795c] px-4 py-2 text-sm font-semibold text-[#24543f]">{selectedRun.status === 'uploaded' ? (locale === 'ar' ? 'بدء التحليل' : 'Analyze source') : (locale === 'ar' ? 'إعادة التحليل' : 'Re-analyze source')}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && selectedRun.mappings?.some((mapping) => mapping.decision === 'create_required') && <button type="button" onClick={() => runAction(() => prepareMasters(selectedRun))} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'إنشاء البيانات الأساسية المعتمدة' : 'Create approved master data'}</button>}{['review', 'ready'].includes(selectedRun.status) && can('data_migration.execute') && !summary?.opening_balances && <button type="button" onClick={() => runAction(() => prepareOpenings(selectedRun))} className="border border-[#9b6a1f] px-4 py-2 text-sm font-semibold text-[#795316]">{locale === 'ar' ? 'ترحيل الأرصدة الافتتاحية والمخزون' : 'Post opening balances and stock'}</button>}{['review', 'ready', 'failed'].includes(selectedRun.status) && can('data_migration.execute') && summary?.records?.ready > 0 && <button type="button" onClick={() => runAction(() => executeInvoices(selectedRun))} className="bg-[#34795c] px-4 py-2 text-sm font-semibold text-white">{locale === 'ar' ? 'تنفيذ المستندات المالية بعد المراجعة' : 'Execute reviewed financial documents'}</button>}</div></div>{actionError && <Notice type="error">{actionError}</Notice>}{selectedRun.error_message && <p className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-800">{selectedRun.error_message}</p>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={locale === 'ar' ? 'مرشحو الشراء' : 'Purchase candidates'} value={documents.purchase_candidates} /><Metric label={locale === 'ar' ? 'شراء يحتاج مراجعة' : 'Purchase review'} value={documents.purchase_needs_review} /><Metric label={locale === 'ar' ? 'مرشحو البيع' : 'Sales candidates'} value={documents.sales_candidates} /><Metric label={locale === 'ar' ? 'بيع يحتاج مراجعة' : 'Sales review'} value={documents.sales_needs_review} /><Metric label={locale === 'ar' ? 'إيصالات قبض' : 'Receipts'} value={documents.receipt_candidates} /><Metric label={locale === 'ar' ? 'سندات صرف' : 'Payment vouchers'} value={documents.payment_candidates} /><Metric label={locale === 'ar' ? 'مصروفات تحتاج مراجعة' : 'Expenses to review'} value={documents.expense_candidates} /><Metric label={locale === 'ar' ? 'حركات بنكية للمراجعة' : 'Bank operations to review'} value={documents.bank_operation_candidates} /></div>}{summary && <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label={locale === 'ar' ? 'العملاء' : 'Customers'} value={master.customers} /><Metric label={locale === 'ar' ? 'الموردون' : 'Suppliers'} value={master.suppliers} /><Metric label={locale === 'ar' ? 'الأنواع' : 'Types'} value={master.product_types} /><Metric label={locale === 'ar' ? 'الفئات/الأقطار' : 'Categories'} value={master.categories} /><Metric label={locale === 'ar' ? 'المخازن القديمة' : 'Legacy stores'} value={master.stores} /></div>}{summary?.opening_balances && <div className="mt-5 border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{locale === 'ar' ? `تم ترحيل ${summary.opening_balances.parties_posted || 0} رصيد طرف و${summary.opening_balances.stock_items_posted || 0} رصيد مخزون. أي تحذيرات تحتاج مراجعة قبل التنفيذ.` : `Posted ${summary.opening_balances.parties_posted || 0} party openings and ${summary.opening_balances.stock_items_posted || 0} stock openings. Review any warnings before execution.`}</div>}{summary?.warnings?.length > 0 && <div className="mt-5 border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>{locale === 'ar' ? 'تنبيهات المراجعة' : 'Review warnings'}</strong><ul className="mt-2 list-disc ps-5">{summary.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}</section>}
-        {summary?.mappings && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'اقتراحات المطابقة' : 'Mapping suggestions'}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{Object.entries(summary.mappings).map(([key, counts]) => <div key={key} className="border border-[#e2e6df] p-3 text-sm"><strong className="block text-[#183c2b]">{key}</strong><span className="mt-2 block text-emerald-800">{locale === 'ar' ? 'مطابق' : 'Matched'}: {counts.matched || 0}</span><span className="block text-amber-800">{locale === 'ar' ? 'مراجعة' : 'Review'}: {counts.needs_review || 0}</span><span className="block text-blue-800">{locale === 'ar' ? 'إنشاء' : 'Create'}: {counts.create_required || 0}</span></div>)}</div><p className="mt-4 text-sm text-[#68736b]">{locale === 'ar' ? 'هذه اقتراحات قابلة للمراجعة. إنشاء البيانات الأساسية يتم في خطوة منفصلة بعد الاعتماد، ولا يتم إنشاء الفواتير أو القيود هنا.' : 'These are reviewable suggestions. Master data creation is a separate approval step; invoices and journals are not created here.'}</p></section>}
-        {summary?.records && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'السجلات المرحلية' : 'Staged records'}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2"><Metric label={locale === 'ar' ? 'جاهزة للمعاينة' : 'Ready for review'} value={summary.records.ready} /><Metric label={locale === 'ar' ? 'تحتاج تصنيفًا يدويًا' : 'Needs manual classification'} value={summary.records.needs_review} /></div><p className="mt-4 text-sm text-[#68736b]">{locale === 'ar' ? 'هذه بيانات مرحلية غير مؤثرة على الحسابات. لن تُنشأ فواتير أو قيود أو حركات مخزون إلا بعد خطوة تنفيذ مستقلة.' : 'These are staged records and do not affect accounting. Invoices, journals, and stock movements require a separate execution step.'}</p></section>}
-        {selectedRun?.mappings?.length > 0 && <section className="mt-5 border border-[#d7ddd5] bg-white p-5"><div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'مراجعة المطابقات' : 'Review mappings'}</h3><p className="mt-1 text-sm text-[#68736b]">{locale === 'ar' ? 'اختر كيانًا موجودًا أو اترك السجل ليُنشأ بعد الموافقة على خطوة التنفيذ. الأصناف غير الحديدية تحتاج وحدة قياس صريحة.' : 'Choose an existing target or leave the record for creation after approval. Non-steel products require an explicit unit.'}</p></div></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="border-y border-[#d7ddd5]"><th className="py-3 text-start">{locale === 'ar' ? 'النوع' : 'Entity'}</th><th className="py-3 text-start">{locale === 'ar' ? 'معرف المصدر' : 'Source key'}</th><th className="py-3 text-start">{locale === 'ar' ? 'بيان المصدر' : 'Source value'}</th><th className="py-3 text-start">{locale === 'ar' ? 'القرار والهدف' : 'Decision and target'}</th></tr></thead><tbody>{selectedRun.mappings.map((mapping) => <tr key={mapping.id} className="border-b border-[#e6e9e3]"><td className="py-3">{mapping.entity_type}</td><td className="py-3">{mapping.source_key}</td><td className="py-3">{mapping.payload?.source_name || mapping.payload?.source_value || '—'}</td><td className="py-3"><div className="flex flex-wrap gap-2"><select defaultValue={mapping.target_id || ''} onChange={(event) => saveMapping(mapping, event.target.value)} className="min-w-[220px] border border-[#c8c0b7] bg-white px-2 py-1.5"><option value="">{locale === 'ar' ? 'بدون هدف / إنشاء' : 'No target / create'}</option>{(mappingOptions[mapping.entity_type] || []).map((option) => <option key={option.id} value={option.id}>{option.label} · #{option.id}</option>)}</select>{mapping.entity_type === 'product' && mapping.decision === 'create_required' && <select defaultValue={mapping.payload?.source_attributes?.unit || ''} onChange={(event) => saveMapping(mapping, mapping.target_id, 'create_required', event.target.value)} className="border border-[#c8c0b7] bg-white px-2 py-1.5"><option value="">{locale === 'ar' ? 'اختر الوحدة' : 'Choose unit'}</option>{[['ton', 'طن'], ['kg', 'كجم'], ['gram', 'جرام'], ['piece', 'قطعة'], ['liter', 'لتر'], ['meter', 'متر'], ['box', 'صندوق'], ['bag', 'كيس'], ['other', 'أخرى']].map(([value, label]) => <option key={value} value={value}>{locale === 'ar' ? label : value}</option>)}</select>}{mapping.decision !== 'create_required' && <button type="button" onClick={() => saveMapping(mapping, null, 'create_required')} className="border border-[#9b6a1f] px-2 py-1.5 text-xs text-[#795316]">{locale === 'ar' ? 'إنشاء جديد' : 'Create new'}</button>}<span className="self-center text-xs text-[#68736b]">{mapping.decision}</span></div></td></tr>)}</tbody></table></div></section>}
-
-        <section className="mt-8 border-t border-[#d7ddd5] pt-5"><h2 className="font-semibold text-[#183c2b]">{locale === 'ar' ? 'عمليات النقل السابقة' : 'Migration runs'}</h2><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="border-y border-[#d7ddd5] text-start"><th className="py-3 text-start">{t('pf_migration_company')}</th><th className="py-3 text-start">{t('pf_migration_source')}</th><th className="py-3 text-start">{locale === 'ar' ? 'الفترة' : 'Range'}</th><th className="py-3 text-start">{locale === 'ar' ? 'الحالة' : 'Status'}</th><th className="py-3 text-start">{locale === 'ar' ? 'إجراء' : 'Action'}</th></tr></thead><tbody>{runs.data.length === 0 && <tr><td colSpan="5" className="py-6 text-center text-[#68736b]">{t('pf_migration_no_runs')}</td></tr>}{runs.data.map((run) => <tr key={run.id} className="border-b border-[#d7ddd5]"><td className="py-3">{run.company?.name} · #{run.company?.id}</td><td className="py-3">{run.source_name}</td><td className="py-3">{run.documents_from} → {run.documents_to}</td><td className="py-3">{run.status}</td><td className="py-3"><a href={`/super-admin/data-migrations/${run.id}`} className="font-semibold text-[#34795c]">{locale === 'ar' ? 'عرض' : 'View'}</a></td></tr>)}</tbody></table></div></section>
-        {api.stepUpDialog}
     </SuperAdminLayout>;
 }
