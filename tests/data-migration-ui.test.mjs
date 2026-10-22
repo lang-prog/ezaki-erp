@@ -180,3 +180,19 @@ test('the upload form asks for a gap reason only when documents do not start the
     assert.deepEqual(scene.errors, []);
     scene.close();
 });
+
+test('upload 422 and 500 responses keep the form rendered and show actionable localized messages', async () => {
+    for (const [locale, status, key] of [['en', 422, 'mg_upload_error_422'], ['ar', 500, 'mg_upload_error_500']]) {
+        const scene = await createScene({ entry: ENTRY, locale, pageProps: { capabilities: CAPS, navigationCapabilities: CAPS, auth: { user: { name: 'Root' } } } });
+        await scene.mount({ page: 'index', data: { companies: [{ id: 3, name: 'Target Co' }], runs: { data: [], links: [] }, limits: { max_upload_kb: 40960, retention_days: 90 } } });
+        await scene.Entry.act(async () => {
+            scene.window.dispatchEvent(new scene.window.CustomEvent('ezaki:request-error', { detail: { status } }));
+        });
+        await scene.flush();
+        assert.ok(scene.$('[aria-labelledby="mg-upload-title"]'), 'the upload form remains mounted');
+        assert.ok(scene.$('[role="alert"]')?.textContent.includes(translate(locale, key)));
+        assert.ok(!/\bmg_[a-z_]+/.test(scene.text()), 'no untranslated key is shown');
+        assert.deepEqual(scene.errors, []);
+        scene.close();
+    }
+});

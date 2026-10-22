@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from '@inertiajs/react';
 import SuperAdminLayout from '../../Layouts/SuperAdminLayout';
 import { PageHeader, Pagination, StatusBadge, usePt } from '../../Components/Platform/ui';
@@ -18,23 +18,44 @@ export default function DataMigration({ companies = [], runs = { data: [], links
     const manage = can('data_migration.manage');
     const form = useForm({ company_id: '', documents_from: '2026-10-01', documents_to: '2026-10-18', opening_balance_as_of: '2026-09-30', gap_reason: '', customer_start_balance_sign: '', supplier_start_balance_sign: '', source: null });
     const [submitted, setSubmitted] = useState(false);
+    const [requestError, setRequestError] = useState('');
     const data = form.data;
     const gap = Boolean(data.opening_balance_as_of && data.documents_from && data.documents_from !== nextDayOf(data.opening_balance_as_of));
     const errors = form.errors || {};
     const field = (name) => errors[name] && <span className="field-error" role="alert">{errors[name]}</span>;
     const set = (name) => (event) => form.setData(name, event.target.value);
 
+    useEffect(() => {
+        const handleError = (event) => {
+            const status = event.detail?.status;
+            const key = status === 419 ? 'mg_upload_error_419' : status === 403 ? 'mg_upload_error_403' : status === 409 ? 'mg_upload_error_409' : status === 413 ? 'mg_upload_error_413' : status === 422 ? 'mg_upload_error_422' : status === 502 ? 'mg_upload_error_502' : status === 503 ? 'mg_upload_error_503' : status >= 500 ? 'mg_upload_error_500' : status ? 'mg_upload_error_network' : (event.detail?.timeout ? 'mg_upload_error_timeout' : 'mg_upload_error_network');
+            setRequestError(t(key));
+        };
+        window.addEventListener('ezaki:request-error', handleError);
+
+        return () => window.removeEventListener('ezaki:request-error', handleError);
+    }, [t]);
+
     function submit(event) {
         event.preventDefault();
         if (form.processing || submitted) return;
         setSubmitted(true);
-        form.post('/super-admin/data-migrations', { forceFormData: true, preserveScroll: true, onFinish: () => setSubmitted(false) });
+        setRequestError('');
+        form.post('/super-admin/data-migrations', {
+            forceFormData: true,
+            preserveScroll: true,
+            onError: (errors) => {
+                if (Object.keys(errors ?? {}).length === 0) setRequestError(t('mg_upload_error_422'));
+            },
+            onFinish: () => setSubmitted(false),
+        });
     }
 
     return <SuperAdminLayout title={t('mg_title')}>
         <PageHeader title={t('mg_title')} intro={t('mg_intro')} />
         {manage && <form className="erp-section posting-form" onSubmit={submit} aria-labelledby="mg-upload-title">
             <h2 id="mg-upload-title">{t('mg_upload_title')}</h2>
+            {requestError && <div className="notice-card error" role="alert">{requestError}</div>}
             <div className="posting-form__grid">
                 <label className="field"><span>{t('mg_company')}</span><select required name="company_id" value={data.company_id} onChange={set('company_id')}><option value="">—</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name} · #{company.id}</option>)}</select>{field('company_id')}</label>
                 <label className="field"><span>{t('mg_cutoff')}</span><input required type="date" name="opening_balance_as_of" value={data.opening_balance_as_of} onChange={set('opening_balance_as_of')} />{field('opening_balance_as_of')}</label>

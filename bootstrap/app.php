@@ -21,6 +21,14 @@ use Illuminate\Foundation\Configuration\Middleware;
 use Laravel\Sanctum\Http\Middleware\CheckAbilities;
 use Laravel\Sanctum\Http\Middleware\CheckForAnyAbility;
 
+$isPhpUnit = isset($_SERVER['argv']) && in_array('artisan', $_SERVER['argv'], true) && in_array('test', $_SERVER['argv'], true);
+$configCache = dirname(__DIR__).'/bootstrap/cache/config.php';
+if ($isPhpUnit && is_file($configCache)) {
+    if (! @unlink($configCache)) {
+        throw new RuntimeException('Remove the cached Laravel configuration before running PHPUnit.');
+    }
+}
+
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',

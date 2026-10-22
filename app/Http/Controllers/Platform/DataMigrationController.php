@@ -22,9 +22,13 @@ use App\Services\Migration\ReconciliationService;
 use App\Services\Migration\ReportExporter;
 use App\Services\Migration\RunStateMachine;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -56,6 +60,10 @@ class DataMigrationController extends PlatformController
 
     public function store(Request $request): JsonResponse|RedirectResponse
     {
+        if ($response = $this->uploadSchemaPreflight($request)) {
+            return $response;
+        }
+
         $data = $request->validate([
             'company_id' => ['required', 'integer', 'exists:companies,id'],
             'documents_from' => ['required', 'date'],
@@ -73,6 +81,9 @@ class DataMigrationController extends PlatformController
             throw ValidationException::withMessages(['gap_reason' => 'documents_from must be the day after the cutoff, or a reason for the gap must be given.']);
         }
         $file = $request->file('source');
+        if (! $file || ! $file->isValid() || ! is_readable($file->getRealPath())) {
+            throw ValidationException::withMessages(['source' => 'The uploaded file is not readable. Please choose it again.']);
+        }
         $name = strtolower((string) $file->getClientOriginalName());
         if (! str_ends_with($name, '.sql') && ! str_ends_with($name, '.sql.gz')) {
             throw ValidationException::withMessages(['source' => 'Only .sql or .sql.gz files are accepted.']);
@@ -83,25 +94,116 @@ class DataMigrationController extends PlatformController
             throw ValidationException::withMessages(['source' => 'The file is not a recognisable SQL dump (type and content do not match).']);
         }
         $hash = hash_file('sha256', $file->getRealPath());
-        $existing = DataMigrationRun::query()->where('company_id', $company->id)->where('source_system', config('migration.source_system'))->where('source_hash', $hash)->first();
-        if ($existing) {
-            return $request->expectsJson()
-                ? response()->json(['ok' => true, 'duplicate' => true, 'run' => $this->runPayload($existing)])
-                : redirect()->route('super-admin.data-migrations.show', $existing);
+        if (! is_string($hash)) {
+            throw ValidationException::withMessages(['source' => 'The uploaded file could not be fingerprinted. Please choose it again.']);
         }
-        $stored = $file->storeAs('data-migrations/'.$company->id, Str::uuid()->toString().($gz ? '.sql.gz' : '.sql'), 'local');
-        abort_unless(is_string($stored), 500, 'The source file could not be stored.');
+        $stored = 'data-migrations/'.$company->id.'/'.Str::uuid()->toString().($gz ? '.sql.gz' : '.sql');
+        try {
+            $written = $file->storeAs('data-migrations/'.$company->id, basename($stored), 'local');
+        } catch (\Throwable $exception) {
+            Storage::disk('local')->delete($stored);
+            throw $exception;
+        }
+        if (! is_string($written)) {
+            Storage::disk('local')->delete($stored);
+            abort(500, 'The source file could not be stored. Check the private storage disk permissions.');
+        }
         $policy = array_filter(['customer_start_balance_sign' => $data['customer_start_balance_sign'] ?? null, 'supplier_start_balance_sign' => $data['supplier_start_balance_sign'] ?? null]);
-        $run = DataMigrationRun::query()->create([
-            'company_id' => $company->id, 'created_by' => $request->user()->id, 'source_system' => config('migration.source_system'),
-            'source_name' => Str::limit((string) $file->getClientOriginalName(), 191, ''), 'source_disk' => 'local', 'source_path' => $stored,
-            'source_hash' => $hash, 'source_bytes' => $file->getSize(), 'documents_from' => $data['documents_from'], 'documents_to' => $data['documents_to'],
-            'opening_balance_as_of' => $data['opening_balance_as_of'], 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_UPLOADED,
-            'policy' => $policy ?: null, 'gap_acknowledged_at' => $gap ? now() : null, 'gap_acknowledged_reason' => $gap ? $data['gap_reason'] : null,
-        ]);
-        $this->workflow->machine()->record($run, 'uploaded', null, 'uploaded', $request->user(), $gap ? $data['gap_reason'] : null, ['bytes' => $run->source_bytes, 'gap' => $gap]);
+        $identity = ['company_id' => $company->id, 'source_system' => config('migration.source_system'), 'source_hash' => $hash];
+        try {
+            [$run, $duplicate] = DB::transaction(function () use ($identity, $request, $file, $stored, $data, $policy, $gap): array {
+                $claim = DB::table('data_migration_identity_claims')->where($identity)->lockForUpdate()->first();
+                if ($claim) {
+                    return [DataMigrationRun::query()->findOrFail($claim->run_id), true];
+                }
 
-        return $request->expectsJson() ? response()->json(['ok' => true, 'duplicate' => false, 'run' => $this->runPayload($run)]) : redirect()->route('super-admin.data-migrations.show', $run);
+                $existing = DataMigrationRun::query()
+                    ->where('company_id', $identity['company_id'])
+                    ->where('source_system', $identity['source_system'])
+                    ->where('source_hash', $identity['source_hash'])
+                    ->orderBy('id')
+                    ->first();
+                if ($existing) {
+                    DB::table('data_migration_identity_claims')->insert($identity + [
+                        'run_id' => $existing->id, 'created_at' => now(), 'updated_at' => now(),
+                    ]);
+
+                    return [$existing, true];
+                }
+
+                $run = DataMigrationRun::query()->create([
+                    'company_id' => $identity['company_id'], 'created_by' => $request->user()->id, 'source_system' => $identity['source_system'],
+                    'source_name' => Str::limit((string) $file->getClientOriginalName(), 191, ''), 'source_disk' => 'local', 'source_path' => $stored,
+                    'source_hash' => $identity['source_hash'], 'source_bytes' => $file->getSize(), 'documents_from' => $data['documents_from'], 'documents_to' => $data['documents_to'],
+                    'opening_balance_as_of' => $data['opening_balance_as_of'], 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_UPLOADED,
+                    'policy' => $policy ?: null, 'gap_acknowledged_at' => $gap ? now() : null, 'gap_acknowledged_reason' => $gap ? $data['gap_reason'] : null,
+                ]);
+                DB::table('data_migration_identity_claims')->insert($identity + [
+                    'run_id' => $run->id, 'created_at' => now(), 'updated_at' => now(),
+                ]);
+                $this->workflow->machine()->record($run, 'uploaded', null, 'uploaded', $request->user(), $gap ? $data['gap_reason'] : null, ['bytes' => $run->source_bytes, 'gap' => $gap]);
+
+                return [$run, false];
+            });
+        } catch (UniqueConstraintViolationException $exception) {
+            $claim = DB::table('data_migration_identity_claims')->where($identity)->first();
+            if (! $claim) {
+                Storage::disk('local')->delete($stored);
+                throw $exception;
+            }
+            $run = DataMigrationRun::query()->findOrFail($claim->run_id);
+            $duplicate = true;
+        } catch (\Throwable $exception) {
+            Storage::disk('local')->delete($stored);
+            throw $exception;
+        }
+        if ($duplicate) {
+            Storage::disk('local')->delete($stored);
+        }
+
+        return $request->expectsJson()
+            ? response()->json(['ok' => true, 'duplicate' => $duplicate, 'run' => $this->runPayload($run)])
+            : redirect()->route('super-admin.data-migrations.show', $run);
+    }
+
+    private function uploadSchemaPreflight(Request $request): JsonResponse|RedirectResponse|null
+    {
+        $required = [
+            'data_migration_runs' => ['source_bytes', 'policy', 'integrity', 'preflight', 'state_version', 'lock_token', 'lock_expires_at', 'gap_acknowledged_at', 'gap_acknowledged_reason'],
+            'data_migration_mappings' => ['reason', 'reviewed_by', 'reviewed_at', 'locked_at'],
+            'data_migration_records' => ['review_code', 'exclusion_reason', 'attempts', 'result', 'executed_at'],
+            'products' => ['material_category', 'quantity_basis'],
+            'data_migration_source_rows' => ['run_id', 'source_table', 'row_number', 'source_key', 'payload'],
+            'data_migration_events' => ['run_id', 'action', 'actor_id', 'reason', 'counts', 'error'],
+            'data_migration_links' => ['company_id', 'run_id', 'source_system', 'source_table', 'source_id', 'document_type', 'target_type', 'target_id', 'result'],
+            'data_migration_identity_claims' => ['company_id', 'source_system', 'source_hash', 'run_id'],
+        ];
+        $missing = [];
+        foreach ($required as $table => $columns) {
+            if (! Schema::hasTable($table)) {
+                $missing[] = $table;
+
+                continue;
+            }
+            foreach ($columns as $column) {
+                if (! Schema::hasColumn($table, $column)) {
+                    $missing[] = $table.'.'.$column;
+                }
+            }
+        }
+        $migrationRecorded = Schema::hasTable('migrations') && DB::table('migrations')->whereIn('migration', [
+            '2026_10_21_000001_remediate_data_migration_center', '2026_10_21_000002_create_data_migration_identity_claims',
+        ])->count() === 2;
+        if ($missing === [] && $migrationRecorded) {
+            return null;
+        }
+
+        $message = __('migration.schema_pending');
+        if ($request->headers->has('X-Inertia') || ! $request->expectsJson()) {
+            return back()->withErrors(['source' => $message]);
+        }
+
+        return response()->json(['message' => $message, 'code' => 'migration_schema_pending'], 503);
     }
 
     public function show(DataMigrationRun $run): Response
