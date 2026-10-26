@@ -163,6 +163,59 @@ final class MigrationWorkflow
         });
     }
 
+    /** Approve deterministic party mappings and create all safe new parties in one action. */
+    /** @return array<string, mixed> */
+    public function createAllPhaseOnePartyMasters(int $runId, User $actor): array
+    {
+        return $this->sm->locked($runId, 'phase1_party_masters_bulk', ['review', 'party_openings_preflight', 'party_openings_ready'], function (DataMigrationRun $run) use ($actor): array {
+            abort_unless($run->mode === 'party_openings_phase1', 409, 'This run is not scoped to Phase 1 party openings.');
+
+            $approved = ['customers' => 0, 'suppliers' => 0, 'matched' => 0];
+            foreach (DataMigrationMapping::query()->where('run_id', $run->id)->whereIn('entity_type', ['customer', 'supplier'])->whereNull('locked_at')->lockForUpdate()->get() as $mapping) {
+                $payload = $mapping->payload ?? [];
+                $safe = false;
+                if ($mapping->decision === 'create_required') {
+                    $safe = trim((string) data_get($payload, 'source_name', '')) !== ''
+                        && ! (bool) data_get($payload, 'missing_in_source', false)
+                        && data_get($payload, 'note') === null;
+                } elseif ($mapping->decision === 'matched' && data_get($payload, 'note') === 'name_exact') {
+                    $safe = true;
+                }
+                if (! $safe || $mapping->isReviewed()) {
+                    continue;
+                }
+                $payload['reviewed'] = true;
+                $mapping->forceFill([
+                    'payload' => $payload,
+                    'reviewed_by' => $actor->id,
+                    'reviewed_at' => now(),
+                    'reason' => 'Bulk approval of deterministic party mapping.',
+                ])->save();
+                $approved[$mapping->decision === 'create_required' ? ($mapping->entity_type === 'customer' ? 'customers' : 'suppliers') : 'matched']++;
+            }
+
+            if ($run->status === 'review') {
+                $this->sm->transition($run, 'party_openings_preflight', 'phase1_party_bulk_preflight', $actor);
+            }
+            $preview = $this->partyOpenings->preview($run->fresh());
+            $masters = $this->masters->preflightPhaseOne($run->fresh());
+            $blockers = array_merge($preview['unresolved'], $masters['blockers']);
+            if ($blockers !== []) {
+                $run = $run->fresh();
+                $run->forceFill(['preflight' => array_merge($run->preflight ?? [], ['phase1_parties' => ['ok' => false, 'blockers' => $blockers]])])->save();
+                if ($run->status !== 'review') {
+                    $this->sm->transition($run, 'review', 'phase1_party_bulk_blocked', $actor, null, ['blockers' => count($blockers)]);
+                }
+                throw RunStateMachine::refuse('phase1_party_blocked', 'Some party mappings or balance reviews still require a decision.', ['blockers' => array_slice($blockers, 0, 100)], 422);
+            }
+
+            $created = $this->partyOpenings->createMasters($run->fresh(), $actor, $this->masters);
+            $this->sm->transition($run->fresh(), 'party_openings_ready', 'phase1_party_masters_created_bulk', $actor, null, $created + ['approved' => $approved]);
+
+            return ['approved' => $approved, 'created' => $created, 'next' => 'post_party_openings'];
+        });
+    }
+
     /** @return array<string, mixed> */
     public function postPhaseOnePartyOpenings(int $runId, User $actor): array
     {

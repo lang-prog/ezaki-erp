@@ -60,7 +60,7 @@ function BlockerList({ blockers, t, onOpenMapping, onAcknowledge, canManage }) {
     </li>)}</ul>;
 }
 
-function MappingRow({ mapping, options, t, disabled, onSave, onExclude }) {
+function MappingRow({ mapping, options, t, disabled, onSave, onExclude, hidePartyCreate }) {
     const [unit, setUnit] = useState(mapping.unit_basis ?? '');
     const [cost, setCost] = useState(mapping.opening_cost_per_ton ?? '');
     const frozen = mapping.locked || disabled;
@@ -98,14 +98,14 @@ function MappingRow({ mapping, options, t, disabled, onSave, onExclude }) {
             {nonWeight && <small className="permission-note">{t('mg_unit_warning')}</small>}
         </td>
         <td className="no-print"><div className="row-actions">
-            {CREATABLE.includes(mapping.entity) && mapping.entity !== 'product' && <button type="button" className="table-action" disabled={frozen} onClick={() => onSave(mapping, { decision: 'create_required' })}>{t('mg_create_new')}</button>}
+            {CREATABLE.includes(mapping.entity) && mapping.entity !== 'product' && !(hidePartyCreate && ['customer', 'supplier'].includes(mapping.entity) && ['create_required', 'matched'].includes(mapping.decision)) && <button type="button" className="table-action" disabled={frozen} onClick={() => onSave(mapping, { decision: 'create_required' })}>{t('mg_create_new')}</button>}
             {mapping.entity === 'category' && mapping.decision === 'needs_review' && <button type="button" className="table-action" disabled={frozen} onClick={() => onSave(mapping, { decision: 'create_required' })}>{t('mg_create_new')}</button>}
             <button type="button" className="table-action table-action--danger" disabled={frozen} onClick={() => onExclude(mapping)}>{t('mg_exclude')}</button>
         </div></td>
     </tr>;
 }
 
-function MappingsPanel({ base, options, counts, t, busy, canManage, focus, onSave, onExclude, onApproveSafe, version }) {
+function MappingsPanel({ base, options, counts, t, busy, canManage, phase1Bulk, focus, onSave, onExclude, onApproveSafe, onCreateAllParties, version }) {
     const [filters, setFilters] = useState({ entity: focus?.entity ?? '', decision: '', q: focus?.q ?? '' });
     const [applied, setApplied] = useState(filters);
     const [page, setPage] = useState(1);
@@ -137,13 +137,13 @@ function MappingsPanel({ base, options, counts, t, busy, canManage, focus, onSav
             <label className="field"><span>{t('mg_filter_entity')}</span><select value={filters.entity} onChange={(event) => setFilters({ ...filters, entity: event.target.value })}><option value="">{t('mg_all')}</option>{MIGRATION_ENTITIES.map((entity) => <option key={entity} value={entity}>{t(`mg_entity_${entity}`)}</option>)}</select></label>
             <label className="field"><span>{t('mg_filter_decision')}</span><select value={filters.decision} onChange={(event) => setFilters({ ...filters, decision: event.target.value })}><option value="">{t('mg_all')}</option>{MIGRATION_DECISIONS.map((decision) => <option key={decision} value={decision}>{t(`mg_decision_${decision}`)}</option>)}</select></label>
             <label className="field"><span>{t('mg_search')}</span><input type="search" value={filters.q} onChange={(event) => setFilters({ ...filters, q: event.target.value })} /></label>
-            <div className="erp-toolbar"><button type="submit" className="erp-button erp-button--primary">{t('mg_apply')}</button>{canManage && <button type="button" className="erp-button erp-button--secondary" disabled={busy} onClick={onApproveSafe}>{t('mg_approve_safe')}</button>}</div>
+            <div className="erp-toolbar"><button type="submit" className="erp-button erp-button--primary">{t('mg_apply')}</button>{canManage && <button type="button" className="erp-button erp-button--secondary" disabled={busy} onClick={onApproveSafe}>{t('mg_approve_safe')}</button>}{phase1Bulk && <button type="button" className="erp-button erp-button--primary" disabled={busy} onClick={onCreateAllParties}>{t('mg_phase1_create_all_parties')}</button>}</div>
         </form>
         {state.error && <Notice type="error">{state.error}</Notice>}
         <div className="erp-table-wrap"><table className="erp-table" aria-busy={state.loading}>
             <thead><tr><th>{t('mg_filter_entity')}</th><th>{t('mg_source_key')}</th><th>{t('mg_source_name')}</th><th>{t('mg_decision')}</th><th>{t('mg_target')}</th><th className="no-print">{t('actions')}</th></tr></thead>
             <tbody>
-                {state.data.map((mapping) => <MappingRow key={`${mapping.id}-${mapping.decision}-${mapping.target_id}-${mapping.unit_basis}`} mapping={mapping} options={options} t={t} disabled={busy || !canManage} onSave={onSave} onExclude={onExclude} />)}
+                {state.data.map((mapping) => <MappingRow key={`${mapping.id}-${mapping.decision}-${mapping.target_id}-${mapping.unit_basis}`} mapping={mapping} options={options} t={t} disabled={busy || !canManage} hidePartyCreate={Boolean(phase1Bulk)} onSave={onSave} onExclude={onExclude} />)}
                 {!state.loading && state.data.length === 0 && <tr><td colSpan={6} className="empty-cell">{t('mg_mappings_empty')}</td></tr>}
             </tbody>
         </table></div>
@@ -403,9 +403,10 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
             <p className="permission-note">{t('mg_policy_impact')}</p>
             {manage && !executed && <div className="erp-toolbar">{button(t('mg_policy_save'), () => action('policy', 'post', '/policy', Object.fromEntries(Object.entries(policy).filter(([, value]) => value))), { primary: true, disabled: !policy.customer_start_balance_sign && !policy.supplier_start_balance_sign })}</div>}
         </div>,
-        mapping: <MappingsPanel base={base} options={options} counts={run.counts?.mappings} t={t} busy={isBusy} canManage={manage && ['review', 'masters_ready', 'masters_created', 'openings_ready', 'uploaded', 'parsed'].includes(status)} focus={focus} version={version}
+        mapping: <MappingsPanel base={base} options={options} counts={run.counts?.mappings} t={t} busy={isBusy} canManage={manage && ['review', 'masters_ready', 'masters_created', 'openings_ready', 'uploaded', 'parsed'].includes(status)} phase1Bulk={phase1Only && execute && ['review', 'party_openings_preflight', 'party_openings_ready'].includes(status)} focus={focus} version={version}
             onSave={saveMapping} onExclude={(mapping) => setDialog({ title: t('mg_exclude_title'), impact: t('mg_exclude_impact'), label: t('mg_exclude'), danger: true, withReason: true, run: ({ reason }) => dialogAction('put', `/mappings/${mapping.id}`, { decision: 'excluded', reason }) })}
-            onApproveSafe={() => setDialog({ title: t('mg_approve_safe'), impact: t('mg_approve_safe_impact'), label: t('mg_approve_safe'), withReason: false, run: () => dialogAction('post', '/mappings/approve-safe', {}) })} />,
+            onApproveSafe={() => setDialog({ title: t('mg_approve_safe'), impact: t('mg_approve_safe_impact'), label: t('mg_approve_safe'), withReason: false, run: () => dialogAction('post', '/mappings/approve-safe', {}) })}
+            onCreateAllParties={() => setDialog({ title: t('mg_phase1_create_all_parties'), impact: t('mg_phase1_create_all_parties_impact'), label: t('mg_phase1_create_all_parties'), withReason: false, run: () => dialogAction('post', '/phase1/parties/create-all', {}) })} />,
         masters: <div>
             <div className="erp-toolbar">
                 {manage && ['review', 'masters_ready', 'masters_preflight'].includes(status) && button(t('mg_masters_preflight'), () => action('masters-preflight', 'post', '/masters/preflight', {}, (out) => setBlockers((previous) => ({ ...previous, masters: out.preflight.blockers, mastersCounts: out.preflight.counts, mastersOk: out.preflight.ok }))), { primary: true })}

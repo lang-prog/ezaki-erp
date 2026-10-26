@@ -290,6 +290,34 @@ final class DataMigrationRemediationTest extends TestCase
         $this->assertSame(1, DB::table('products')->where('company_id', $company->id)->where('material_category', '12')->where('quantity_basis', 'meter')->count());
     }
 
+    public function test_phase_one_bulk_action_creates_all_new_parties_without_per_row_clicks_and_posts_balances(): void
+    {
+        $owner = $this->admin();
+        $company = $this->company($owner);
+        $rows = $this->baseRows();
+        $rows['customer'][] = ['id_customer' => 2, 'name_customer' => 'Customer Two', 'address' => 'y', 'phon' => '2', 'start_balance' => '0'];
+        $rows['import'][] = ['id_import' => 2, 'name' => 'Supplier Two'];
+        $rows['customer'][0]['start_balance'] = '100';
+        $rows['account_import'][] = ['id_account_import' => 1, 'id_import' => 1, 'start_cash' => '100'];
+
+        $runId = (int) $this->upload($owner, $company, $this->dump($rows), ['migration_scope' => 'party_openings_phase1'])->assertOk()->json('run.id');
+        $this->api($owner, 'POST', "/super-admin/data-migrations/{$runId}/parse")->assertOk();
+        $base = "/super-admin/data-migrations/{$runId}";
+
+        $bulk = $this->api($owner, 'POST', "{$base}/phase1/parties/create-all")->assertOk();
+        $this->assertSame(2, $bulk->json('result.created.customers'));
+        $this->assertSame(2, $bulk->json('result.created.suppliers'));
+        $this->assertSame('party_openings_ready', DataMigrationRun::query()->findOrFail($runId)->status);
+        $this->assertSame(2, DataMigrationMapping::query()->where('run_id', $runId)->where('entity_type', 'customer')->where('decision', 'matched')->whereNotNull('target_id')->count());
+        $this->assertSame(2, DataMigrationMapping::query()->where('run_id', $runId)->where('entity_type', 'supplier')->where('decision', 'matched')->whereNotNull('target_id')->count());
+        $this->assertSame(2, DB::table('customer_suppliers')->where('company_id', $company->id)->where('is_customer', true)->count());
+        $this->assertSame(2, DB::table('customer_suppliers')->where('company_id', $company->id)->where('is_supplier', true)->count());
+
+        $this->api($owner, 'POST', "{$base}/phase1/post")->assertOk();
+        $this->assertSame(2, DB::table('data_migration_links')->where('run_id', $runId)->where('document_type', 'party_opening_balance_phase1')->count());
+        $this->assertSame('phase1_completed', DataMigrationRun::query()->findOrFail($runId)->status);
+    }
+
     public function test_retention_and_archive_require_a_reason_and_state(): void
     {
         $owner = $this->admin();

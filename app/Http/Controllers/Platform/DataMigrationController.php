@@ -394,6 +394,11 @@ class DataMigrationController extends PlatformController
         return $this->done($request, ['created' => $this->workflow->createPhaseOnePartyMasters($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
     }
 
+    public function phaseOneCreateAllPartyMasters(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
+    {
+        return $this->done($request, ['result' => $this->workflow->createAllPhaseOnePartyMasters($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
+    }
+
     public function phaseOneIssue(Request $request, DataMigrationRun $run): JsonResponse|RedirectResponse
     {
         $data = $request->validate([

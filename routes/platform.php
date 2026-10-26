@@ -70,6 +70,7 @@ Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account
             Route::middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->group(function (): void {
                 Route::post('/masters/create', [DataMigrationController::class, 'createMasters'])->name('masters.create');
                 Route::post('/phase1/masters/create', [DataMigrationController::class, 'phaseOneCreateMasters'])->name('phase1.masters.create');
+                Route::post('/phase1/parties/create-all', [DataMigrationController::class, 'phaseOneCreateAllPartyMasters'])->name('phase1.parties.create-all');
                 Route::post('/openings/post', [DataMigrationController::class, 'postOpenings'])->name('openings.post');
                 Route::post('/phase1/post', [DataMigrationController::class, 'phaseOnePost'])->name('phase1.post');
                 Route::post('/phase1/reverse', [DataMigrationController::class, 'phaseOneReverse'])->name('phase1.reverse');
