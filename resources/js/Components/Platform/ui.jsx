@@ -206,7 +206,7 @@ export function ConfirmActionDialog({ title, eyebrow, impact, confirmLabel, dang
                 {impact && <div className="impact-box" role="group" aria-label={t('pf_impact')}><strong>{t('pf_impact')}</strong>{impact}</div>}
                 {children}
             </ErrorBoundary>
-            {withReason && <label className="field"><span>{t('pf_reason')}</span><textarea required minLength={3} maxLength={1000} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} /><small>{t('pf_reason_hint')}</small></label>}
+            {withReason && <label className="field"><span>{t('pf_reason')}</span><textarea required minLength={5} maxLength={1000} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} /><small>{t('pf_reason_hint')}</small></label>}
         </form>
     </ModalShell>;
 }

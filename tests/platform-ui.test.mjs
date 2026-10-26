@@ -90,3 +90,12 @@ test('platform pages never render secrets and never use physical direction CSS c
         assert.ok(!/\b(?:ml|mr|pl|pr)-\d/.test(source), file);
     }
 });
+
+test('confirmation reasons match the backend minimum and phase-one step-up does not stack modals', () => {
+    const ui = readFileSync(new URL('Components/Platform/ui.jsx', root), 'utf8');
+    const migration = readFileSync(new URL('Pages/SuperAdmin/DataMigrationRun.jsx', root), 'utf8');
+    assert.match(ui, /textarea required minLength=\{5\}/);
+    assert.match(migration, /const phaseOneDialogAction = useCallback/);
+    assert.match(migration, /phaseOneDialogAction\('\/phase1\/issues\/bulk'/);
+    assert.match(migration, /setDialog\(null\);/);
+});

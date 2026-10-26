@@ -358,6 +358,18 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
         return out;
     }, [request, refresh, t]);
 
+    // Phase-one decisions require step-up. Close the reason dialog first so the
+    // security dialog is the only modal on screen while the request is retried.
+    const phaseOneDialogAction = useCallback((path, data, onDone) => {
+        setDialog(null);
+
+        return dialogAction('post', path, data, onDone).catch((failure) => {
+            if (failure?.message !== 'cancelled') setError(explain(failure, t));
+
+            return null;
+        });
+    }, [dialogAction, t]);
+
     useEffect(() => {
         if (['masters_created', 'openings_preflight', 'openings_ready', 'openings_posted', 'documents_ready', 'failed_recoverable', 'executing', 'completed_with_review', 'completed', 'signed_off'].includes(run.status) && viewed === 'openings') {
             let cancelled = false;
@@ -534,8 +546,8 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
                 ? <button type="button" className="erp-button erp-button--secondary" disabled={busy !== null} onClick={() => action('events', 'get', '/events', undefined, (out) => setEvents(out.events))}>{t('mg_events')}</button>
                 : <div className="erp-table-wrap"><table className="erp-table"><thead><tr><th>{t('mg_event_when')}</th><th>{t('mg_event_action')}</th><th>{t('mg_event_from')}</th><th>{t('mg_event_to')}</th></tr></thead><tbody>{events.map((event) => <tr key={event.id}><td>{dateTime(event.created_at)}</td><td>{event.action}{event.reason && <small className="table-subline">{event.reason}</small>}</td><td>{event.from_state ? t(`mg_status_${event.from_state}`) : '—'}</td><td>{event.to_state ? t(`mg_status_${event.to_state}`) : '—'}</td></tr>)}</tbody></table></div>}
         </section>
-        {dialog?.phase1Issue && <PhaseOneIssueDialog issue={dialog.phase1Issue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues', { issue_key: dialog.phase1Issue.issue_key, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
-        {dialog?.phase1BulkIssue && <PhaseOneBulkIssueDialog group={dialog.phase1BulkIssue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues/bulk', { code: dialog.phase1BulkIssue.code, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
+        {dialog?.phase1Issue && <PhaseOneIssueDialog issue={dialog.phase1Issue} t={t} onConfirm={({ decision, reason }) => phaseOneDialogAction('/phase1/issues', { issue_key: dialog.phase1Issue.issue_key, decision, reason }, (out) => setPhase1(out.phase1))} onClose={() => setDialog(null)} />}
+        {dialog?.phase1BulkIssue && <PhaseOneBulkIssueDialog group={dialog.phase1BulkIssue} t={t} onConfirm={({ decision, reason }) => phaseOneDialogAction('/phase1/issues/bulk', { code: dialog.phase1BulkIssue.code, decision, reason }, (out) => setPhase1(out.phase1))} onClose={() => setDialog(null)} />}
         {dialog && !dialog.phase1Issue && <ConfirmActionDialog title={dialog.title} impact={dialog.impact} confirmLabel={dialog.label} danger={dialog.danger} withReason={dialog.withReason} onConfirm={dialog.run} onClose={() => setDialog(null)} resetKey={dialog.title} />}
         {api.stepUpDialog}
     </SuperAdminLayout>;
