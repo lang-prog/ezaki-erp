@@ -8,6 +8,7 @@ use App\Http\Controllers\Web\CoreErpPageController;
 use App\Http\Controllers\Web\LocaleController;
 use App\Http\Controllers\Web\PasswordResetController;
 use App\Http\Controllers\Web\RegistrationController;
+use App\Http\Middleware\PlatformGuest;
 use App\Services\CompanyLandingService;
 use App\Services\SubscriptionLifecycle;
 use Illuminate\Http\Request;
@@ -29,10 +30,13 @@ Route::middleware('guest')->group(function (): void {
     Route::post('/forgot-password', [PasswordResetController::class, 'sendLink'])->middleware('throttle:3,1')->name('password.email');
     Route::get('/reset-password/{token}', [PasswordResetController::class, 'form'])->name('password.reset');
     Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:3,1')->name('password.update');
-    Route::get('/super-admin/login', [AuthenticationController::class, 'show'])->defaults('type', 'super_admin')->name('super-admin.login');
-    Route::post('/super-admin/login', [AuthenticationController::class, 'login'])->defaults('type', 'super_admin')->middleware('throttle:login');
     Route::get('/register', [RegistrationController::class, 'show'])->name('registration.create');
     Route::post('/register', [RegistrationController::class, 'store'])->middleware('throttle:3,1')->name('registration.store');
+});
+
+Route::middleware(PlatformGuest::class)->group(function (): void {
+    Route::get('/super-admin/login', [AuthenticationController::class, 'show'])->defaults('type', 'super_admin')->name('super-admin.login');
+    Route::post('/super-admin/login', [AuthenticationController::class, 'login'])->defaults('type', 'super_admin')->middleware('throttle:login');
 });
 
 Route::get('/register/verify/{registration}', [RegistrationController::class, 'verify'])

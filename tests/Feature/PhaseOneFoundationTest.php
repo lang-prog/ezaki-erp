@@ -78,6 +78,17 @@ class PhaseOneFoundationTest extends TestCase
         $this->actingAs($admin)->get('/')->assertRedirect(route('super-admin.dashboard'));
     }
 
+    public function test_authenticated_platform_user_reopening_login_is_sent_to_platform_dashboard(): void
+    {
+        $admin = User::query()->create([
+            'name' => 'Platform Login Admin', 'email' => 'platform-login-admin@example.test', 'password' => 'password',
+            'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active',
+        ]);
+
+        $this->actingAs($admin)->get('/super-admin/login')
+            ->assertRedirect(route('super-admin.dashboard'));
+    }
+
     public function test_self_registration_is_not_approvable_until_signed_email_verification(): void
     {
         Notification::fake();
