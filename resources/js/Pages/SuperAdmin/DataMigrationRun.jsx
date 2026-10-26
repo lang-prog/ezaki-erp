@@ -51,7 +51,7 @@ function BlockerList({ blockers, t, onOpenMapping, onAcknowledge, canManage }) {
 
     return <ul className="blocker-list" aria-label={t('mg_blockers')}>{blockers.map((blocker, index) => <li key={`${blocker.code}-${blocker.mapping_id ?? index}-${blocker.source_key ?? index}`}>
         <strong>{codeLabel(t, blocker.code)}</strong>
-        {blocker.entity && <span> · {t(`mg_entity_${blocker.entity}`)} {blocker.source_key ?? ''}</span>}
+        {blocker.entity && <span> · {t(`mg_entity_${blocker.entity}`)} {blocker.source_key ?? blocker.source_id ?? ''}</span>}
         {blocker.name && <span> · {blocker.name}</span>}
         {blocker.records ? <span> · {blocker.records}</span> : null}
         {scalars(blocker.params) && <small className="table-subline">{scalars(blocker.params)}</small>}
@@ -234,19 +234,46 @@ function PhaseOneReconciliation({ data, t, money }) {
     </div>;
 }
 
+function phaseOneIssueOptions(code) {
+    if (code === 'supplier_formula_differs_from_legacy_runtime') return ['approve_details', 'exclude_party'];
+    if (code === 'supplier_category_conversion_differs_from_legacy') return ['approve_category_rule', 'exclude_party'];
+    if (code === 'supplier_sale_amount_mismatch' || code === 'supplier_sale_detail_total_mismatch') return ['include_eda3', 'exclude'];
+    if (['invalid_customer_start_balance', 'supplier_start_amount_invalid', 'sales_business_date_missing', 'customer_sale_amount_invalid', 'purchase_business_date_missing', 'supplier_payment_amount_invalid', 'supplier_header_amount_invalid', 'purchase_category_flag_missing', 'purchase_line_amount_invalid'].includes(code)) return ['exclude_component', 'exclude_party'];
+
+    return ['exclude'];
+}
+
+function phaseOneDefaultDecision(code) {
+    return code?.includes('formula') ? 'approve_details' : code?.includes('sale_') ? 'include_eda3' : code?.includes('start_balance') || code?.includes('amount_invalid') ? 'exclude_component' : 'exclude';
+}
+
 function PhaseOneIssueDialog({ issue, t, onConfirm, onClose }) {
-    const [decision, setDecision] = useState(issue.code?.includes('formula') ? 'approve_details' : issue.code?.includes('sale_') ? 'include_eda3' : 'exclude_component');
-    const options = issue.code === 'supplier_formula_differs_from_legacy_runtime'
-        ? ['approve_details', 'exclude_party']
-        : issue.code === 'supplier_category_conversion_differs_from_legacy'
-            ? ['approve_category_rule', 'exclude_party']
-            : issue.code === 'supplier_sale_amount_mismatch' || issue.code === 'supplier_sale_detail_total_mismatch'
-                ? ['include_eda3', 'exclude']
-                : ['exclude_component', 'exclude_party', 'exclude'];
+    const [decision, setDecision] = useState(phaseOneDefaultDecision(issue.code));
+    const options = phaseOneIssueOptions(issue.code);
 
     return <ConfirmActionDialog title={t('mg_phase1_issue_decision')} impact={<p>{codeLabel(t, issue.code)} · {issue.source_table}#{issue.source_id}</p>} confirmLabel={t('mg_confirm')} onConfirm={({ reason }) => onConfirm({ decision, reason })} onClose={onClose}>
         <label className="field"><span>{t('mg_decision')}</span><select value={decision} onChange={(event) => setDecision(event.target.value)}>{options.map((option) => <option key={option} value={option}>{t(`mg_phase1_issue_${option}`)}</option>)}</select></label>
     </ConfirmActionDialog>;
+}
+
+function PhaseOneBulkIssueDialog({ group, t, onConfirm, onClose }) {
+    const [decision, setDecision] = useState(phaseOneDefaultDecision(group.code));
+    const options = phaseOneIssueOptions(group.code);
+
+    return <ConfirmActionDialog title={`${t('mg_ack_all')} · ${group.count}`} impact={<><p>{codeLabel(t, group.code)}</p><p>{t('mg_ack_all_impact')}</p></>} confirmLabel={t('mg_confirm')} onConfirm={({ reason }) => onConfirm({ decision, reason })} onClose={onClose}>
+        <label className="field"><span>{t('mg_decision')}</span><select value={decision} onChange={(event) => setDecision(event.target.value)}>{options.map((option) => <option key={option} value={option}>{t(`mg_phase1_issue_${option}`)}</option>)}</select></label>
+    </ConfirmActionDialog>;
+}
+
+function PhaseOneIssueGroups({ issues, t, canManage, onBulk }) {
+    if (!canManage || issues.length === 0) return null;
+    const groups = Object.values(issues.reduce((result, issue) => {
+        result[issue.code] ??= { code: issue.code, count: 0 };
+        result[issue.code].count += 1;
+        return result;
+    }, {}));
+
+    return <div className="erp-toolbar">{groups.map((group) => <button key={group.code} type="button" className="erp-button erp-button--secondary" onClick={() => onBulk(group)}>{t('mg_ack_all')} · {codeLabel(t, group.code)} ({group.count})</button>)}</div>;
 }
 
 export default function DataMigrationRun({ run: initialRun, options: initialOptions = {} }) {
@@ -430,7 +457,10 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
                 <p className="permission-note">{t('mg_phase1_cutoff')}: {phase1.cutoff_date} · {t('mg_phase1_effective')}: {phase1.opening_effective_date} · {phase1.timezone}</p>
                 <div className="summary-grid">{[['mg_phase1_customer', phase1.counts?.customer_mappings], ['mg_phase1_supplier', phase1.counts?.supplier_mappings], ['mg_phase1_supplier_sales', phase1.counts?.supplier_sales], ['mg_phase1_supplier_sales_review', phase1.counts?.supplier_sales_review], ['mg_phase1_source_positive', phase1.totals?.source_positive], ['mg_phase1_source_negative', phase1.totals?.source_negative]].map(([label, value]) => <div key={label} className="summary-card"><strong>{t(label)}</strong><span>{value ?? 0}</span></div>)}</div>
                 {!phase1.ok && <Notice type="error">{t('mg_phase1_issue_unresolved')}</Notice>}
-                {phase1.unresolved?.length > 0 && <BlockerList blockers={phase1.unresolved.map((issue) => ({ ...issue, name: codeLabel(t, issue.code), ack: issue.code }))} t={t} canManage={manage} onAcknowledge={(issue) => setDialog({ phase1Issue: issue })} />}
+                {phase1.unresolved?.length > 0 && <>
+                    <PhaseOneIssueGroups issues={phase1.unresolved} t={t} canManage={manage} onBulk={(group) => setDialog({ phase1BulkIssue: group })} />
+                    <BlockerList blockers={phase1.unresolved.map((issue) => ({ ...issue, name: codeLabel(t, issue.code), ack: issue.code }))} t={t} canManage={manage} onAcknowledge={(issue) => setDialog({ phase1Issue: issue })} />
+                </>}
                 <OpeningsPreview preview={{ totals: { customers_debit: phase1.totals?.customer_debit, customers_credit: phase1.totals?.customer_credit, suppliers_debit: phase1.totals?.supplier_debit, suppliers_credit: phase1.totals?.supplier_credit, inventory_value: 0, cash: 0, bank: 0, equity_balancing: 0 }, stock: [] }} t={t} money={money} />
                 <Notice>{t('mg_phase1_no_documents')}</Notice>
             </>}
@@ -505,6 +535,7 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
                 : <div className="erp-table-wrap"><table className="erp-table"><thead><tr><th>{t('mg_event_when')}</th><th>{t('mg_event_action')}</th><th>{t('mg_event_from')}</th><th>{t('mg_event_to')}</th></tr></thead><tbody>{events.map((event) => <tr key={event.id}><td>{dateTime(event.created_at)}</td><td>{event.action}{event.reason && <small className="table-subline">{event.reason}</small>}</td><td>{event.from_state ? t(`mg_status_${event.from_state}`) : '—'}</td><td>{event.to_state ? t(`mg_status_${event.to_state}`) : '—'}</td></tr>)}</tbody></table></div>}
         </section>
         {dialog?.phase1Issue && <PhaseOneIssueDialog issue={dialog.phase1Issue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues', { issue_key: dialog.phase1Issue.issue_key, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
+        {dialog?.phase1BulkIssue && <PhaseOneBulkIssueDialog group={dialog.phase1BulkIssue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues/bulk', { code: dialog.phase1BulkIssue.code, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
         {dialog && !dialog.phase1Issue && <ConfirmActionDialog title={dialog.title} impact={dialog.impact} confirmLabel={dialog.label} danger={dialog.danger} withReason={dialog.withReason} onConfirm={dialog.run} onClose={() => setDialog(null)} resetKey={dialog.title} />}
         {api.stepUpDialog}
     </SuperAdminLayout>;

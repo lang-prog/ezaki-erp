@@ -63,6 +63,7 @@ Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account
                 Route::post('/openings/preflight', [DataMigrationController::class, 'preflightOpenings'])->name('openings.preflight');
                 Route::post('/phase1/preflight', [DataMigrationController::class, 'phaseOnePreflight'])->middleware('platform.stepup')->name('phase1.preflight');
                 Route::post('/phase1/issues', [DataMigrationController::class, 'phaseOneIssue'])->middleware('platform.stepup')->name('phase1.issues');
+                Route::post('/phase1/issues/bulk', [DataMigrationController::class, 'phaseOneIssuesBulk'])->middleware('platform.stepup')->name('phase1.issues.bulk');
                 Route::post('/documents/stage', [DataMigrationController::class, 'stageDocuments'])->name('documents.stage');
                 Route::post('/records/{record}/exclude', [DataMigrationController::class, 'excludeRecord'])->middleware('platform.stepup')->name('records.exclude');
                 Route::post('/records/{record}/include', [DataMigrationController::class, 'includeRecord'])->middleware('platform.stepup')->name('records.include');

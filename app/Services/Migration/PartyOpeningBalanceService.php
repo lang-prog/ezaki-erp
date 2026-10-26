@@ -156,6 +156,37 @@ final class PartyOpeningBalanceService
         return $this->preview($run->fresh());
     }
 
+    /** @return array<string, mixed> */
+    public function decideIssuesByCode(DataMigrationRun $run, User $actor, string $code, string $decision, string $reason): array
+    {
+        $reason = mb_substr(trim($reason), 0, 500);
+        if (mb_strlen($reason) < 5) {
+            throw ValidationException::withMessages(['reason' => 'A review reason of at least five characters is required.']);
+        }
+
+        if (! in_array($decision, $this->allowedDecisions($code), true)) {
+            throw ValidationException::withMessages(['decision' => 'This decision is not allowed for the selected review code.']);
+        }
+
+        $run = $run->fresh();
+        $preview = $this->preview($run);
+        $issues = array_values(array_filter($preview['issues'], fn (array $issue): bool => $issue['code'] === $code && ! $issue['resolved']));
+        if ($issues === []) {
+            throw ValidationException::withMessages(['code' => 'No unresolved review items remain for this code.']);
+        }
+
+        $policy = $run->policy ?? [];
+        $now = now()->toIso8601String();
+        foreach ($issues as $issue) {
+            data_set($policy, 'phase1.issue_decisions.'.$issue['issue_key'], [
+                'decision' => $decision, 'reason' => $reason, 'actor_id' => $actor->id, 'decided_at' => $now,
+            ]);
+        }
+        $run->forceFill(['policy' => $policy])->save();
+
+        return ['updated' => count($issues), 'code' => $code, 'decision' => $decision, 'preview' => $this->preview($run->fresh())];
+    }
+
     /** @return array<string, int> */
     public function createMasters(DataMigrationRun $run, User $actor, MasterDataService $masters): array
     {

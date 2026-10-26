@@ -318,6 +318,25 @@ final class DataMigrationRemediationTest extends TestCase
         $this->assertSame('phase1_completed', DataMigrationRun::query()->findOrFail($runId)->status);
     }
 
+    public function test_phase_one_can_resolve_all_unresolved_items_of_one_code_at_once(): void
+    {
+        $owner = $this->admin();
+        $company = $this->company($owner);
+        $rows = $this->baseRows();
+        $rows['customer'][0]['start_balance'] = '';
+
+        $runId = (int) $this->upload($owner, $company, $this->dump($rows), ['migration_scope' => 'party_openings_phase1'])->assertOk()->json('run.id');
+        $this->api($owner, 'POST', "/super-admin/data-migrations/{$runId}/parse")->assertOk();
+        $preview = $this->api($owner, 'GET', "/super-admin/data-migrations/{$runId}/phase1/preview")->assertOk()->json('phase1');
+        $this->assertSame(1, count(array_filter($preview['unresolved'], fn (array $issue): bool => $issue['code'] === 'invalid_customer_start_balance')));
+
+        $response = $this->api($owner, 'POST', "/super-admin/data-migrations/{$runId}/phase1/issues/bulk", [
+            'code' => 'invalid_customer_start_balance', 'decision' => 'exclude_component', 'reason' => 'القيمة غير صالحة واعتمدت صفرًا',
+        ])->assertOk();
+        $this->assertSame(1, $response->json('bulk.updated'));
+        $this->assertCount(0, array_filter($response->json('phase1.unresolved'), fn (array $issue): bool => $issue['code'] === 'invalid_customer_start_balance'));
+    }
+
     public function test_retention_and_archive_require_a_reason_and_state(): void
     {
         $owner = $this->admin();

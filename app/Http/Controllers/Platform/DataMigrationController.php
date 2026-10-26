@@ -410,6 +410,18 @@ class DataMigrationController extends PlatformController
         return $this->done($request, ['phase1' => $this->workflow->decidePartyPhaseOneIssue($run->id, $request->user()->id, $data['issue_key'], $data['decision'], $data['reason'])]);
     }
 
+    public function phaseOneIssuesBulk(Request $request, DataMigrationRun $run): JsonResponse|RedirectResponse
+    {
+        $data = $request->validate([
+            'code' => ['required', 'string', 'max:100'],
+            'decision' => ['required', 'string', 'max:40'],
+            'reason' => ['required', 'string', 'min:5', 'max:500'],
+        ]);
+        $phase1 = app(PartyOpeningBalanceService::class)->decideIssuesByCode($run, $request->user(), $data['code'], $data['decision'], $data['reason']);
+
+        return $this->done($request, ['phase1' => $phase1['preview'], 'bulk' => ['updated' => $phase1['updated'], 'code' => $phase1['code'], 'decision' => $phase1['decision']]]);
+    }
+
     public function phaseOnePost(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
     {
         return $this->done($request, ['result' => $this->workflow->postPhaseOnePartyOpenings($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
