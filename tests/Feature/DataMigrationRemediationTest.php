@@ -83,7 +83,7 @@ final class DataMigrationRemediationTest extends TestCase
     private function upload(User $user, Company $company, UploadedFile $file, array $extra = []): TestResponse
     {
         return $this->withSession(['platform_stepup_at' => time()])->actingAs($user)->call('POST', '/super-admin/data-migrations', $extra + [
-            'company_id' => $company->id, 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30',
+            'company_id' => $company->id, 'migration_scope' => 'full', 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30',
             'customer_start_balance_sign' => 'debit_negative', 'supplier_start_balance_sign' => 'credit_negative',
         ], [], ['source' => $file], ['HTTP_ACCEPT' => 'application/json']);
     }

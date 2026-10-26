@@ -89,7 +89,7 @@ final class DataMigrationRealSourceTest extends TestCase
         // 1. validate, hash and upload
         $file = new UploadedFile($this->dump(), 'alawaadc_alawaadv2.sql.gz', 'application/gzip', null, true);
         $response = $this->withSession(['platform_stepup_at' => time()])->actingAs($owner)->call('POST', '/super-admin/data-migrations', [
-            'company_id' => $target->id, 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30',
+            'company_id' => $target->id, 'migration_scope' => 'full', 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30',
             'customer_start_balance_sign' => 'debit_negative', 'supplier_start_balance_sign' => 'credit_negative',
         ], [], ['source' => $file], ['HTTP_ACCEPT' => 'application/json']);
         $response->assertOk();
@@ -218,7 +218,7 @@ final class DataMigrationRealSourceTest extends TestCase
         $this->assertSame(409, $this->api($owner, 'POST', "/super-admin/data-migrations/{$runId}/openings/post")[0]);
         $this->api($owner, 'POST', "/super-admin/data-migrations/{$runId}/documents/stage");
         $this->assertSame($afterFirst, $this->snapshotCounts($target), 'restaging never recreates created records');
-        $dup = $this->withSession(['platform_stepup_at' => time()])->actingAs($owner)->call('POST', '/super-admin/data-migrations', ['company_id' => $target->id, 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30'], [], ['source' => new UploadedFile($this->dump(), 'alawaadc_alawaadv2.sql.gz', 'application/gzip', null, true)], ['HTTP_ACCEPT' => 'application/json']);
+        $dup = $this->withSession(['platform_stepup_at' => time()])->actingAs($owner)->call('POST', '/super-admin/data-migrations', ['company_id' => $target->id, 'migration_scope' => 'full', 'documents_from' => '2026-10-01', 'documents_to' => '2026-10-18', 'opening_balance_as_of' => '2026-09-30'], [], ['source' => new UploadedFile($this->dump(), 'alawaadc_alawaadv2.sql.gz', 'application/gzip', null, true)], ['HTTP_ACCEPT' => 'application/json']);
         $this->assertTrue($dup->json('duplicate'), 're-uploading the same source maps to the same run');
         $this->assertSame($runId, (int) $dup->json('run.id'));
         $this->assertSame(1, DataMigrationRun::query()->count());

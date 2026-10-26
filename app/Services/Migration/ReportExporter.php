@@ -11,7 +11,7 @@ use App\Models\DataMigrationRun;
 /** Builds the CSV exports (mappings, source integrity, records, errors, reconciliation). Cells are neutralised against spreadsheet formulas. */
 final class ReportExporter
 {
-    public function __construct(private readonly ReconciliationService $reconciliation) {}
+    public function __construct(private readonly ReconciliationService $reconciliation, private readonly PartyOpeningBalanceService $partyOpenings) {}
 
     /** @return array{0: list<string>, 1: list<list<mixed>>} header and rows */
     public function build(DataMigrationRun $run, string $type): array
@@ -22,6 +22,7 @@ final class ReportExporter
             'records' => $this->records($run, false),
             'errors' => $this->records($run, true),
             'reconciliation' => $this->reconciliationRows($run),
+            'phase1' => $this->phaseOne($run),
             default => abort(404),
         };
     }
@@ -110,5 +111,28 @@ final class ReportExporter
         }
 
         return [['section', 'item', 'metric', 'value'], $rows];
+    }
+
+    /** @return array{0: list<string>, 1: list<list<mixed>>} */
+    private function phaseOne(DataMigrationRun $run): array
+    {
+        $preview = $this->partyOpenings->preview($run);
+        $rows = [];
+        foreach (['customers', 'suppliers'] as $bucket) {
+            foreach ($preview['parties'][$bucket] as $party) {
+                $rows[] = ['party', $bucket, $party['source_key'], $party['source_name'], $party['source_balance'], $party['erp_direction'], $party['status'], $party['mapping_id'], json_encode($party['issues'], JSON_UNESCAPED_UNICODE)];
+            }
+        }
+        foreach ($preview['supplier_sales'] as $sale) {
+            $rows[] = ['supplier_sale', $sale['supplier_key'], $sale['source_id'], $sale['linked_sales_id'], $sale['raw_buy_eda3'], $sale['included_supplier_component'], $sale['classification'], $sale['review_code'] ?? '', $sale['reason'] ?? ''];
+        }
+        foreach ($preview['issues'] as $issue) {
+            $rows[] = ['issue', $issue['code'], $issue['source_table'], $issue['source_id'], $issue['decision'] ?? '', $issue['reason'] ?? '', $issue['resolved'] ? 'resolved' : 'unresolved', '', ''];
+        }
+        foreach ($preview['totals'] as $key => $value) {
+            $rows[] = ['total', $key, '', '', $value, '', '', '', ''];
+        }
+
+        return [['section', 'entity', 'source_id', 'source_name_or_link', 'source_amount', 'erp_direction_or_included', 'status', 'mapping_or_review_code', 'reason_or_issues'], $rows];
     }
 }

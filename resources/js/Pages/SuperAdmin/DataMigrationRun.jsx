@@ -225,6 +225,30 @@ function Reconciliation({ data, t, money }) {
     </div>;
 }
 
+function PhaseOneReconciliation({ data, t, money }) {
+    if (!data) return null;
+    return <div>
+        <Notice type={data.balanced ? 'info' : 'error'}>{data.balanced ? t('mg_balanced') : t('mg_unbalanced')}</Notice>
+        <div className="summary-grid">{[['mg_phase1_source_positive', data.source_positive], ['mg_phase1_source_negative', data.source_negative], ['mg_phase1_debit', data.target?.debit], ['mg_phase1_credit', data.target?.credit], ['mg_difference', (data.difference?.debit ?? 0) + (data.difference?.credit ?? 0)], ['mg_phase1_supplier_sales', data.supplier_sales?.total], ['mg_phase1_supplier_sales_review', data.supplier_sales?.review_or_excluded]].map(([label, value]) => <div key={label} className="summary-card"><strong>{t(label)}</strong><span>{typeof value === 'number' ? money(value) : (value ?? 0)}</span></div>)}</div>
+        {data.unresolved_count > 0 && <Notice type="error">{t('mg_phase1_issue_unresolved')} ({data.unresolved_count})</Notice>}
+    </div>;
+}
+
+function PhaseOneIssueDialog({ issue, t, onConfirm, onClose }) {
+    const [decision, setDecision] = useState(issue.code?.includes('formula') ? 'approve_details' : issue.code?.includes('sale_') ? 'include_eda3' : 'exclude_component');
+    const options = issue.code === 'supplier_formula_differs_from_legacy_runtime'
+        ? ['approve_details', 'exclude_party']
+        : issue.code === 'supplier_category_conversion_differs_from_legacy'
+            ? ['approve_category_rule', 'exclude_party']
+            : issue.code === 'supplier_sale_amount_mismatch' || issue.code === 'supplier_sale_detail_total_mismatch'
+                ? ['include_eda3', 'exclude']
+                : ['exclude_component', 'exclude_party', 'exclude'];
+
+    return <ConfirmActionDialog title={t('mg_phase1_issue_decision')} impact={<p>{codeLabel(t, issue.code)} · {issue.source_table}#{issue.source_id}</p>} confirmLabel={t('mg_confirm')} onConfirm={({ reason }) => onConfirm({ decision, reason })} onClose={onClose}>
+        <label className="field"><span>{t('mg_decision')}</span><select value={decision} onChange={(event) => setDecision(event.target.value)}>{options.map((option) => <option key={option} value={option}>{t(`mg_phase1_issue_${option}`)}</option>)}</select></label>
+    </ConfirmActionDialog>;
+}
+
 export default function DataMigrationRun({ run: initialRun, options: initialOptions = {} }) {
     const { t, can, date, money, dateTime } = usePt();
     const api = usePlatformApi();
@@ -237,6 +261,7 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
     const [blockers, setBlockers] = useState({ masters: null, openings: null, execution: null });
     const [preview, setPreview] = useState(null);
     const [reconciliation, setReconciliation] = useState(null);
+    const [phase1, setPhase1] = useState(null);
     const [lastResult, setLastResult] = useState(null);
     const [events, setEvents] = useState(null);
     const [dialog, setDialog] = useState(null);
@@ -339,9 +364,11 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
     const status = run.status;
     const can_ = (target) => (run.allowed_next ?? []).includes(target);
     const executed = ['executing', 'completed', 'completed_with_review', 'failed_recoverable', 'signed_off', 'archived'].includes(status) || (records.created ?? 0) > 0;
+    const phase1Only = run.mode === 'party_openings_phase1';
     const sourceClean = run.integrity?.material_clean;
     const button = (label, onClick, { primary = false, danger = false, disabled = false } = {}) => <button type="button" className={`erp-button ${danger ? 'erp-button--danger' : primary ? 'erp-button--primary' : 'erp-button--secondary'}`} disabled={isBusy || disabled} onClick={onClick}>{busy && !disabled && primary ? t('mg_working') : label}</button>;
     const reasonDialog = (title, impact, label, path, danger, after, method = 'post') => setDialog({ title, impact, label, danger, withReason: true, run: ({ reason }) => dialogAction(method, path, { reason }, after) });
+    const loadPhase1 = () => action('phase1-preview', 'get', '/phase1/preview', undefined, (out) => setPhase1(out.phase1));
 
     const panels = {
         upload: <div className="erp-table-wrap"><table className="erp-table"><tbody>
@@ -388,7 +415,25 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
             {blockers.mastersCounts && <p className="permission-note">{t('mg_masters_counts')}: {Object.entries(blockers.mastersCounts).map(([key, n]) => `${t(`mg_decision_${key}`)}: ${n}`).join(' · ')}</p>}
             {blockers.masters && <BlockerList blockers={blockers.masters} t={t} onOpenMapping={openMapping} />}
         </div>,
-        openings: <div>
+        openings: phase1Only ? <div>
+            <Notice>{t('mg_phase1_scope_notice')}</Notice>
+            <div className="erp-toolbar">
+                {manage && ['review', 'party_openings_preflight', 'party_openings_ready'].includes(status) && button(t('mg_phase1_preflight'), () => action('phase1-preflight', 'post', '/phase1/preflight', {}, (out) => setPhase1({ ...(out.phase1?.preview ?? {}), phase1_preflight: out.phase1 })), { primary: true })}
+                {execute && status === 'party_openings_ready' && button(t('mg_phase1_create_masters'), () => action('phase1-masters', 'post', '/phase1/masters/create'), { primary: true })}
+                {execute && status === 'party_openings_ready' && button(t('mg_phase1_post'), () => setDialog({ title: t('mg_phase1_post'), impact: t('mg_phase1_scope_notice'), label: t('mg_phase1_post'), danger: true, withReason: false, run: () => dialogAction('post', '/phase1/post', {}, (out) => setPhase1(out.result?.reconciliation)) }), { primary: true })}
+                {execute && ['party_openings_posted', 'phase1_completed'].includes(status) && button(t('mg_openings_reverse'), () => reasonDialog(t('mg_openings_reverse'), t('mg_phase1_scope_notice'), t('mg_openings_reverse'), '/phase1/reverse', true), { danger: true })}
+                {button(t('mg_phase1_reconcile'), loadPhase1)}
+            </div>
+            {!phase1 && <p className="permission-note">{t('mg_phase1_cutoff_required')}</p>}
+            {phase1 && <>
+                <p className="permission-note">{t('mg_phase1_cutoff')}: {phase1.cutoff_date} · {t('mg_phase1_effective')}: {phase1.opening_effective_date} · {phase1.timezone}</p>
+                <div className="summary-grid">{[['mg_phase1_customer', phase1.counts?.customer_mappings], ['mg_phase1_supplier', phase1.counts?.supplier_mappings], ['mg_phase1_supplier_sales', phase1.counts?.supplier_sales], ['mg_phase1_supplier_sales_review', phase1.counts?.supplier_sales_review], ['mg_phase1_source_positive', phase1.totals?.source_positive], ['mg_phase1_source_negative', phase1.totals?.source_negative]].map(([label, value]) => <div key={label} className="summary-card"><strong>{t(label)}</strong><span>{value ?? 0}</span></div>)}</div>
+                {!phase1.ok && <Notice type="error">{t('mg_phase1_issue_unresolved')}</Notice>}
+                {phase1.unresolved?.length > 0 && <BlockerList blockers={phase1.unresolved.map((issue) => ({ ...issue, name: codeLabel(t, issue.code), ack: issue.code }))} t={t} canManage={manage} onAcknowledge={(issue) => setDialog({ phase1Issue: issue })} />}
+                <OpeningsPreview preview={{ totals: { customers_debit: phase1.totals?.customer_debit, customers_credit: phase1.totals?.customer_credit, suppliers_debit: phase1.totals?.supplier_debit, suppliers_credit: phase1.totals?.supplier_credit, inventory_value: 0, cash: 0, bank: 0, equity_balancing: 0 }, stock: [] }} t={t} money={money} />
+                <Notice>{t('mg_phase1_no_documents')}</Notice>
+            </>}
+        </div> : <div>
             <div className="erp-toolbar">
                 {manage && ['masters_created', 'openings_ready', 'openings_preflight'].includes(status) && button(t('mg_openings_preflight'), () => action('openings-preflight', 'post', '/openings/preflight', {}, (out) => setBlockers((previous) => ({ ...previous, openings: out.blockers }))), { primary: true })}
                 {execute && status === 'openings_ready' && button(t('mg_openings_post'), () => setDialog({ title: t('mg_openings_post'), impact: t('mg_openings_post_impact'), label: t('mg_openings_post'), withReason: false, run: () => dialogAction('post', '/openings/post', {}) }), { primary: true })}
@@ -397,7 +442,7 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
             {blockers.openings && <BlockerList blockers={blockers.openings} t={t} canManage={manage && !executed} onAcknowledge={(blocker) => setDialog({ title: t('mg_ack_title'), impact: <><p>{codeLabel(t, blocker.code)}</p><p>{t(`mg_ack_hint_${blocker.ack}`)}</p><p>{t('mg_ack_impact')}</p></>, label: t('mg_ack'), withReason: true, run: ({ reason }) => dialogAction('post', '/policy', { ack: blocker.ack, reason }) })} />}
             <OpeningsPreview preview={preview} t={t} money={money} />
         </div>,
-        staging: <div>
+        staging: phase1Only ? <Notice>{t('mg_phase1_no_documents')}</Notice> : <div>
             <p className="permission-note">{t('mg_staging_impact')}</p>
             {manage && status === 'openings_posted' && <div className="erp-toolbar">{button(t('mg_staging_action'), () => action('stage', 'post', '/documents/stage'), { primary: true })}</div>}
             {recordTotal > 0 && <p>{t('mg_staged_counts')}: {Object.entries(records).map(([key, n]) => `${t(`mg_record_status_${key}`)}: ${n}`).join(' · ')}</p>}
@@ -405,7 +450,7 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
         review: <RecordsPanel base={base} t={t} money={money} busy={isBusy} canManage={manage && ['documents_ready', 'failed_recoverable', 'completed_with_review'].includes(status)} version={version}
             onExclude={(record) => setDialog({ title: t('mg_exclude_title'), impact: t('mg_exclude_impact'), label: t('mg_exclude'), danger: true, withReason: true, run: ({ reason }) => dialogAction('post', `/records/${record.id}/exclude`, { reason }) })}
             onInclude={(record) => action(`include-${record.id}`, 'post', `/records/${record.id}/include`, {})} />,
-        execution: <div>
+        execution: phase1Only ? <Notice>{t('mg_phase1_no_documents')}</Notice> : <div>
             <div className="erp-toolbar">{execute && ['documents_ready', 'failed_recoverable', 'completed_with_review', 'executing'].includes(status) && button(status === 'executing' ? t('mg_execute_resume') : t('mg_execute'), () => setDialog({ title: t('mg_execute'), impact: t('mg_execute_impact'), label: t('mg_execute'), danger: true, withReason: false, run: () => dialogAction('post', '/execute', {}, (out) => setLastResult(out.result)) }), { primary: true, disabled: Boolean(blockers.execution?.length) })}</div>
             {blockers.execution?.length > 0 && <><Notice type="error">{t('mg_exec_blockers')}</Notice><BlockerList blockers={blockers.execution} t={t} onOpenMapping={openMapping} /></>}
             {recordTotal > 0 && <p>{Object.entries(records).map(([key, n]) => `${t(`mg_record_status_${key}`)}: ${n}`).join(' · ')}</p>}
@@ -414,10 +459,10 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
         </div>,
         reconciliation: <div>
             <div className="erp-toolbar">
-                {button(t('mg_load_reconciliation'), () => action('reconciliation', 'get', '/reconciliation', undefined, (out) => setReconciliation(out.reconciliation)), { disabled: !executed && !['openings_posted', 'documents_ready'].includes(status) })}
-                {execute && status === 'completed' && button(t('mg_sign_off'), () => reasonDialog(t('mg_sign_off'), t('mg_sign_off_impact'), t('mg_sign_off'), '/sign-off', false, (out) => setReconciliation(out.reconciliation)), { primary: true })}
+                {button(t('mg_load_reconciliation'), () => action('reconciliation', 'get', phase1Only ? '/phase1/reconciliation' : '/reconciliation', undefined, (out) => setReconciliation(out.reconciliation)), { disabled: !executed && !['openings_posted', 'party_openings_posted', 'phase1_completed', 'documents_ready'].includes(status) })}
+                {execute && (status === 'completed' || status === 'phase1_completed') && button(t('mg_sign_off'), () => reasonDialog(t('mg_sign_off'), t('mg_sign_off_impact'), t('mg_sign_off'), '/sign-off', false, (out) => setReconciliation(out.reconciliation)), { primary: true })}
             </div>
-            <Reconciliation data={reconciliation} t={t} money={money} />
+            {phase1Only ? <PhaseOneReconciliation data={reconciliation} t={t} money={money} /> : <Reconciliation data={reconciliation} t={t} money={money} />}
         </div>,
         archive: <div>
             <p className="permission-note">{t('mg_archive_impact')}</p>
@@ -458,7 +503,8 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
                 ? <button type="button" className="erp-button erp-button--secondary" disabled={busy !== null} onClick={() => action('events', 'get', '/events', undefined, (out) => setEvents(out.events))}>{t('mg_events')}</button>
                 : <div className="erp-table-wrap"><table className="erp-table"><thead><tr><th>{t('mg_event_when')}</th><th>{t('mg_event_action')}</th><th>{t('mg_event_from')}</th><th>{t('mg_event_to')}</th></tr></thead><tbody>{events.map((event) => <tr key={event.id}><td>{dateTime(event.created_at)}</td><td>{event.action}{event.reason && <small className="table-subline">{event.reason}</small>}</td><td>{event.from_state ? t(`mg_status_${event.from_state}`) : '—'}</td><td>{event.to_state ? t(`mg_status_${event.to_state}`) : '—'}</td></tr>)}</tbody></table></div>}
         </section>
-        {dialog && <ConfirmActionDialog title={dialog.title} impact={dialog.impact} confirmLabel={dialog.label} danger={dialog.danger} withReason={dialog.withReason} onConfirm={dialog.run} onClose={() => setDialog(null)} resetKey={dialog.title} />}
+        {dialog?.phase1Issue && <PhaseOneIssueDialog issue={dialog.phase1Issue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues', { issue_key: dialog.phase1Issue.issue_key, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
+        {dialog && !dialog.phase1Issue && <ConfirmActionDialog title={dialog.title} impact={dialog.impact} confirmLabel={dialog.label} danger={dialog.danger} withReason={dialog.withReason} onConfirm={dialog.run} onClose={() => setDialog(null)} resetKey={dialog.title} />}
         {api.stepUpDialog}
     </SuperAdminLayout>;
 }

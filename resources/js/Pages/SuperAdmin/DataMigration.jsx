@@ -16,11 +16,12 @@ function nextDayOf(value) {
 export default function DataMigration({ companies = [], runs = { data: [], links: [] }, limits = {} }) {
     const { t, can, date, dateTime } = usePt();
     const manage = can('data_migration.manage');
-    const form = useForm({ company_id: '', documents_from: '2026-10-01', documents_to: '2026-10-18', opening_balance_as_of: '2026-09-30', gap_reason: '', customer_start_balance_sign: '', supplier_start_balance_sign: '', source: null });
+    const form = useForm({ company_id: '', migration_scope: 'party_openings_phase1', documents_from: '', documents_to: '', opening_balance_as_of: '', gap_reason: '', customer_start_balance_sign: '', supplier_start_balance_sign: '', source: null });
     const [submitted, setSubmitted] = useState(false);
     const [requestError, setRequestError] = useState('');
     const data = form.data;
-    const gap = Boolean(data.opening_balance_as_of && data.documents_from && data.documents_from !== nextDayOf(data.opening_balance_as_of));
+    const phase1Only = data.migration_scope === 'party_openings_phase1';
+    const gap = !phase1Only && Boolean(data.opening_balance_as_of && data.documents_from && data.documents_from !== nextDayOf(data.opening_balance_as_of));
     const errors = form.errors || {};
     const field = (name) => errors[name] && <span className="field-error" role="alert">{errors[name]}</span>;
     const set = (name) => (event) => form.setData(name, event.target.value);
@@ -59,11 +60,16 @@ export default function DataMigration({ companies = [], runs = { data: [], links
             <div className="posting-form__grid">
                 <label className="field"><span>{t('mg_company')}</span><select required name="company_id" value={data.company_id} onChange={set('company_id')}><option value="">—</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name} · #{company.id}</option>)}</select>{field('company_id')}</label>
                 <label className="field"><span>{t('mg_cutoff')}</span><input required type="date" name="opening_balance_as_of" value={data.opening_balance_as_of} onChange={set('opening_balance_as_of')} />{field('opening_balance_as_of')}</label>
-                <label className="field"><span>{t('mg_from')}</span><input required type="date" name="documents_from" value={data.documents_from} onChange={set('documents_from')} />{field('documents_from')}</label>
-                <label className="field"><span>{t('mg_to')}</span><input required type="date" name="documents_to" value={data.documents_to} onChange={set('documents_to')} />{field('documents_to')}</label>
+                <label className="field"><span>{t('mg_phase_scope')}</span><select name="migration_scope" value={data.migration_scope} onChange={set('migration_scope')}><option value="party_openings_phase1">{t('mg_phase1_only')}</option><option value="full">{t('mg_full_scope')}</option></select></label>
+                {!phase1Only && <>
+                    <label className="field"><span>{t('mg_from')}</span><input required type="date" name="documents_from" value={data.documents_from} onChange={set('documents_from')} />{field('documents_from')}</label>
+                    <label className="field"><span>{t('mg_to')}</span><input required type="date" name="documents_to" value={data.documents_to} onChange={set('documents_to')} />{field('documents_to')}</label>
+                </>}
                 {gap && <label className="field field--wide"><span>{t('mg_gap_reason')}</span><input required minLength={5} maxLength={500} name="gap_reason" value={data.gap_reason} onChange={set('gap_reason')} /><small>{t('mg_gap_hint')}</small>{field('gap_reason')}</label>}
-                <label className="field"><span>{t('mg_cust_sign')}</span><select name="customer_start_balance_sign" value={data.customer_start_balance_sign} onChange={set('customer_start_balance_sign')}><option value="">{t('mg_sign_choose')}</option><option value="debit_positive">{t('mg_sign_debit_positive')}</option><option value="debit_negative">{t('mg_sign_debit_negative')}</option></select>{field('customer_start_balance_sign')}</label>
-                <label className="field"><span>{t('mg_supp_sign')}</span><select name="supplier_start_balance_sign" value={data.supplier_start_balance_sign} onChange={set('supplier_start_balance_sign')}><option value="">{t('mg_sign_choose')}</option><option value="credit_positive">{t('mg_sign_credit_positive')}</option><option value="credit_negative">{t('mg_sign_credit_negative')}</option></select>{field('supplier_start_balance_sign')}</label>
+                {!phase1Only && <>
+                    <label className="field"><span>{t('mg_cust_sign')}</span><select name="customer_start_balance_sign" value={data.customer_start_balance_sign} onChange={set('customer_start_balance_sign')}><option value="">{t('mg_sign_choose')}</option><option value="debit_positive">{t('mg_sign_debit_positive')}</option><option value="debit_negative">{t('mg_sign_debit_negative')}</option></select>{field('customer_start_balance_sign')}</label>
+                    <label className="field"><span>{t('mg_supp_sign')}</span><select name="supplier_start_balance_sign" value={data.supplier_start_balance_sign} onChange={set('supplier_start_balance_sign')}><option value="">{t('mg_sign_choose')}</option><option value="credit_positive">{t('mg_sign_credit_positive')}</option><option value="credit_negative">{t('mg_sign_credit_negative')}</option></select>{field('supplier_start_balance_sign')}</label>
+                </>}
                 <label className="field field--wide"><span>{t('mg_source_file')}</span><input required type="file" name="source" accept=".sql,.gz" onChange={(event) => form.setData('source', event.target.files?.[0] || null)} /><small>{t('mg_source_hint').replace('{mb}', String(Math.round((limits.max_upload_kb || 0) / 1024))).replace('{days}', String(limits.retention_days ?? ''))}</small>{field('source')}</label>
             </div>
             <p className="permission-note">{t('mg_sign_hint')}</p>

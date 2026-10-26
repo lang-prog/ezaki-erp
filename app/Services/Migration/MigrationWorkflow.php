@@ -37,6 +37,7 @@ final class MigrationWorkflow
         private readonly DocumentStager $stager,
         private readonly DocumentExecutionService $executor,
         private readonly ReconciliationService $reconciliation,
+        private readonly PartyOpeningBalanceService $partyOpenings,
         private readonly AccountingService $accounting,
         private readonly InventoryValuationService $valuation,
     ) {}
@@ -63,7 +64,10 @@ final class MigrationWorkflow
                 $integrity = $this->importer->import($run);
                 $run->forceFill(['integrity' => $integrity])->save();
                 $this->sm->transition($run, 'parsed', 'parsed', $actor, null, ['staged_rows' => array_sum($integrity['staged_rows'])]);
-                $counts = $this->mappings->generate($run, LegacyDataset::load($run));
+                $dataset = LegacyDataset::load($run);
+                $counts = $run->mode === 'party_openings_phase1'
+                    ? $this->mappings->generatePhaseOneParties($run, $dataset)
+                    : $this->mappings->generate($run, $dataset);
                 $run->forceFill(['summary' => array_merge($run->summary ?? [], ['mappings' => $counts])])->save();
                 $this->sm->transition($run, 'review', 'mappings_generated', $actor, null, ['mappings' => array_sum(array_map('array_sum', $counts))]);
 
@@ -119,6 +123,107 @@ final class MigrationWorkflow
             $this->sm->transition($run, 'masters_created', 'masters_created', $actor, null, $counts);
 
             return $counts;
+        });
+    }
+
+    /** @return array<string, mixed> */
+    public function preflightPartyPhaseOne(int $runId, User $actor): array
+    {
+        return $this->sm->locked($runId, 'phase1_party_preflight', ['review', 'party_openings_preflight', 'party_openings_ready'], function (DataMigrationRun $run) use ($actor): array {
+            abort_unless($run->mode === 'party_openings_phase1', 409, 'This run is not scoped to Phase 1 party openings.');
+            if ($run->status === 'party_openings_ready') {
+                $this->sm->transition($run, 'party_openings_preflight', 'phase1_party_recheck', $actor);
+            } elseif ($run->status === 'review') {
+                $this->sm->transition($run, 'party_openings_preflight', 'phase1_party_preflight', $actor);
+            }
+            $preview = $this->partyOpenings->preview($run);
+            $masters = $this->masters->preflightPhaseOne($run);
+            $blockers = array_merge($preview['unresolved'], $masters['blockers']);
+            $result = ['ok' => $blockers === [], 'blockers' => $blockers, 'preview' => $preview, 'masters' => $masters];
+            $run->forceFill(['preflight' => array_merge($run->preflight ?? [], ['phase1_parties' => ['ok' => $result['ok'], 'blockers' => $blockers, 'totals' => $preview['totals']]])])->save();
+            $this->sm->transition($run, $result['ok'] ? 'party_openings_ready' : 'review', $result['ok'] ? 'phase1_party_ready' : 'phase1_party_blocked', $actor, null, ['blockers' => count($blockers)]);
+
+            return $result;
+        });
+    }
+
+    /** @return array<string, int> */
+    public function createPhaseOnePartyMasters(int $runId, User $actor): array
+    {
+        return $this->sm->locked($runId, 'phase1_party_masters', ['party_openings_ready'], function (DataMigrationRun $run) use ($actor): array {
+            abort_unless($run->mode === 'party_openings_phase1', 409, 'This run is not scoped to Phase 1 party openings.');
+            $preview = $this->partyOpenings->preview($run);
+            if (! $preview['ok']) {
+                throw RunStateMachine::refuse('phase1_party_blocked', 'Resolve all party mappings and balance issues first.', ['blockers' => array_slice($preview['unresolved'], 0, 100)], 422);
+            }
+            $created = $this->partyOpenings->createMasters($run, $actor, $this->masters);
+            $this->sm->record($run, 'phase1_party_masters_created', $run->status, $run->status, $actor, null, $created);
+
+            return $created;
+        });
+    }
+
+    /** @return array<string, mixed> */
+    public function postPhaseOnePartyOpenings(int $runId, User $actor): array
+    {
+        return $this->sm->locked($runId, 'phase1_party_openings_post', ['party_openings_ready'], function (DataMigrationRun $run) use ($actor): array {
+            abort_unless($run->mode === 'party_openings_phase1', 409, 'This run is not scoped to Phase 1 party openings.');
+            $preview = $this->partyOpenings->preview($run);
+            if (! $preview['ok']) {
+                throw RunStateMachine::refuse('phase1_party_blocked', 'Phase 1 is blocked by unresolved mappings or review issues.', ['blockers' => array_slice($preview['unresolved'], 0, 100)], 422);
+            }
+            foreach (['customers', 'suppliers'] as $bucket) {
+                foreach ($preview['parties'][$bucket] as $party) {
+                    if ($party['status'] === 'create_required') {
+                        throw RunStateMachine::refuse('phase1_masters_not_created', 'Create approved party masters before posting opening balances.', ['source_key' => $party['source_key']], 409);
+                    }
+                }
+            }
+            try {
+                $result = $this->partyOpenings->post($run, $actor);
+            } catch (Throwable $e) {
+                $this->sm->record($run, 'phase1_party_openings_failed', $run->status, $run->status, $actor, null, [], 'unexpected_error:'.class_basename($e));
+                throw $e;
+            }
+            $this->sm->transition($run, 'party_openings_posted', 'phase1_party_openings_posted', $actor, null, $result);
+            $this->sm->transition($run->fresh(), 'phase1_completed', 'phase1_completed', $actor, null, ['balances_posted' => $result['balances_posted']]);
+
+            return $result;
+        });
+    }
+
+    public function reversePhaseOnePartyOpenings(int $runId, User $actor, string $reason): array
+    {
+        return $this->sm->locked($runId, 'phase1_party_openings_reverse', ['party_openings_posted', 'phase1_completed'], function (DataMigrationRun $run) use ($actor, $reason): array {
+            abort_unless($run->mode === 'party_openings_phase1', 409, 'This run is not scoped to Phase 1 party openings.');
+            $result = $this->partyOpenings->reverse($run, $actor, $reason);
+            $this->sm->transition($run, 'review', 'phase1_party_openings_reversed', $actor, $reason, $result);
+
+            return $result;
+        });
+    }
+
+    /** @return array<string, mixed> */
+    public function partyPhaseOneReconciliation(DataMigrationRun $run): array
+    {
+        abort_unless($run->mode === 'party_openings_phase1', 409, 'This run is not scoped to Phase 1 party openings.');
+
+        return $this->partyOpenings->reconciliation($run);
+    }
+
+    public function decidePartyPhaseOneIssue(int $runId, int $actorId, string $issueKey, string $decision, string $reason): array
+    {
+        return $this->sm->locked($runId, 'phase1_issue_decision', ['review', 'party_openings_ready'], function (DataMigrationRun $run) use ($actorId, $issueKey, $decision, $reason): array {
+            abort_unless($run->mode === 'party_openings_phase1', 409, 'This run is not scoped to Phase 1 party openings.');
+            $actor = User::query()->findOrFail($actorId);
+            $preview = $this->partyOpenings->decideIssue($run, $actor, $issueKey, $decision, $reason);
+            if ($run->status === 'party_openings_ready') {
+                $this->sm->transition($run, 'review', 'phase1_issue_changed', $actor, $reason, ['issue_key' => $issueKey, 'decision' => $decision]);
+            } else {
+                $this->sm->record($run, 'phase1_issue_decided', $run->status, $run->status, $actor, $reason, ['issue_key' => $issueKey, 'decision' => $decision]);
+            }
+
+            return $preview;
         });
     }
 
@@ -326,10 +431,12 @@ final class MigrationWorkflow
     /** @return array<string, mixed> */
     public function signOff(int $runId, User $actor, string $reason): array
     {
-        return $this->sm->locked($runId, 'sign_off', ['completed'], function (DataMigrationRun $run) use ($actor, $reason): array {
-            $report = $this->reconciliation->build($run);
+        return $this->sm->locked($runId, 'sign_off', ['completed', 'phase1_completed'], function (DataMigrationRun $run) use ($actor, $reason): array {
+            $report = $run->mode === 'party_openings_phase1' ? $this->partyOpenings->reconciliation($run) : $this->reconciliation->build($run);
             $differences = ($report['parties']['differences'] ?? 0) + ($report['stock']['differences'] ?? 0) + ($report['cash']['differences'] ?? 0);
-            $run->forceFill(['signed_off_by' => $actor->id, 'signed_off_at' => now(), 'source_retention_until' => now()->addDays((int) config('migration.source_retention_days'))->toDateString(), 'summary' => array_merge($run->summary ?? [], ['reconciliation_totals' => ['differences' => $differences, 'opening_balanced' => $report['opening']['balanced']]])])->save();
+            $differences += abs((float) ($report['difference']['debit'] ?? 0)) + abs((float) ($report['difference']['credit'] ?? 0)) + (int) ($report['unresolved_count'] ?? 0);
+            $balanced = $run->mode === 'party_openings_phase1' ? (bool) ($report['balanced'] ?? false) : (bool) ($report['opening']['balanced'] ?? false);
+            $run->forceFill(['signed_off_by' => $actor->id, 'signed_off_at' => now(), 'source_retention_until' => now()->addDays((int) config('migration.source_retention_days'))->toDateString(), 'summary' => array_merge($run->summary ?? [], ['reconciliation_totals' => ['differences' => $differences, 'opening_balanced' => $balanced]])])->save();
             $this->sm->transition($run, 'signed_off', 'signed_off', $actor, $reason, ['differences' => $differences]);
 
             return $report;

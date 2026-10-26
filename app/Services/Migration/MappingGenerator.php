@@ -58,6 +58,34 @@ final class MappingGenerator
         return $this->summary();
     }
 
+    /** Generate only customer/supplier mappings for the independently executable party-opening phase. */
+    public function generatePhaseOneParties(DataMigrationRun $run, LegacyDataset $d): array
+    {
+        $this->run = $run;
+        $this->seen = [];
+        $this->existing = new MappingIndex($run);
+        $refs = [
+            'customer' => [],
+            'supplier' => [],
+            'customer_walkin' => [],
+        ];
+        foreach ($d->rows('customer') as $row) {
+            $key = LegacyDataset::key($row['id_customer'] ?? null);
+            if ($key !== '0') {
+                $refs['customer'][$key] = true;
+            }
+        }
+        foreach ($d->rows('import') as $row) {
+            $key = LegacyDataset::key($row['id_import'] ?? null);
+            if ($key !== '0') {
+                $refs['supplier'][$key] = true;
+            }
+        }
+        $this->parties($d, $refs, (int) $run->company_id);
+
+        return $this->summary();
+    }
+
     /** @return array<string, array<string, true>> */
     private function references(LegacyDataset $d, LegacyLedger $ledger): array
     {

@@ -48,9 +48,11 @@ Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account
             Route::get('/records', [DataMigrationController::class, 'records'])->middleware('platform.can:data_migration.view')->name('records');
             Route::get('/events', [DataMigrationController::class, 'events'])->middleware('platform.can:data_migration.view')->name('events');
             Route::get('/openings/preview', [DataMigrationController::class, 'openingsPreview'])->middleware('platform.can:data_migration.view')->name('openings.preview');
+            Route::get('/phase1/preview', [DataMigrationController::class, 'phaseOnePreview'])->middleware('platform.can:data_migration.view')->name('phase1.preview');
+            Route::get('/phase1/reconciliation', [DataMigrationController::class, 'phaseOneReconciliation'])->middleware('platform.can:data_migration.view')->name('phase1.reconciliation');
             Route::get('/execution/preflight', [DataMigrationController::class, 'executionPreflight'])->middleware('platform.can:data_migration.view')->name('execution.preflight');
             Route::get('/reconciliation', [DataMigrationController::class, 'reconciliation'])->middleware('platform.can:data_migration.view')->name('reconciliation');
-            Route::get('/reports/{type}', [DataMigrationController::class, 'report'])->whereIn('type', ['mappings', 'integrity', 'records', 'errors', 'reconciliation'])->middleware('platform.can:data_migration.view')->name('report');
+            Route::get('/reports/{type}', [DataMigrationController::class, 'report'])->whereIn('type', ['mappings', 'integrity', 'records', 'errors', 'reconciliation', 'phase1'])->middleware('platform.can:data_migration.view')->name('report');
 
             Route::middleware(['platform.can:data_migration.manage', 'throttle:platform.write'])->group(function (): void {
                 Route::post('/parse', [DataMigrationController::class, 'parse'])->name('parse');
@@ -59,13 +61,18 @@ Route::prefix('super-admin')->name('super-admin.')->middleware(['auth', 'account
                 Route::post('/mappings/approve-safe', [DataMigrationController::class, 'approveSafe'])->middleware('platform.stepup')->name('mappings.approve-safe');
                 Route::post('/masters/preflight', [DataMigrationController::class, 'preflightMasters'])->name('masters.preflight');
                 Route::post('/openings/preflight', [DataMigrationController::class, 'preflightOpenings'])->name('openings.preflight');
+                Route::post('/phase1/preflight', [DataMigrationController::class, 'phaseOnePreflight'])->middleware('platform.stepup')->name('phase1.preflight');
+                Route::post('/phase1/issues', [DataMigrationController::class, 'phaseOneIssue'])->middleware('platform.stepup')->name('phase1.issues');
                 Route::post('/documents/stage', [DataMigrationController::class, 'stageDocuments'])->name('documents.stage');
                 Route::post('/records/{record}/exclude', [DataMigrationController::class, 'excludeRecord'])->middleware('platform.stepup')->name('records.exclude');
                 Route::post('/records/{record}/include', [DataMigrationController::class, 'includeRecord'])->middleware('platform.stepup')->name('records.include');
             });
             Route::middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->group(function (): void {
                 Route::post('/masters/create', [DataMigrationController::class, 'createMasters'])->name('masters.create');
+                Route::post('/phase1/masters/create', [DataMigrationController::class, 'phaseOneCreateMasters'])->name('phase1.masters.create');
                 Route::post('/openings/post', [DataMigrationController::class, 'postOpenings'])->name('openings.post');
+                Route::post('/phase1/post', [DataMigrationController::class, 'phaseOnePost'])->name('phase1.post');
+                Route::post('/phase1/reverse', [DataMigrationController::class, 'phaseOneReverse'])->name('phase1.reverse');
                 Route::post('/openings/reverse', [DataMigrationController::class, 'reverseOpenings'])->name('openings.reverse');
                 Route::post('/execute', [DataMigrationController::class, 'execute'])->name('execute');
                 Route::post('/sign-off', [DataMigrationController::class, 'signOff'])->name('sign-off');

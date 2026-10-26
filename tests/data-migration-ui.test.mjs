@@ -173,6 +173,10 @@ test('report downloads, step-up hints and irreversible warnings are visible', as
 test('the upload form asks for a gap reason only when documents do not start the day after the cutoff', async () => {
     const scene = await createScene({ entry: ENTRY, locale: 'en', pageProps: { capabilities: CAPS, navigationCapabilities: CAPS, auth: { user: { name: 'Root' } } } });
     await scene.mount({ page: 'index', data: { companies: [{ id: 3, name: 'Target Co' }], runs: { data: [], links: [] }, limits: { max_upload_kb: 40960, retention_days: 90 } } });
+    assert.ok(scene.text().includes(translate('en', 'mg_phase1_only')));
+    assert.equal(scene.$('input[name="documents_from"]'), null, 'Phase 1 does not show document dates');
+    await scene.setValue(scene.$('select[name="migration_scope"]'), 'full');
+    await scene.setValue(scene.$('input[name="opening_balance_as_of"]'), '2026-09-30');
     assert.equal(scene.$('input[name="gap_reason"]'), null);
     await scene.setValue(scene.$('input[name="documents_from"]'), '2026-10-05');
     assert.ok(scene.$('input[name="gap_reason"]'), 'a gap needs a reason');

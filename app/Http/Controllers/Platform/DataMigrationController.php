@@ -18,9 +18,11 @@ use App\Models\ProductType;
 use App\Models\Warehouse;
 use App\Services\Migration\MigrationWorkflow;
 use App\Services\Migration\OpeningBalanceService;
+use App\Services\Migration\PartyOpeningBalanceService;
 use App\Services\Migration\ReconciliationService;
 use App\Services\Migration\ReportExporter;
 use App\Services\Migration\RunStateMachine;
+use App\Services\SubscriptionNotice;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
@@ -45,6 +47,7 @@ class DataMigrationController extends PlatformController
         'uploaded' => 1, 'parsing' => 1, 'parsed' => 3, 'review' => 3, 'masters_preflight' => 4, 'masters_ready' => 4, 'masters_created' => 5,
         'openings_preflight' => 5, 'openings_ready' => 5, 'openings_posted' => 6, 'documents_ready' => 7, 'failed_recoverable' => 7,
         'executing' => 8, 'completed_with_review' => 7, 'completed' => 9, 'signed_off' => 10, 'failed_terminal' => 1, 'archived' => 11,
+        'party_openings_preflight' => 5, 'party_openings_ready' => 5, 'party_openings_posted' => 6, 'phase1_completed' => 9,
     ];
 
     public function __construct(private readonly MigrationWorkflow $workflow) {}
@@ -66,18 +69,31 @@ class DataMigrationController extends PlatformController
 
         $data = $request->validate([
             'company_id' => ['required', 'integer', 'exists:companies,id'],
-            'documents_from' => ['required', 'date'],
-            'documents_to' => ['required', 'date', 'after_or_equal:documents_from'],
-            'opening_balance_as_of' => ['required', 'date', 'before:documents_from'],
+            'migration_scope' => ['nullable', Rule::in(['party_openings_phase1', 'full'])],
+            'documents_from' => ['nullable', 'required_if:migration_scope,full', 'date'],
+            'documents_to' => ['nullable', 'required_if:migration_scope,full', 'date', 'after_or_equal:documents_from'],
+            'opening_balance_as_of' => ['required', 'date'],
             'gap_reason' => ['nullable', 'string', 'min:5', 'max:500'],
             'customer_start_balance_sign' => ['nullable', Rule::in(['debit_positive', 'debit_negative'])],
             'supplier_start_balance_sign' => ['nullable', Rule::in(['credit_positive', 'credit_negative'])],
             'source' => ['required', 'file', 'max:'.(int) config('migration.max_upload_kb')],
         ]);
         $company = Company::query()->where('status', '!=', 'archived')->findOrFail((int) $data['company_id']);
-        $cutoff = CarbonImmutable::parse($data['opening_balance_as_of']);
-        $gap = ! CarbonImmutable::parse($data['documents_from'])->isSameDay($cutoff->addDay());
-        if ($gap && trim((string) ($data['gap_reason'] ?? '')) === '') {
+        $scope = $data['migration_scope'] ?? 'full';
+        $timezone = app(SubscriptionNotice::class)->timezoneFor($company);
+        $cutoff = CarbonImmutable::createFromFormat('!Y-m-d', $data['opening_balance_as_of'], $timezone);
+        $effectiveDate = $cutoff->addDay()->toDateString();
+        if ($scope === 'party_openings_phase1') {
+            $data['documents_from'] = $effectiveDate;
+            $data['documents_to'] = $effectiveDate;
+            $gap = false;
+        } else {
+            if (! CarbonImmutable::createFromFormat('!Y-m-d', $data['documents_from'], $timezone)->greaterThan($cutoff)) {
+                throw ValidationException::withMessages(['documents_from' => 'The document period must start after the opening cutoff date.']);
+            }
+            $gap = ! CarbonImmutable::createFromFormat('!Y-m-d', $data['documents_from'], $timezone)->isSameDay($cutoff->addDay());
+        }
+        if ($scope === 'full' && $gap && trim((string) ($data['gap_reason'] ?? '')) === '') {
             throw ValidationException::withMessages(['gap_reason' => 'documents_from must be the day after the cutoff, or a reason for the gap must be given.']);
         }
         $file = $request->file('source');
@@ -109,9 +125,10 @@ class DataMigrationController extends PlatformController
             abort(500, 'The source file could not be stored. Check the private storage disk permissions.');
         }
         $policy = array_filter(['customer_start_balance_sign' => $data['customer_start_balance_sign'] ?? null, 'supplier_start_balance_sign' => $data['supplier_start_balance_sign'] ?? null]);
+        $policy['migration_scope'] = $scope;
         $identity = ['company_id' => $company->id, 'source_system' => config('migration.source_system'), 'source_hash' => $hash];
         try {
-            [$run, $duplicate] = DB::transaction(function () use ($identity, $request, $file, $stored, $data, $policy, $gap): array {
+            [$run, $duplicate] = DB::transaction(function () use ($identity, $request, $file, $stored, $data, $policy, $gap, $scope): array {
                 $claim = DB::table('data_migration_identity_claims')->where($identity)->lockForUpdate()->first();
                 if ($claim) {
                     return [DataMigrationRun::query()->findOrFail($claim->run_id), true];
@@ -135,7 +152,7 @@ class DataMigrationController extends PlatformController
                     'company_id' => $identity['company_id'], 'created_by' => $request->user()->id, 'source_system' => $identity['source_system'],
                     'source_name' => Str::limit((string) $file->getClientOriginalName(), 191, ''), 'source_disk' => 'local', 'source_path' => $stored,
                     'source_hash' => $identity['source_hash'], 'source_bytes' => $file->getSize(), 'documents_from' => $data['documents_from'], 'documents_to' => $data['documents_to'],
-                    'opening_balance_as_of' => $data['opening_balance_as_of'], 'mode' => 'draft', 'status' => DataMigrationRun::STATUS_UPLOADED,
+                    'opening_balance_as_of' => $data['opening_balance_as_of'], 'mode' => $scope, 'status' => DataMigrationRun::STATUS_UPLOADED,
                     'policy' => $policy ?: null, 'gap_acknowledged_at' => $gap ? now() : null, 'gap_acknowledged_reason' => $gap ? $data['gap_reason'] : null,
                 ]);
                 DB::table('data_migration_identity_claims')->insert($identity + [
@@ -358,6 +375,51 @@ class DataMigrationController extends PlatformController
         return $this->done($request, ['ready' => $preview['ok'], 'blockers' => $preview['blockers'], 'totals' => $preview['totals'], 'run' => $this->runPayload($run->fresh())]);
     }
 
+    public function phaseOnePreview(DataMigrationRun $run): JsonResponse
+    {
+        abort_unless($run->mode === 'party_openings_phase1', 409, 'This migration is not a Phase 1 party-opening run.');
+
+        return response()->json(['phase1' => app(PartyOpeningBalanceService::class)->preview($run)]);
+    }
+
+    public function phaseOnePreflight(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
+    {
+        $result = $this->workflow->preflightPartyPhaseOne($run->id, $request->user());
+
+        return $this->done($request, ['ready' => $result['ok'], 'phase1' => $result]);
+    }
+
+    public function phaseOneCreateMasters(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
+    {
+        return $this->done($request, ['created' => $this->workflow->createPhaseOnePartyMasters($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
+    }
+
+    public function phaseOneIssue(Request $request, DataMigrationRun $run): JsonResponse|RedirectResponse
+    {
+        $data = $request->validate([
+            'issue_key' => ['required', 'string', 'size:64'],
+            'decision' => ['required', 'string', 'max:40'],
+            'reason' => ['required', 'string', 'min:5', 'max:500'],
+        ]);
+
+        return $this->done($request, ['phase1' => $this->workflow->decidePartyPhaseOneIssue($run->id, $request->user()->id, $data['issue_key'], $data['decision'], $data['reason'])]);
+    }
+
+    public function phaseOnePost(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
+    {
+        return $this->done($request, ['result' => $this->workflow->postPhaseOnePartyOpenings($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
+    }
+
+    public function phaseOneReverse(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
+    {
+        return $this->done($request, ['result' => $this->workflow->reversePhaseOnePartyOpenings($run->id, $request->user(), $this->reason($request)), 'run' => $this->runPayload($run->fresh())]);
+    }
+
+    public function phaseOneReconciliation(DataMigrationRun $run): JsonResponse
+    {
+        return response()->json(['reconciliation' => $this->workflow->partyPhaseOneReconciliation($run)]);
+    }
+
     public function postOpenings(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
     {
         return $this->done($request, ['result' => $this->workflow->postOpenings($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
@@ -481,7 +543,7 @@ class DataMigrationController extends PlatformController
             'id' => $run->id, 'company' => $run->company?->only(['id', 'name']), 'created_by' => $run->creator?->only(['id', 'name']),
             'source_name' => $run->source_name, 'source_hash' => $run->source_hash, 'source_bytes' => $run->source_bytes,
             'documents_from' => $run->documents_from?->toDateString(), 'documents_to' => $run->documents_to?->toDateString(), 'opening_balance_as_of' => $run->opening_balance_as_of?->toDateString(),
-            'status' => $run->status, 'error_message' => $run->error_message, 'created_at' => $run->created_at?->toISOString(), 'locked' => $run->lock_token !== null && $run->lock_expires_at?->isFuture(),
+            'status' => $run->status, 'mode' => $run->mode, 'scope' => $run->policy('migration_scope', $run->mode), 'error_message' => $run->error_message, 'created_at' => $run->created_at?->toISOString(), 'locked' => $run->lock_token !== null && $run->lock_expires_at?->isFuture(),
         ];
         if (! $detail) {
             return $base;
@@ -505,7 +567,8 @@ class DataMigrationController extends PlatformController
         $failed = in_array($run->status, ['failed_terminal'], true);
         $next = [
             'uploaded' => 'parse', 'parsing' => 'wait', 'parsed' => 'wait', 'review' => 'review_mappings', 'masters_preflight' => 'wait', 'masters_ready' => 'create_masters',
-            'masters_created' => 'preview_openings', 'openings_preflight' => 'wait', 'openings_ready' => 'post_openings', 'openings_posted' => 'stage_documents',
+            'masters_created' => $run->mode === 'party_openings_phase1' ? 'phase1_preflight' : 'preview_openings', 'openings_preflight' => 'wait', 'openings_ready' => 'post_openings', 'openings_posted' => 'stage_documents',
+            'party_openings_preflight' => 'wait', 'party_openings_ready' => 'post_party_openings', 'party_openings_posted' => 'phase1_complete', 'phase1_completed' => 'sign_off',
             'documents_ready' => 'execute', 'failed_recoverable' => 'retry', 'executing' => 'resume', 'completed_with_review' => 'review_records', 'completed' => 'sign_off',
             'signed_off' => 'archive', 'failed_terminal' => 'reupload', 'archived' => 'none',
         ][$run->status] ?? 'none';

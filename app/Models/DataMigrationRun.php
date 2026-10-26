@@ -30,6 +30,14 @@ class DataMigrationRun extends Model
 
     public const STATUS_OPENINGS_POSTED = 'openings_posted';
 
+    public const STATUS_PARTY_OPENINGS_PREFLIGHT = 'party_openings_preflight';
+
+    public const STATUS_PARTY_OPENINGS_READY = 'party_openings_ready';
+
+    public const STATUS_PARTY_OPENINGS_POSTED = 'party_openings_posted';
+
+    public const STATUS_PHASE1_COMPLETED = 'phase1_completed';
+
     public const STATUS_DOCUMENTS_READY = 'documents_ready';
 
     public const STATUS_EXECUTING = 'executing';
@@ -47,10 +55,10 @@ class DataMigrationRun extends Model
     public const STATUS_ARCHIVED = 'archived';
 
     /** Statuses in which mappings may still be corrected by a human. */
-    public const MAPPING_EDITABLE = ['review', 'masters_ready', 'masters_created', 'openings_ready', 'openings_posted', 'documents_ready', 'failed_recoverable'];
+    public const MAPPING_EDITABLE = ['review', 'masters_ready', 'masters_created', 'openings_ready', 'openings_posted', 'party_openings_preflight', 'party_openings_ready', 'documents_ready', 'failed_recoverable'];
 
     /** Statuses that carry irreversible financial effects. */
-    public const FINANCIAL = ['openings_posted', 'documents_ready', 'executing', 'completed', 'completed_with_review', 'failed_recoverable', 'signed_off', 'archived'];
+    public const FINANCIAL = ['openings_posted', 'party_openings_posted', 'phase1_completed', 'documents_ready', 'executing', 'completed', 'completed_with_review', 'failed_recoverable', 'signed_off', 'archived'];
 
     protected $fillable = [
         'company_id', 'created_by', 'source_system', 'source_name', 'source_disk', 'source_path', 'source_hash', 'source_bytes',

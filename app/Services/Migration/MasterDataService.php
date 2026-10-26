@@ -18,6 +18,7 @@ use App\Services\AccountingService;
 use App\Services\InventoryProductResolver;
 use App\Services\Legacy\LegacyLedger;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 final class MasterDataService
 {
@@ -96,6 +97,90 @@ final class MasterDataService
         }
 
         return ['ok' => $blockers === [], 'blockers' => $blockers, 'counts' => $counts];
+    }
+
+    /** @return array{ok: bool, blockers: list<array<string, mixed>>, counts: array<string, int>} */
+    public function preflightPhaseOne(DataMigrationRun $run): array
+    {
+        $blockers = [];
+        $counts = ['customer' => 0, 'supplier' => 0, 'create_required' => 0, 'matched' => 0, 'excluded' => 0, 'needs_review' => 0];
+        $claimedTargets = [];
+        $mappings = DataMigrationMapping::query()->where('run_id', $run->id)->whereIn('entity_type', ['customer', 'supplier'])->orderBy('id')->get();
+        $companyId = (int) $run->company_id;
+        foreach ($mappings as $mapping) {
+            $counts[$mapping->entity_type]++;
+            $counts[$mapping->decision] = ($counts[$mapping->decision] ?? 0) + 1;
+            if (! $mapping->isReviewed()) {
+                $blockers[] = ['code' => 'party_mapping_unreviewed', 'entity' => $mapping->entity_type, 'source_key' => $mapping->source_key, 'mapping_id' => $mapping->id];
+            }
+            if ($mapping->decision === 'needs_review') {
+                $blockers[] = ['code' => 'party_mapping_needs_decision', 'entity' => $mapping->entity_type, 'source_key' => $mapping->source_key, 'mapping_id' => $mapping->id];
+
+                continue;
+            }
+            if ($mapping->decision === 'excluded') {
+                if (trim((string) $mapping->reason) === '') {
+                    $blockers[] = ['code' => 'party_exclusion_reason_missing', 'entity' => $mapping->entity_type, 'source_key' => $mapping->source_key, 'mapping_id' => $mapping->id];
+                }
+
+                continue;
+            }
+            if ($mapping->decision === 'create_required') {
+                $name = trim((string) data_get($mapping->payload, 'source_name', ''));
+                if ($name === '' || (bool) data_get($mapping->payload, 'missing_in_source', false)) {
+                    $blockers[] = ['code' => 'party_source_name_missing', 'entity' => $mapping->entity_type, 'source_key' => $mapping->source_key, 'mapping_id' => $mapping->id];
+                }
+                if (! Account::query()->where('company_id', $companyId)->where('code', $mapping->entity_type === 'customer' ? '1.2' : '2.1')->exists()) {
+                    $blockers[] = ['code' => 'party_control_account_missing', 'entity' => $mapping->entity_type, 'source_key' => $mapping->source_key, 'mapping_id' => $mapping->id];
+                }
+
+                continue;
+            }
+            if ($mapping->decision !== 'matched' || ! $mapping->target_id) {
+                $blockers[] = ['code' => 'party_mapping_invalid', 'entity' => $mapping->entity_type, 'source_key' => $mapping->source_key, 'mapping_id' => $mapping->id];
+
+                continue;
+            }
+            $party = CustomerSupplier::query()->where('company_id', $companyId)->find($mapping->target_id);
+            $roleValid = $party && ($mapping->entity_type === 'customer' ? $party->is_customer : $party->is_supplier);
+            if (! $roleValid) {
+                $blockers[] = ['code' => 'party_target_invalid', 'entity' => $mapping->entity_type, 'source_key' => $mapping->source_key, 'mapping_id' => $mapping->id];
+
+                continue;
+            }
+            if (isset($claimedTargets[$party->id]) && $claimedTargets[$party->id] !== $mapping->id) {
+                $blockers[] = ['code' => 'party_target_claimed_twice', 'entity' => $mapping->entity_type, 'source_key' => $mapping->source_key, 'mapping_id' => $mapping->id];
+            }
+            $claimedTargets[$party->id] = $mapping->id;
+        }
+
+        return ['ok' => $blockers === [], 'blockers' => $blockers, 'counts' => $counts];
+    }
+
+    /** @return array{customers: int, suppliers: int} */
+    public function createPhaseOne(DataMigrationRun $run, User $actor): array
+    {
+        $company = Company::query()->findOrFail($run->company_id);
+        $preflight = $this->preflightPhaseOne($run);
+        if (! $preflight['ok']) {
+            throw ValidationException::withMessages(['phase1' => 'Party master preflight has unresolved mappings.']);
+        }
+        $created = ['customers' => 0, 'suppliers' => 0];
+        DB::transaction(function () use ($run, $actor, $company, &$created): void {
+            foreach (DataMigrationMapping::query()->where('run_id', $run->id)->whereIn('entity_type', ['customer', 'supplier'])->where('decision', 'create_required')->lockForUpdate()->orderBy('id')->get() as $mapping) {
+                $name = trim((string) data_get($mapping->payload, 'source_name', ''));
+                $attrs = (array) data_get($mapping->payload, 'source_attributes', []);
+                $isCustomer = $mapping->entity_type === 'customer';
+                $partyId = $this->party($company, $actor, $name, $attrs, $isCustomer);
+                $payload = $mapping->payload ?? [];
+                $payload['created'] = true;
+                $payload['reviewed'] = true;
+                $mapping->forceFill(['target_type' => CustomerSupplier::class, 'target_id' => $partyId, 'decision' => 'matched', 'confidence' => 1, 'payload' => $payload])->save();
+                $created[$isCustomer ? 'customers' : 'suppliers']++;
+            }
+        });
+
+        return $created;
     }
 
     /** @return array<string, int> created counts */
