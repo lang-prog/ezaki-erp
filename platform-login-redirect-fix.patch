@@ -1,0 +1,79 @@
+diff --git a/app/Http/Middleware/PlatformGuest.php b/app/Http/Middleware/PlatformGuest.php
+new file mode 100644
+index 0000000..05f3efb
+--- /dev/null
++++ b/app/Http/Middleware/PlatformGuest.php
+@@ -0,0 +1,21 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Http\Middleware;
++
++use Closure;
++use Illuminate\Http\Request;
++use Symfony\Component\HttpFoundation\Response;
++
++final class PlatformGuest
++{
++    public function handle(Request $request, Closure $next): Response
++    {
++        if ($request->user()?->account_type === 'super_admin') {
++            return redirect()->route('super-admin.dashboard');
++        }
++
++        return $next($request);
++    }
++}
+diff --git a/routes/web.php b/routes/web.php
+index 373d9a1..1da31d6 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -8,6 +8,7 @@
+ use App\Http\Controllers\Web\LocaleController;
+ use App\Http\Controllers\Web\PasswordResetController;
+ use App\Http\Controllers\Web\RegistrationController;
++use App\Http\Middleware\PlatformGuest;
+ use App\Services\CompanyLandingService;
+ use App\Services\SubscriptionLifecycle;
+ use Illuminate\Http\Request;
+@@ -29,12 +30,15 @@
+     Route::post('/forgot-password', [PasswordResetController::class, 'sendLink'])->middleware('throttle:3,1')->name('password.email');
+     Route::get('/reset-password/{token}', [PasswordResetController::class, 'form'])->name('password.reset');
+     Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:3,1')->name('password.update');
+-    Route::get('/super-admin/login', [AuthenticationController::class, 'show'])->defaults('type', 'super_admin')->name('super-admin.login');
+-    Route::post('/super-admin/login', [AuthenticationController::class, 'login'])->defaults('type', 'super_admin')->middleware('throttle:login');
+     Route::get('/register', [RegistrationController::class, 'show'])->name('registration.create');
+     Route::post('/register', [RegistrationController::class, 'store'])->middleware('throttle:3,1')->name('registration.store');
+ });
+ 
++Route::middleware(PlatformGuest::class)->group(function (): void {
++    Route::get('/super-admin/login', [AuthenticationController::class, 'show'])->defaults('type', 'super_admin')->name('super-admin.login');
++    Route::post('/super-admin/login', [AuthenticationController::class, 'login'])->defaults('type', 'super_admin')->middleware('throttle:login');
++});
++
+ Route::get('/register/verify/{registration}', [RegistrationController::class, 'verify'])
+     ->middleware('signed')
+     ->name('registration.verify');
+diff --git a/tests/Feature/PhaseOneFoundationTest.php b/tests/Feature/PhaseOneFoundationTest.php
+index 0acfe31..8f16a66 100644
+--- a/tests/Feature/PhaseOneFoundationTest.php
++++ b/tests/Feature/PhaseOneFoundationTest.php
+@@ -78,6 +78,17 @@ public function test_authenticated_users_are_redirected_from_home_to_their_works
+         $this->actingAs($admin)->get('/')->assertRedirect(route('super-admin.dashboard'));
+     }
+ 
++    public function test_authenticated_platform_user_reopening_login_is_sent_to_platform_dashboard(): void
++    {
++        $admin = User::query()->create([
++            'name' => 'Platform Login Admin', 'email' => 'platform-login-admin@example.test', 'password' => 'password',
++            'account_type' => 'super_admin', 'platform_role' => 'owner', 'status' => 'active',
++        ]);
++
++        $this->actingAs($admin)->get('/super-admin/login')
++            ->assertRedirect(route('super-admin.dashboard'));
++    }
++
+     public function test_self_registration_is_not_approvable_until_signed_email_verification(): void
+     {
+         Notification::fake();
