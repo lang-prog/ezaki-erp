@@ -1,0 +1,219 @@
+diff --git a/app/Http/Controllers/Platform/DataMigrationController.php b/app/Http/Controllers/Platform/DataMigrationController.php
+index 52c8229..425a472 100644
+--- a/app/Http/Controllers/Platform/DataMigrationController.php
++++ b/app/Http/Controllers/Platform/DataMigrationController.php
+@@ -410,6 +410,18 @@ public function phaseOneIssue(Request $request, DataMigrationRun $run): JsonResp
+         return $this->done($request, ['phase1' => $this->workflow->decidePartyPhaseOneIssue($run->id, $request->user()->id, $data['issue_key'], $data['decision'], $data['reason'])]);
+     }
+ 
++    public function phaseOneIssuesBulk(Request $request, DataMigrationRun $run): JsonResponse|RedirectResponse
++    {
++        $data = $request->validate([
++            'code' => ['required', 'string', 'max:100'],
++            'decision' => ['required', 'string', 'max:40'],
++            'reason' => ['required', 'string', 'min:5', 'max:500'],
++        ]);
++        $phase1 = app(PartyOpeningBalanceService::class)->decideIssuesByCode($run, $request->user(), $data['code'], $data['decision'], $data['reason']);
++
++        return $this->done($request, ['phase1' => $phase1['preview'], 'bulk' => ['updated' => $phase1['updated'], 'code' => $phase1['code'], 'decision' => $phase1['decision']]]);
++    }
++
+     public function phaseOnePost(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
+     {
+         return $this->done($request, ['result' => $this->workflow->postPhaseOnePartyOpenings($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
+diff --git a/app/Services/Migration/PartyOpeningBalanceService.php b/app/Services/Migration/PartyOpeningBalanceService.php
+index 93feef7..8a23d53 100644
+--- a/app/Services/Migration/PartyOpeningBalanceService.php
++++ b/app/Services/Migration/PartyOpeningBalanceService.php
+@@ -156,6 +156,37 @@ public function decideIssue(DataMigrationRun $run, User $actor, string $issueKey
+         return $this->preview($run->fresh());
+     }
+ 
++    /** @return array<string, mixed> */
++    public function decideIssuesByCode(DataMigrationRun $run, User $actor, string $code, string $decision, string $reason): array
++    {
++        $reason = mb_substr(trim($reason), 0, 500);
++        if (mb_strlen($reason) < 5) {
++            throw ValidationException::withMessages(['reason' => 'A review reason of at least five characters is required.']);
++        }
++
++        if (! in_array($decision, $this->allowedDecisions($code), true)) {
++            throw ValidationException::withMessages(['decision' => 'This decision is not allowed for the selected review code.']);
++        }
++
++        $run = $run->fresh();
++        $preview = $this->preview($run);
++        $issues = array_values(array_filter($preview['issues'], fn (array $issue): bool => $issue['code'] === $code && ! $issue['resolved']));
++        if ($issues === []) {
++            throw ValidationException::withMessages(['code' => 'No unresolved review items remain for this code.']);
++        }
++
++        $policy = $run->policy ?? [];
++        $now = now()->toIso8601String();
++        foreach ($issues as $issue) {
++            data_set($policy, 'phase1.issue_decisions.'.$issue['issue_key'], [
++                'decision' => $decision, 'reason' => $reason, 'actor_id' => $actor->id, 'decided_at' => $now,
++            ]);
++        }
++        $run->forceFill(['policy' => $policy])->save();
++
++        return ['updated' => count($issues), 'code' => $code, 'decision' => $decision, 'preview' => $this->preview($run->fresh())];
++    }
++
+     /** @return array<string, int> */
+     public function createMasters(DataMigrationRun $run, User $actor, MasterDataService $masters): array
+     {
+diff --git a/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx b/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
+index eaa9d93..c90fae1 100644
+--- a/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
++++ b/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
+@@ -51,7 +51,7 @@ function BlockerList({ blockers, t, onOpenMapping, onAcknowledge, canManage }) {
+ 
+     return <ul className="blocker-list" aria-label={t('mg_blockers')}>{blockers.map((blocker, index) => <li key={`${blocker.code}-${blocker.mapping_id ?? index}-${blocker.source_key ?? index}`}>
+         <strong>{codeLabel(t, blocker.code)}</strong>
+-        {blocker.entity && <span> · {t(`mg_entity_${blocker.entity}`)} {blocker.source_key ?? ''}</span>}
++        {blocker.entity && <span> · {t(`mg_entity_${blocker.entity}`)} {blocker.source_key ?? blocker.source_id ?? ''}</span>}
+         {blocker.name && <span> · {blocker.name}</span>}
+         {blocker.records ? <span> · {blocker.records}</span> : null}
+         {scalars(blocker.params) && <small className="table-subline">{scalars(blocker.params)}</small>}
+@@ -234,21 +234,48 @@ function PhaseOneReconciliation({ data, t, money }) {
+     </div>;
+ }
+ 
++function phaseOneIssueOptions(code) {
++    if (code === 'supplier_formula_differs_from_legacy_runtime') return ['approve_details', 'exclude_party'];
++    if (code === 'supplier_category_conversion_differs_from_legacy') return ['approve_category_rule', 'exclude_party'];
++    if (code === 'supplier_sale_amount_mismatch' || code === 'supplier_sale_detail_total_mismatch') return ['include_eda3', 'exclude'];
++    if (['invalid_customer_start_balance', 'supplier_start_amount_invalid', 'sales_business_date_missing', 'customer_sale_amount_invalid', 'purchase_business_date_missing', 'supplier_payment_amount_invalid', 'supplier_header_amount_invalid', 'purchase_category_flag_missing', 'purchase_line_amount_invalid'].includes(code)) return ['exclude_component', 'exclude_party'];
++
++    return ['exclude'];
++}
++
++function phaseOneDefaultDecision(code) {
++    return code?.includes('formula') ? 'approve_details' : code?.includes('sale_') ? 'include_eda3' : code?.includes('start_balance') || code?.includes('amount_invalid') ? 'exclude_component' : 'exclude';
++}
++
+ function PhaseOneIssueDialog({ issue, t, onConfirm, onClose }) {
+-    const [decision, setDecision] = useState(issue.code?.includes('formula') ? 'approve_details' : issue.code?.includes('sale_') ? 'include_eda3' : 'exclude_component');
+-    const options = issue.code === 'supplier_formula_differs_from_legacy_runtime'
+-        ? ['approve_details', 'exclude_party']
+-        : issue.code === 'supplier_category_conversion_differs_from_legacy'
+-            ? ['approve_category_rule', 'exclude_party']
+-            : issue.code === 'supplier_sale_amount_mismatch' || issue.code === 'supplier_sale_detail_total_mismatch'
+-                ? ['include_eda3', 'exclude']
+-                : ['exclude_component', 'exclude_party', 'exclude'];
++    const [decision, setDecision] = useState(phaseOneDefaultDecision(issue.code));
++    const options = phaseOneIssueOptions(issue.code);
+ 
+     return <ConfirmActionDialog title={t('mg_phase1_issue_decision')} impact={<p>{codeLabel(t, issue.code)} · {issue.source_table}#{issue.source_id}</p>} confirmLabel={t('mg_confirm')} onConfirm={({ reason }) => onConfirm({ decision, reason })} onClose={onClose}>
+         <label className="field"><span>{t('mg_decision')}</span><select value={decision} onChange={(event) => setDecision(event.target.value)}>{options.map((option) => <option key={option} value={option}>{t(`mg_phase1_issue_${option}`)}</option>)}</select></label>
+     </ConfirmActionDialog>;
+ }
+ 
++function PhaseOneBulkIssueDialog({ group, t, onConfirm, onClose }) {
++    const [decision, setDecision] = useState(phaseOneDefaultDecision(group.code));
++    const options = phaseOneIssueOptions(group.code);
++
++    return <ConfirmActionDialog title={`${t('mg_ack_all')} · ${group.count}`} impact={<><p>{codeLabel(t, group.code)}</p><p>{t('mg_ack_all_impact')}</p></>} confirmLabel={t('mg_confirm')} onConfirm={({ reason }) => onConfirm({ decision, reason })} onClose={onClose}>
++        <label className="field"><span>{t('mg_decision')}</span><select value={decision} onChange={(event) => setDecision(event.target.value)}>{options.map((option) => <option key={option} value={option}>{t(`mg_phase1_issue_${option}`)}</option>)}</select></label>
++    </ConfirmActionDialog>;
++}
++
++function PhaseOneIssueGroups({ issues, t, canManage, onBulk }) {
++    if (!canManage || issues.length === 0) return null;
++    const groups = Object.values(issues.reduce((result, issue) => {
++        result[issue.code] ??= { code: issue.code, count: 0 };
++        result[issue.code].count += 1;
++        return result;
++    }, {}));
++
++    return <div className="erp-toolbar">{groups.map((group) => <button key={group.code} type="button" className="erp-button erp-button--secondary" onClick={() => onBulk(group)}>{t('mg_ack_all')} · {codeLabel(t, group.code)} ({group.count})</button>)}</div>;
++}
++
+ export default function DataMigrationRun({ run: initialRun, options: initialOptions = {} }) {
+     const { t, can, date, money, dateTime } = usePt();
+     const api = usePlatformApi();
+@@ -430,7 +457,10 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
+                 <p className="permission-note">{t('mg_phase1_cutoff')}: {phase1.cutoff_date} · {t('mg_phase1_effective')}: {phase1.opening_effective_date} · {phase1.timezone}</p>
+                 <div className="summary-grid">{[['mg_phase1_customer', phase1.counts?.customer_mappings], ['mg_phase1_supplier', phase1.counts?.supplier_mappings], ['mg_phase1_supplier_sales', phase1.counts?.supplier_sales], ['mg_phase1_supplier_sales_review', phase1.counts?.supplier_sales_review], ['mg_phase1_source_positive', phase1.totals?.source_positive], ['mg_phase1_source_negative', phase1.totals?.source_negative]].map(([label, value]) => <div key={label} className="summary-card"><strong>{t(label)}</strong><span>{value ?? 0}</span></div>)}</div>
+                 {!phase1.ok && <Notice type="error">{t('mg_phase1_issue_unresolved')}</Notice>}
+-                {phase1.unresolved?.length > 0 && <BlockerList blockers={phase1.unresolved.map((issue) => ({ ...issue, name: codeLabel(t, issue.code), ack: issue.code }))} t={t} canManage={manage} onAcknowledge={(issue) => setDialog({ phase1Issue: issue })} />}
++                {phase1.unresolved?.length > 0 && <>
++                    <PhaseOneIssueGroups issues={phase1.unresolved} t={t} canManage={manage} onBulk={(group) => setDialog({ phase1BulkIssue: group })} />
++                    <BlockerList blockers={phase1.unresolved.map((issue) => ({ ...issue, name: codeLabel(t, issue.code), ack: issue.code }))} t={t} canManage={manage} onAcknowledge={(issue) => setDialog({ phase1Issue: issue })} />
++                </>}
+                 <OpeningsPreview preview={{ totals: { customers_debit: phase1.totals?.customer_debit, customers_credit: phase1.totals?.customer_credit, suppliers_debit: phase1.totals?.supplier_debit, suppliers_credit: phase1.totals?.supplier_credit, inventory_value: 0, cash: 0, bank: 0, equity_balancing: 0 }, stock: [] }} t={t} money={money} />
+                 <Notice>{t('mg_phase1_no_documents')}</Notice>
+             </>}
+@@ -505,6 +535,7 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
+                 : <div className="erp-table-wrap"><table className="erp-table"><thead><tr><th>{t('mg_event_when')}</th><th>{t('mg_event_action')}</th><th>{t('mg_event_from')}</th><th>{t('mg_event_to')}</th></tr></thead><tbody>{events.map((event) => <tr key={event.id}><td>{dateTime(event.created_at)}</td><td>{event.action}{event.reason && <small className="table-subline">{event.reason}</small>}</td><td>{event.from_state ? t(`mg_status_${event.from_state}`) : '—'}</td><td>{event.to_state ? t(`mg_status_${event.to_state}`) : '—'}</td></tr>)}</tbody></table></div>}
+         </section>
+         {dialog?.phase1Issue && <PhaseOneIssueDialog issue={dialog.phase1Issue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues', { issue_key: dialog.phase1Issue.issue_key, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
++        {dialog?.phase1BulkIssue && <PhaseOneBulkIssueDialog group={dialog.phase1BulkIssue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues/bulk', { code: dialog.phase1BulkIssue.code, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
+         {dialog && !dialog.phase1Issue && <ConfirmActionDialog title={dialog.title} impact={dialog.impact} confirmLabel={dialog.label} danger={dialog.danger} withReason={dialog.withReason} onConfirm={dialog.run} onClose={() => setDialog(null)} resetKey={dialog.title} />}
+         {api.stepUpDialog}
+     </SuperAdminLayout>;
+diff --git a/resources/js/i18n-migration.js b/resources/js/i18n-migration.js
+index ea0bcc9..d14288e 100644
+--- a/resources/js/i18n-migration.js
++++ b/resources/js/i18n-migration.js
+@@ -53,7 +53,7 @@ export const migrationEn = {
+     mg_masters_preflight: 'Check masters', mg_masters_create: 'Create masters', mg_masters_create_impact: 'Creates the approved customers, suppliers, products, warehouse, cashboxes and banks in the target company. This is one atomic step and cannot be undone automatically.',
+     mg_masters_ok: 'All mappings are ready.', mg_masters_counts: 'To create', mg_masters_created: 'Created',
+     mg_openings_preflight: 'Check openings', mg_openings_post: 'Post openings', mg_openings_reverse: 'Reverse openings', mg_openings_post_impact: 'Posts opening parties, stock and cash/bank balances against opening-balance equity at the cutoff date. The journals are balanced and audited.',
+-    mg_openings_reverse_impact: 'Creates audited reversing entries for the opening journals. It is refused after documents were executed.', mg_openings_preview: 'Preview', mg_ack: 'Acknowledge', mg_ack_title: 'Acknowledge a known issue', mg_ack_impact: 'The affected rows are skipped or accepted as stated. Your reason is stored in the audit trail.',
++    mg_openings_reverse_impact: 'Creates audited reversing entries for the opening journals. It is refused after documents were executed.', mg_openings_preview: 'Preview', mg_ack: 'Acknowledge', mg_ack_all: 'Resolve all', mg_ack_all_impact: 'This applies the selected decision to every unresolved item with this review code. Review the code and decision carefully before confirming.', mg_ack_title: 'Acknowledge a known issue', mg_ack_impact: 'The affected rows are skipped or accepted as stated. Your reason is stored in the audit trail.',
+     mg_customers_debit: 'Customers owe us', mg_customers_credit: 'We owe customers', mg_suppliers_credit: 'We owe suppliers', mg_suppliers_debit: 'Suppliers owe us', mg_inventory_value: 'Inventory value', mg_cash: 'Cash', mg_bank: 'Banks', mg_equity: 'Opening-balance equity', mg_stock_rows: 'Stock items', mg_stock_posting: 'To post', mg_stock_skipped: 'Skipped (acknowledged)', mg_stock_zero: 'Zero',
+     mg_staging_action: 'Stage documents', mg_staging_impact: 'Documents after the cutoff are classified by structure (purchase, sale, receipt, payment, expense, bank operation). Nothing is posted.', mg_staged_counts: 'Staged records',
+     mg_records: 'Records', mg_filter_status: 'Status', mg_filter_code: 'Review code', mg_record_number: 'Number', mg_record_date: 'Date', mg_record_type: 'Type', mg_record_amount: 'Amount', mg_record_reason: 'Why', mg_record_target: 'ERP document', mg_records_empty: 'No records match.', mg_include: 'Include again',
+@@ -118,7 +118,7 @@ export const migrationAr = {
+     mg_masters_preflight: 'فحص البيانات الأساسية', mg_masters_create: 'إنشاء البيانات الأساسية', mg_masters_create_impact: 'ينشئ العملاء والموردين والأصناف والمخزن والخزائن والبنوك المعتمدة في الشركة المستهدفة. خطوة واحدة ذرّية ولا يمكن التراجع عنها تلقائيًا.',
+     mg_masters_ok: 'كل المطابقات جاهزة.', mg_masters_counts: 'سيُنشأ', mg_masters_created: 'أُنشئ',
+     mg_openings_preflight: 'فحص الأرصدة', mg_openings_post: 'ترحيل الأرصدة الافتتاحية', mg_openings_reverse: 'عكس الأرصدة الافتتاحية', mg_openings_post_impact: 'يرحّل أرصدة الأطراف والمخزون والنقدية والبنوك مقابل حساب حقوق الأرصدة الافتتاحية بتاريخ القطع. القيود متوازنة ومدققة.',
+-    mg_openings_reverse_impact: 'ينشئ قيودًا عكسية مدققة للقيود الافتتاحية. يُرفض بعد تنفيذ أي مستند.', mg_openings_preview: 'معاينة', mg_ack: 'إقرار', mg_ack_title: 'الإقرار بمشكلة معروفة', mg_ack_impact: 'تُتجاوز الصفوف المتأثرة أو تُقبل كما هي. يُحفظ سببك في سجل التدقيق.',
++    mg_openings_reverse_impact: 'ينشئ قيودًا عكسية مدققة للقيود الافتتاحية. يُرفض بعد تنفيذ أي مستند.', mg_openings_preview: 'معاينة', mg_ack: 'إقرار', mg_ack_all: 'اعتماد الكل', mg_ack_all_impact: 'سيُطبّق القرار المحدد على كل العناصر غير المحسومة التي تحمل كود المراجعة نفسه. راجع الكود والقرار جيدًا قبل التأكيد.', mg_ack_title: 'الإقرار بمشكلة معروفة', mg_ack_impact: 'تُتجاوز الصفوف المتأثرة أو تُقبل كما هي. يُحفظ سببك في سجل التدقيق.',
+     mg_customers_debit: 'العملاء مدينون لنا', mg_customers_credit: 'نحن مدينون للعملاء', mg_suppliers_credit: 'نحن مدينون للموردين', mg_suppliers_debit: 'الموردون مدينون لنا', mg_inventory_value: 'قيمة المخزون', mg_cash: 'النقدية', mg_bank: 'البنوك', mg_equity: 'حقوق الأرصدة الافتتاحية', mg_stock_rows: 'أصناف المخزون', mg_stock_posting: 'سيُرحّل', mg_stock_skipped: 'متجاوز (بإقرار)', mg_stock_zero: 'صفر',
+     mg_staging_action: 'تجهيز المستندات', mg_staging_impact: 'تُصنّف مستندات ما بعد تاريخ القطع حسب بنيتها (شراء، بيع، قبض، دفع، مصروف، عملية بنكية). لا يُرحّل شيء.', mg_staged_counts: 'السجلات المجهزة',
+     mg_records: 'السجلات', mg_filter_status: 'الحالة', mg_filter_code: 'كود المراجعة', mg_record_number: 'الرقم', mg_record_date: 'التاريخ', mg_record_type: 'النوع', mg_record_amount: 'المبلغ', mg_record_reason: 'السبب', mg_record_target: 'مستند النظام', mg_records_empty: 'لا توجد سجلات مطابقة.', mg_include: 'إعادة التضمين',
+diff --git a/routes/platform.php b/routes/platform.php
+index d0a3f7e..6198f02 100644
+--- a/routes/platform.php
++++ b/routes/platform.php
+@@ -63,6 +63,7 @@
+                 Route::post('/openings/preflight', [DataMigrationController::class, 'preflightOpenings'])->name('openings.preflight');
+                 Route::post('/phase1/preflight', [DataMigrationController::class, 'phaseOnePreflight'])->middleware('platform.stepup')->name('phase1.preflight');
+                 Route::post('/phase1/issues', [DataMigrationController::class, 'phaseOneIssue'])->middleware('platform.stepup')->name('phase1.issues');
++                Route::post('/phase1/issues/bulk', [DataMigrationController::class, 'phaseOneIssuesBulk'])->middleware('platform.stepup')->name('phase1.issues.bulk');
+                 Route::post('/documents/stage', [DataMigrationController::class, 'stageDocuments'])->name('documents.stage');
+                 Route::post('/records/{record}/exclude', [DataMigrationController::class, 'excludeRecord'])->middleware('platform.stepup')->name('records.exclude');
+                 Route::post('/records/{record}/include', [DataMigrationController::class, 'includeRecord'])->middleware('platform.stepup')->name('records.include');
+diff --git a/tests/Feature/DataMigrationRemediationTest.php b/tests/Feature/DataMigrationRemediationTest.php
+index 6288ba7..473a43e 100644
+--- a/tests/Feature/DataMigrationRemediationTest.php
++++ b/tests/Feature/DataMigrationRemediationTest.php
+@@ -318,6 +318,25 @@ public function test_phase_one_bulk_action_creates_all_new_parties_without_per_r
+         $this->assertSame('phase1_completed', DataMigrationRun::query()->findOrFail($runId)->status);
+     }
+ 
++    public function test_phase_one_can_resolve_all_unresolved_items_of_one_code_at_once(): void
++    {
++        $owner = $this->admin();
++        $company = $this->company($owner);
++        $rows = $this->baseRows();
++        $rows['customer'][0]['start_balance'] = '';
++
++        $runId = (int) $this->upload($owner, $company, $this->dump($rows), ['migration_scope' => 'party_openings_phase1'])->assertOk()->json('run.id');
++        $this->api($owner, 'POST', "/super-admin/data-migrations/{$runId}/parse")->assertOk();
++        $preview = $this->api($owner, 'GET', "/super-admin/data-migrations/{$runId}/phase1/preview")->assertOk()->json('phase1');
++        $this->assertSame(1, count(array_filter($preview['unresolved'], fn (array $issue): bool => $issue['code'] === 'invalid_customer_start_balance')));
++
++        $response = $this->api($owner, 'POST', "/super-admin/data-migrations/{$runId}/phase1/issues/bulk", [
++            'code' => 'invalid_customer_start_balance', 'decision' => 'exclude_component', 'reason' => 'القيمة غير صالحة واعتمدت صفرًا',
++        ])->assertOk();
++        $this->assertSame(1, $response->json('bulk.updated'));
++        $this->assertCount(0, array_filter($response->json('phase1.unresolved'), fn (array $issue): bool => $issue['code'] === 'invalid_customer_start_balance'));
++    }
++
+     public function test_retention_and_archive_require_a_reason_and_state(): void
+     {
+         $owner = $this->admin();

@@ -1,0 +1,64 @@
+diff --git a/resources/js/Components/Platform/ui.jsx b/resources/js/Components/Platform/ui.jsx
+index 3330127..40be012 100644
+--- a/resources/js/Components/Platform/ui.jsx
++++ b/resources/js/Components/Platform/ui.jsx
+@@ -206,7 +206,7 @@ export function ConfirmActionDialog({ title, eyebrow, impact, confirmLabel, dang
+                 {impact && <div className="impact-box" role="group" aria-label={t('pf_impact')}><strong>{t('pf_impact')}</strong>{impact}</div>}
+                 {children}
+             </ErrorBoundary>
+-            {withReason && <label className="field"><span>{t('pf_reason')}</span><textarea required minLength={3} maxLength={1000} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} /><small>{t('pf_reason_hint')}</small></label>}
++            {withReason && <label className="field"><span>{t('pf_reason')}</span><textarea required minLength={5} maxLength={1000} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} /><small>{t('pf_reason_hint')}</small></label>}
+         </form>
+     </ModalShell>;
+ }
+diff --git a/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx b/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
+index c90fae1..47c39ea 100644
+--- a/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
++++ b/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
+@@ -358,6 +358,18 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
+         return out;
+     }, [request, refresh, t]);
+ 
++    // Phase-one decisions require step-up. Close the reason dialog first so the
++    // security dialog is the only modal on screen while the request is retried.
++    const phaseOneDialogAction = useCallback((path, data, onDone) => {
++        setDialog(null);
++
++        return dialogAction('post', path, data, onDone).catch((failure) => {
++            if (failure?.message !== 'cancelled') setError(explain(failure, t));
++
++            return null;
++        });
++    }, [dialogAction, t]);
++
+     useEffect(() => {
+         if (['masters_created', 'openings_preflight', 'openings_ready', 'openings_posted', 'documents_ready', 'failed_recoverable', 'executing', 'completed_with_review', 'completed', 'signed_off'].includes(run.status) && viewed === 'openings') {
+             let cancelled = false;
+@@ -534,8 +546,8 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
+                 ? <button type="button" className="erp-button erp-button--secondary" disabled={busy !== null} onClick={() => action('events', 'get', '/events', undefined, (out) => setEvents(out.events))}>{t('mg_events')}</button>
+                 : <div className="erp-table-wrap"><table className="erp-table"><thead><tr><th>{t('mg_event_when')}</th><th>{t('mg_event_action')}</th><th>{t('mg_event_from')}</th><th>{t('mg_event_to')}</th></tr></thead><tbody>{events.map((event) => <tr key={event.id}><td>{dateTime(event.created_at)}</td><td>{event.action}{event.reason && <small className="table-subline">{event.reason}</small>}</td><td>{event.from_state ? t(`mg_status_${event.from_state}`) : '—'}</td><td>{event.to_state ? t(`mg_status_${event.to_state}`) : '—'}</td></tr>)}</tbody></table></div>}
+         </section>
+-        {dialog?.phase1Issue && <PhaseOneIssueDialog issue={dialog.phase1Issue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues', { issue_key: dialog.phase1Issue.issue_key, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
+-        {dialog?.phase1BulkIssue && <PhaseOneBulkIssueDialog group={dialog.phase1BulkIssue} t={t} onConfirm={({ decision, reason }) => dialogAction('post', '/phase1/issues/bulk', { code: dialog.phase1BulkIssue.code, decision, reason }, (out) => setPhase1(out.phase1)).then(() => setDialog(null))} onClose={() => setDialog(null)} />}
++        {dialog?.phase1Issue && <PhaseOneIssueDialog issue={dialog.phase1Issue} t={t} onConfirm={({ decision, reason }) => phaseOneDialogAction('/phase1/issues', { issue_key: dialog.phase1Issue.issue_key, decision, reason }, (out) => setPhase1(out.phase1))} onClose={() => setDialog(null)} />}
++        {dialog?.phase1BulkIssue && <PhaseOneBulkIssueDialog group={dialog.phase1BulkIssue} t={t} onConfirm={({ decision, reason }) => phaseOneDialogAction('/phase1/issues/bulk', { code: dialog.phase1BulkIssue.code, decision, reason }, (out) => setPhase1(out.phase1))} onClose={() => setDialog(null)} />}
+         {dialog && !dialog.phase1Issue && <ConfirmActionDialog title={dialog.title} impact={dialog.impact} confirmLabel={dialog.label} danger={dialog.danger} withReason={dialog.withReason} onConfirm={dialog.run} onClose={() => setDialog(null)} resetKey={dialog.title} />}
+         {api.stepUpDialog}
+     </SuperAdminLayout>;
+diff --git a/tests/platform-ui.test.mjs b/tests/platform-ui.test.mjs
+index b90fbcc..f3bbc00 100644
+--- a/tests/platform-ui.test.mjs
++++ b/tests/platform-ui.test.mjs
+@@ -90,3 +90,12 @@ test('platform pages never render secrets and never use physical direction CSS c
+         assert.ok(!/\b(?:ml|mr|pl|pr)-\d/.test(source), file);
+     }
+ });
++
++test('confirmation reasons match the backend minimum and phase-one step-up does not stack modals', () => {
++    const ui = readFileSync(new URL('Components/Platform/ui.jsx', root), 'utf8');
++    const migration = readFileSync(new URL('Pages/SuperAdmin/DataMigrationRun.jsx', root), 'utf8');
++    assert.match(ui, /textarea required minLength=\{5\}/);
++    assert.match(migration, /const phaseOneDialogAction = useCallback/);
++    assert.match(migration, /phaseOneDialogAction\('\/phase1\/issues\/bulk'/);
++    assert.match(migration, /setDialog\(null\);/);
++});

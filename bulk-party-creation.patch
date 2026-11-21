@@ -1,0 +1,336 @@
+diff --git a/app/Http/Controllers/Platform/DataMigrationController.php b/app/Http/Controllers/Platform/DataMigrationController.php
+index 7cdd4a2..52c8229 100644
+--- a/app/Http/Controllers/Platform/DataMigrationController.php
++++ b/app/Http/Controllers/Platform/DataMigrationController.php
+@@ -394,6 +394,11 @@ public function phaseOneCreateMasters(DataMigrationRun $run, Request $request):
+         return $this->done($request, ['created' => $this->workflow->createPhaseOnePartyMasters($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
+     }
+ 
++    public function phaseOneCreateAllPartyMasters(DataMigrationRun $run, Request $request): JsonResponse|RedirectResponse
++    {
++        return $this->done($request, ['result' => $this->workflow->createAllPhaseOnePartyMasters($run->id, $request->user()), 'run' => $this->runPayload($run->fresh())]);
++    }
++
+     public function phaseOneIssue(Request $request, DataMigrationRun $run): JsonResponse|RedirectResponse
+     {
+         $data = $request->validate([
+diff --git a/app/Services/Migration/MigrationWorkflow.php b/app/Services/Migration/MigrationWorkflow.php
+index 9bba9a5..3a7e1ca 100644
+--- a/app/Services/Migration/MigrationWorkflow.php
++++ b/app/Services/Migration/MigrationWorkflow.php
+@@ -163,6 +163,59 @@ public function createPhaseOnePartyMasters(int $runId, User $actor): array
+         });
+     }
+ 
++    /** Approve deterministic party mappings and create all safe new parties in one action. */
++    /** @return array<string, mixed> */
++    public function createAllPhaseOnePartyMasters(int $runId, User $actor): array
++    {
++        return $this->sm->locked($runId, 'phase1_party_masters_bulk', ['review', 'party_openings_preflight', 'party_openings_ready'], function (DataMigrationRun $run) use ($actor): array {
++            abort_unless($run->mode === 'party_openings_phase1', 409, 'This run is not scoped to Phase 1 party openings.');
++
++            $approved = ['customers' => 0, 'suppliers' => 0, 'matched' => 0];
++            foreach (DataMigrationMapping::query()->where('run_id', $run->id)->whereIn('entity_type', ['customer', 'supplier'])->whereNull('locked_at')->lockForUpdate()->get() as $mapping) {
++                $payload = $mapping->payload ?? [];
++                $safe = false;
++                if ($mapping->decision === 'create_required') {
++                    $safe = trim((string) data_get($payload, 'source_name', '')) !== ''
++                        && ! (bool) data_get($payload, 'missing_in_source', false)
++                        && data_get($payload, 'note') === null;
++                } elseif ($mapping->decision === 'matched' && data_get($payload, 'note') === 'name_exact') {
++                    $safe = true;
++                }
++                if (! $safe || $mapping->isReviewed()) {
++                    continue;
++                }
++                $payload['reviewed'] = true;
++                $mapping->forceFill([
++                    'payload' => $payload,
++                    'reviewed_by' => $actor->id,
++                    'reviewed_at' => now(),
++                    'reason' => 'Bulk approval of deterministic party mapping.',
++                ])->save();
++                $approved[$mapping->decision === 'create_required' ? ($mapping->entity_type === 'customer' ? 'customers' : 'suppliers') : 'matched']++;
++            }
++
++            if ($run->status === 'review') {
++                $this->sm->transition($run, 'party_openings_preflight', 'phase1_party_bulk_preflight', $actor);
++            }
++            $preview = $this->partyOpenings->preview($run->fresh());
++            $masters = $this->masters->preflightPhaseOne($run->fresh());
++            $blockers = array_merge($preview['unresolved'], $masters['blockers']);
++            if ($blockers !== []) {
++                $run = $run->fresh();
++                $run->forceFill(['preflight' => array_merge($run->preflight ?? [], ['phase1_parties' => ['ok' => false, 'blockers' => $blockers]])])->save();
++                if ($run->status !== 'review') {
++                    $this->sm->transition($run, 'review', 'phase1_party_bulk_blocked', $actor, null, ['blockers' => count($blockers)]);
++                }
++                throw RunStateMachine::refuse('phase1_party_blocked', 'Some party mappings or balance reviews still require a decision.', ['blockers' => array_slice($blockers, 0, 100)], 422);
++            }
++
++            $created = $this->partyOpenings->createMasters($run->fresh(), $actor, $this->masters);
++            $this->sm->transition($run->fresh(), 'party_openings_ready', 'phase1_party_masters_created_bulk', $actor, null, $created + ['approved' => $approved]);
++
++            return ['approved' => $approved, 'created' => $created, 'next' => 'post_party_openings'];
++        });
++    }
++
+     /** @return array<string, mixed> */
+     public function postPhaseOnePartyOpenings(int $runId, User $actor): array
+     {
+diff --git a/package-lock.json b/package-lock.json
+index 7d95122..7b1bb38 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,9 +1,10 @@
+ {
+-    "name": "ezaki-erp-v1",
++    "name": "ezaki-bulk-parties",
+     "lockfileVersion": 3,
+     "requires": true,
+     "packages": {
+         "": {
++            "name": "ezaki-bulk-parties",
+             "dependencies": {
+                 "@inertiajs/react": "^2.3.28",
+                 "react": "^19.3.0",
+@@ -1458,6 +1459,72 @@
+                 "node": ">=14.0.0"
+             }
+         },
++        "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/core": {
++            "version": "1.11.1",
++            "dev": true,
++            "inBundle": true,
++            "license": "MIT",
++            "optional": true,
++            "dependencies": {
++                "@emnapi/wasi-threads": "1.2.2",
++                "tslib": "^2.4.0"
++            }
++        },
++        "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/runtime": {
++            "version": "1.11.1",
++            "dev": true,
++            "inBundle": true,
++            "license": "MIT",
++            "optional": true,
++            "dependencies": {
++                "tslib": "^2.4.0"
++            }
++        },
++        "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/wasi-threads": {
++            "version": "1.2.2",
++            "dev": true,
++            "inBundle": true,
++            "license": "MIT",
++            "optional": true,
++            "dependencies": {
++                "tslib": "^2.4.0"
++            }
++        },
++        "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@napi-rs/wasm-runtime": {
++            "version": "1.1.4",
++            "dev": true,
++            "inBundle": true,
++            "license": "MIT",
++            "optional": true,
++            "dependencies": {
++                "@tybys/wasm-util": "^0.10.1"
++            },
++            "funding": {
++                "type": "github",
++                "url": "https://github.com/sponsors/Brooooooklyn"
++            },
++            "peerDependencies": {
++                "@emnapi/core": "^1.7.1",
++                "@emnapi/runtime": "^1.7.1"
++            }
++        },
++        "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@tybys/wasm-util": {
++            "version": "0.10.2",
++            "dev": true,
++            "inBundle": true,
++            "license": "MIT",
++            "optional": true,
++            "dependencies": {
++                "tslib": "^2.4.0"
++            }
++        },
++        "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/tslib": {
++            "version": "2.8.1",
++            "dev": true,
++            "inBundle": true,
++            "license": "0BSD",
++            "optional": true
++        },
+         "node_modules/@tailwindcss/oxide-win32-arm64-msvc": {
+             "version": "4.3.3",
+             "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-win32-arm64-msvc/-/oxide-win32-arm64-msvc-4.3.3.tgz",
+@@ -2059,15 +2126,16 @@
+             }
+         },
+         "node_modules/follow-redirects": {
+-            "version": "1.16.0",
+-            "resolved": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.0.tgz",
+-            "integrity": "sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==",
++            "version": "1.16.2",
++            "resolved": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.2.tgz",
++            "integrity": "sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==",
+             "funding": [
+                 {
+                     "type": "individual",
+                     "url": "https://github.com/sponsors/RubenVerborgh"
+                 }
+             ],
++            "license": "MIT",
+             "engines": {
+                 "node": ">=4.0"
+             },
+@@ -3259,10 +3327,11 @@
+             }
+         },
+         "node_modules/vite": {
+-            "version": "6.4.3",
+-            "resolved": "https://registry.npmjs.org/vite/-/vite-6.4.3.tgz",
+-            "integrity": "sha512-NTKlcQjlAK7MlQoyb6LgaqHc8sso/pVyUJYWMws3jg21uTJw/LddqIFPcPqP6PzpgbIcZyKI85sFE4HBrQDA8A==",
++            "version": "6.4.5",
++            "resolved": "https://registry.npmjs.org/vite/-/vite-6.4.5.tgz",
++            "integrity": "sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==",
+             "dev": true,
++            "license": "MIT",
+             "dependencies": {
+                 "esbuild": "^0.25.0",
+                 "fdir": "^6.4.4",
+diff --git a/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx b/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
+index 5c66225..eaa9d93 100644
+--- a/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
++++ b/resources/js/Pages/SuperAdmin/DataMigrationRun.jsx
+@@ -60,7 +60,7 @@ function BlockerList({ blockers, t, onOpenMapping, onAcknowledge, canManage }) {
+     </li>)}</ul>;
+ }
+ 
+-function MappingRow({ mapping, options, t, disabled, onSave, onExclude }) {
++function MappingRow({ mapping, options, t, disabled, onSave, onExclude, hidePartyCreate }) {
+     const [unit, setUnit] = useState(mapping.unit_basis ?? '');
+     const [cost, setCost] = useState(mapping.opening_cost_per_ton ?? '');
+     const frozen = mapping.locked || disabled;
+@@ -98,14 +98,14 @@ function MappingRow({ mapping, options, t, disabled, onSave, onExclude }) {
+             {nonWeight && <small className="permission-note">{t('mg_unit_warning')}</small>}
+         </td>
+         <td className="no-print"><div className="row-actions">
+-            {CREATABLE.includes(mapping.entity) && mapping.entity !== 'product' && <button type="button" className="table-action" disabled={frozen} onClick={() => onSave(mapping, { decision: 'create_required' })}>{t('mg_create_new')}</button>}
++            {CREATABLE.includes(mapping.entity) && mapping.entity !== 'product' && !(hidePartyCreate && ['customer', 'supplier'].includes(mapping.entity) && ['create_required', 'matched'].includes(mapping.decision)) && <button type="button" className="table-action" disabled={frozen} onClick={() => onSave(mapping, { decision: 'create_required' })}>{t('mg_create_new')}</button>}
+             {mapping.entity === 'category' && mapping.decision === 'needs_review' && <button type="button" className="table-action" disabled={frozen} onClick={() => onSave(mapping, { decision: 'create_required' })}>{t('mg_create_new')}</button>}
+             <button type="button" className="table-action table-action--danger" disabled={frozen} onClick={() => onExclude(mapping)}>{t('mg_exclude')}</button>
+         </div></td>
+     </tr>;
+ }
+ 
+-function MappingsPanel({ base, options, counts, t, busy, canManage, focus, onSave, onExclude, onApproveSafe, version }) {
++function MappingsPanel({ base, options, counts, t, busy, canManage, phase1Bulk, focus, onSave, onExclude, onApproveSafe, onCreateAllParties, version }) {
+     const [filters, setFilters] = useState({ entity: focus?.entity ?? '', decision: '', q: focus?.q ?? '' });
+     const [applied, setApplied] = useState(filters);
+     const [page, setPage] = useState(1);
+@@ -137,13 +137,13 @@ function MappingsPanel({ base, options, counts, t, busy, canManage, focus, onSav
+             <label className="field"><span>{t('mg_filter_entity')}</span><select value={filters.entity} onChange={(event) => setFilters({ ...filters, entity: event.target.value })}><option value="">{t('mg_all')}</option>{MIGRATION_ENTITIES.map((entity) => <option key={entity} value={entity}>{t(`mg_entity_${entity}`)}</option>)}</select></label>
+             <label className="field"><span>{t('mg_filter_decision')}</span><select value={filters.decision} onChange={(event) => setFilters({ ...filters, decision: event.target.value })}><option value="">{t('mg_all')}</option>{MIGRATION_DECISIONS.map((decision) => <option key={decision} value={decision}>{t(`mg_decision_${decision}`)}</option>)}</select></label>
+             <label className="field"><span>{t('mg_search')}</span><input type="search" value={filters.q} onChange={(event) => setFilters({ ...filters, q: event.target.value })} /></label>
+-            <div className="erp-toolbar"><button type="submit" className="erp-button erp-button--primary">{t('mg_apply')}</button>{canManage && <button type="button" className="erp-button erp-button--secondary" disabled={busy} onClick={onApproveSafe}>{t('mg_approve_safe')}</button>}</div>
++            <div className="erp-toolbar"><button type="submit" className="erp-button erp-button--primary">{t('mg_apply')}</button>{canManage && <button type="button" className="erp-button erp-button--secondary" disabled={busy} onClick={onApproveSafe}>{t('mg_approve_safe')}</button>}{phase1Bulk && <button type="button" className="erp-button erp-button--primary" disabled={busy} onClick={onCreateAllParties}>{t('mg_phase1_create_all_parties')}</button>}</div>
+         </form>
+         {state.error && <Notice type="error">{state.error}</Notice>}
+         <div className="erp-table-wrap"><table className="erp-table" aria-busy={state.loading}>
+             <thead><tr><th>{t('mg_filter_entity')}</th><th>{t('mg_source_key')}</th><th>{t('mg_source_name')}</th><th>{t('mg_decision')}</th><th>{t('mg_target')}</th><th className="no-print">{t('actions')}</th></tr></thead>
+             <tbody>
+-                {state.data.map((mapping) => <MappingRow key={`${mapping.id}-${mapping.decision}-${mapping.target_id}-${mapping.unit_basis}`} mapping={mapping} options={options} t={t} disabled={busy || !canManage} onSave={onSave} onExclude={onExclude} />)}
++                {state.data.map((mapping) => <MappingRow key={`${mapping.id}-${mapping.decision}-${mapping.target_id}-${mapping.unit_basis}`} mapping={mapping} options={options} t={t} disabled={busy || !canManage} hidePartyCreate={Boolean(phase1Bulk)} onSave={onSave} onExclude={onExclude} />)}
+                 {!state.loading && state.data.length === 0 && <tr><td colSpan={6} className="empty-cell">{t('mg_mappings_empty')}</td></tr>}
+             </tbody>
+         </table></div>
+@@ -403,9 +403,10 @@ export default function DataMigrationRun({ run: initialRun, options: initialOpti
+             <p className="permission-note">{t('mg_policy_impact')}</p>
+             {manage && !executed && <div className="erp-toolbar">{button(t('mg_policy_save'), () => action('policy', 'post', '/policy', Object.fromEntries(Object.entries(policy).filter(([, value]) => value))), { primary: true, disabled: !policy.customer_start_balance_sign && !policy.supplier_start_balance_sign })}</div>}
+         </div>,
+-        mapping: <MappingsPanel base={base} options={options} counts={run.counts?.mappings} t={t} busy={isBusy} canManage={manage && ['review', 'masters_ready', 'masters_created', 'openings_ready', 'uploaded', 'parsed'].includes(status)} focus={focus} version={version}
++        mapping: <MappingsPanel base={base} options={options} counts={run.counts?.mappings} t={t} busy={isBusy} canManage={manage && ['review', 'masters_ready', 'masters_created', 'openings_ready', 'uploaded', 'parsed'].includes(status)} phase1Bulk={phase1Only && execute && ['review', 'party_openings_preflight', 'party_openings_ready'].includes(status)} focus={focus} version={version}
+             onSave={saveMapping} onExclude={(mapping) => setDialog({ title: t('mg_exclude_title'), impact: t('mg_exclude_impact'), label: t('mg_exclude'), danger: true, withReason: true, run: ({ reason }) => dialogAction('put', `/mappings/${mapping.id}`, { decision: 'excluded', reason }) })}
+-            onApproveSafe={() => setDialog({ title: t('mg_approve_safe'), impact: t('mg_approve_safe_impact'), label: t('mg_approve_safe'), withReason: false, run: () => dialogAction('post', '/mappings/approve-safe', {}) })} />,
++            onApproveSafe={() => setDialog({ title: t('mg_approve_safe'), impact: t('mg_approve_safe_impact'), label: t('mg_approve_safe'), withReason: false, run: () => dialogAction('post', '/mappings/approve-safe', {}) })}
++            onCreateAllParties={() => setDialog({ title: t('mg_phase1_create_all_parties'), impact: t('mg_phase1_create_all_parties_impact'), label: t('mg_phase1_create_all_parties'), withReason: false, run: () => dialogAction('post', '/phase1/parties/create-all', {}) })} />,
+         masters: <div>
+             <div className="erp-toolbar">
+                 {manage && ['review', 'masters_ready', 'masters_preflight'].includes(status) && button(t('mg_masters_preflight'), () => action('masters-preflight', 'post', '/masters/preflight', {}, (out) => setBlockers((previous) => ({ ...previous, masters: out.preflight.blockers, mastersCounts: out.preflight.counts, mastersOk: out.preflight.ok }))), { primary: true })}
+diff --git a/resources/js/i18n-migration.js b/resources/js/i18n-migration.js
+index 8bf94b0..ea0bcc9 100644
+--- a/resources/js/i18n-migration.js
++++ b/resources/js/i18n-migration.js
+@@ -38,7 +38,7 @@ export const migrationEn = {
+     mg_next_post_openings: 'Post the opening balances.', mg_next_stage_documents: 'Stage the post-cutoff documents.', mg_next_execute: 'Execute the ready documents.', mg_next_retry: 'Fix the cause, then execute again.', mg_next_resume: 'Resume the interrupted execution.',
+     mg_next_review_records: 'Decide the records that need review, then sign off.', mg_next_sign_off: 'Reconcile and sign off.', mg_next_archive: 'Archive the migration.', mg_next_reupload: 'Upload a corrected dump.', mg_next_none: 'Nothing left to do.',
+     mg_upload_info: 'Source file', mg_retention_until: 'Source kept until', mg_source_removed: 'The stored source was removed under the retention policy.', mg_gap_ack: 'Gap reason',
+-    mg_phase_scope: 'Migration phase', mg_phase1_only: 'Phase 1: customers, suppliers and party opening balances only', mg_full_scope: 'Full migration (later phase)', mg_phase1_cutoff: 'Party opening cutoff', mg_phase1_effective: 'Opening entry effective date', mg_phase1_scope_notice: 'Phase 1 excludes inventory, stock movements, invoices, receipts, payment vouchers, cash and banks.', mg_phase1_preview: 'Phase 1 preview', mg_phase1_preflight: 'Check Phase 1', mg_phase1_create_masters: 'Create approved parties', mg_phase1_post: 'Post party opening balances', mg_phase1_reconcile: 'Load Phase 1 reconciliation', mg_phase1_complete: 'Phase 1 completed', mg_phase1_no_documents: 'No inventory, document, cash or bank migration is available in this phase.', mg_phase1_customer: 'Customer opening', mg_phase1_supplier: 'Supplier opening', mg_phase1_source_positive: 'Source positive total', mg_phase1_source_negative: 'Source negative total', mg_phase1_debit: 'ERP debit', mg_phase1_credit: 'ERP credit', mg_phase1_supplier_sales: 'Sales to suppliers', mg_phase1_supplier_sales_review: 'Supplier-sale reviews', mg_phase1_formula_review: 'Formula interpretation review', mg_phase1_cutoff_required: 'Select a cutoff date before uploading.', mg_phase1_issue_decision: 'Review decision', mg_phase1_issue_reason: 'Review reason', mg_phase1_issue_approve_details: 'Approve detail-based formula', mg_phase1_issue_approve_category_rule: 'Approve category conversion rule', mg_phase1_issue_include_eda3: 'Include buy.eda3 once', mg_phase1_issue_exclude: 'Exclude this source row', mg_phase1_issue_exclude_party: 'Exclude this party', mg_phase1_issue_exclude_component: 'Exclude this component', mg_phase1_issue_unresolved: 'This item blocks Phase 1 until a decision and reason are recorded.',
++    mg_phase_scope: 'Migration phase', mg_phase1_only: 'Phase 1: customers, suppliers and party opening balances only', mg_full_scope: 'Full migration (later phase)', mg_phase1_cutoff: 'Party opening cutoff', mg_phase1_effective: 'Opening entry effective date', mg_phase1_scope_notice: 'Phase 1 excludes inventory, stock movements, invoices, receipts, payment vouchers, cash and banks.', mg_phase1_preview: 'Phase 1 preview', mg_phase1_preflight: 'Check Phase 1', mg_phase1_create_masters: 'Create approved parties', mg_phase1_create_all_parties: 'Create all new customers and suppliers', mg_phase1_create_all_parties_impact: 'Approves only deterministic new-party mappings, creates all approved customers and suppliers in one atomic action, and leaves balance posting as a separate audited step.', mg_phase1_post: 'Post party opening balances', mg_phase1_reconcile: 'Load Phase 1 reconciliation', mg_phase1_complete: 'Phase 1 completed', mg_phase1_no_documents: 'No inventory, document, cash or bank migration is available in this phase.', mg_phase1_customer: 'Customer opening', mg_phase1_supplier: 'Supplier opening', mg_phase1_source_positive: 'Source positive total', mg_phase1_source_negative: 'Source negative total', mg_phase1_debit: 'ERP debit', mg_phase1_credit: 'ERP credit', mg_phase1_supplier_sales: 'Sales to suppliers', mg_phase1_supplier_sales_review: 'Supplier-sale reviews', mg_phase1_formula_review: 'Formula interpretation review', mg_phase1_cutoff_required: 'Select a cutoff date before uploading.', mg_phase1_issue_decision: 'Review decision', mg_phase1_issue_reason: 'Review reason', mg_phase1_issue_approve_details: 'Approve detail-based formula', mg_phase1_issue_approve_category_rule: 'Approve category conversion rule', mg_phase1_issue_include_eda3: 'Include buy.eda3 once', mg_phase1_issue_exclude: 'Exclude this source row', mg_phase1_issue_exclude_party: 'Exclude this party', mg_phase1_issue_exclude_component: 'Exclude this component', mg_phase1_issue_unresolved: 'This item blocks Phase 1 until a decision and reason are recorded.',
+     mg_parse_action: 'Analyze file', mg_reparse_action: 'Analyze again', mg_parse_impact: 'The file is read in a single pass and staged. Previous staged rows are replaced; nothing is posted to accounting.',
+     mg_integrity: 'Source integrity', mg_statements: 'Statements', mg_uncompressed: 'Uncompressed size', mg_errors_count: 'Read errors', mg_clean: 'Clean: every row was read and staged.', mg_not_clean: 'The file could not be read without losing data.',
+     mg_table: 'Table', mg_rows: 'Rows read', mg_staged: 'Staged', mg_rejected: 'Rejected',
+@@ -103,7 +103,7 @@ export const migrationAr = {
+     mg_next_post_openings: 'رحّل الأرصدة الافتتاحية.', mg_next_stage_documents: 'جهّز مستندات ما بعد تاريخ القطع.', mg_next_execute: 'نفّذ المستندات الجاهزة.', mg_next_retry: 'عالج السبب ثم نفّذ مرة أخرى.', mg_next_resume: 'استأنف التنفيذ المتوقف.',
+     mg_next_review_records: 'قرّر في السجلات التي تحتاج مراجعة ثم اعتمد.', mg_next_sign_off: 'سوِّ واعتمد.', mg_next_archive: 'أرشف العملية.', mg_next_reupload: 'ارفع نسخة مصححة.', mg_next_none: 'لا يوجد إجراء متبقٍ.',
+     mg_upload_info: 'ملف المصدر', mg_retention_until: 'يُحتفظ بالمصدر حتى', mg_source_removed: 'حُذف الملف المخزن وفق سياسة الاحتفاظ.', mg_gap_ack: 'سبب الفجوة',
+-    mg_phase_scope: 'مرحلة النقل', mg_phase1_only: 'المرحلة الأولى: العملاء والموردون وأرصدة الأطراف فقط', mg_full_scope: 'النقل الكامل (مرحلة لاحقة)', mg_phase1_cutoff: 'تاريخ قطع أرصدة الأطراف', mg_phase1_effective: 'تاريخ سريان القيد الافتتاحي', mg_phase1_scope_notice: 'المرحلة الأولى لا تشمل المخزون أو حركاته أو الفواتير أو القبض أو الدفع أو النقدية أو البنوك.', mg_phase1_preview: 'معاينة المرحلة الأولى', mg_phase1_preflight: 'فحص المرحلة الأولى', mg_phase1_create_masters: 'إنشاء الأطراف المعتمدة', mg_phase1_post: 'ترحيل أرصدة الأطراف', mg_phase1_reconcile: 'تحميل تسوية المرحلة الأولى', mg_phase1_complete: 'اكتملت المرحلة الأولى', mg_phase1_no_documents: 'لا يتاح في هذه المرحلة نقل مخزون أو مستندات أو نقدية أو بنوك.', mg_phase1_customer: 'رصيد العميل الافتتاحي', mg_phase1_supplier: 'رصيد المورد الافتتاحي', mg_phase1_source_positive: 'إجمالي المصدر الموجب', mg_phase1_source_negative: 'إجمالي المصدر السالب', mg_phase1_debit: 'مدين النظام', mg_phase1_credit: 'دائن النظام', mg_phase1_supplier_sales: 'مبيعات إلى الموردين', mg_phase1_supplier_sales_review: 'مراجعات مبيعات الموردين', mg_phase1_formula_review: 'مراجعة تفسير المعادلة', mg_phase1_cutoff_required: 'اختر تاريخ القطع قبل الرفع.', mg_phase1_issue_decision: 'قرار المراجعة', mg_phase1_issue_reason: 'سبب المراجعة', mg_phase1_issue_approve_details: 'اعتماد معادلة التفاصيل', mg_phase1_issue_approve_category_rule: 'اعتماد قاعدة تحويل الفئة', mg_phase1_issue_include_eda3: 'إدراج buy.eda3 مرة واحدة', mg_phase1_issue_exclude: 'استبعاد صف المصدر', mg_phase1_issue_exclude_party: 'استبعاد الطرف', mg_phase1_issue_exclude_component: 'استبعاد المكوّن', mg_phase1_issue_unresolved: 'هذا العنصر يوقف المرحلة الأولى حتى تسجيل قرار وسبب.',
++    mg_phase_scope: 'مرحلة النقل', mg_phase1_only: 'المرحلة الأولى: العملاء والموردون وأرصدة الأطراف فقط', mg_full_scope: 'النقل الكامل (مرحلة لاحقة)', mg_phase1_cutoff: 'تاريخ قطع أرصدة الأطراف', mg_phase1_effective: 'تاريخ سريان القيد الافتتاحي', mg_phase1_scope_notice: 'المرحلة الأولى لا تشمل المخزون أو حركاته أو الفواتير أو القبض أو الدفع أو النقدية أو البنوك.', mg_phase1_preview: 'معاينة المرحلة الأولى', mg_phase1_preflight: 'فحص المرحلة الأولى', mg_phase1_create_masters: 'إنشاء الأطراف المعتمدة', mg_phase1_create_all_parties: 'إنشاء كل العملاء والموردين الجدد', mg_phase1_create_all_parties_impact: 'يعتمد فقط المطابقات الآمنة للأطراف الجدد وينشئ كل العملاء والموردين المعتمدين في إجراء ذري واحد، بينما يظل ترحيل الأرصدة خطوة منفصلة ومدققة.', mg_phase1_post: 'ترحيل أرصدة الأطراف', mg_phase1_reconcile: 'تحميل تسوية المرحلة الأولى', mg_phase1_complete: 'اكتملت المرحلة الأولى', mg_phase1_no_documents: 'لا يتاح في هذه المرحلة نقل مخزون أو مستندات أو نقدية أو بنوك.', mg_phase1_customer: 'رصيد العميل الافتتاحي', mg_phase1_supplier: 'رصيد المورد الافتتاحي', mg_phase1_source_positive: 'إجمالي المصدر الموجب', mg_phase1_source_negative: 'إجمالي المصدر السالب', mg_phase1_debit: 'مدين النظام', mg_phase1_credit: 'دائن النظام', mg_phase1_supplier_sales: 'مبيعات إلى الموردين', mg_phase1_supplier_sales_review: 'مراجعات مبيعات الموردين', mg_phase1_formula_review: 'مراجعة تفسير المعادلة', mg_phase1_cutoff_required: 'اختر تاريخ القطع قبل الرفع.', mg_phase1_issue_decision: 'قرار المراجعة', mg_phase1_issue_reason: 'سبب المراجعة', mg_phase1_issue_approve_details: 'اعتماد معادلة التفاصيل', mg_phase1_issue_approve_category_rule: 'اعتماد قاعدة تحويل الفئة', mg_phase1_issue_include_eda3: 'إدراج buy.eda3 مرة واحدة', mg_phase1_issue_exclude: 'استبعاد صف المصدر', mg_phase1_issue_exclude_party: 'استبعاد الطرف', mg_phase1_issue_exclude_component: 'استبعاد المكوّن', mg_phase1_issue_unresolved: 'هذا العنصر يوقف المرحلة الأولى حتى تسجيل قرار وسبب.',
+     mg_parse_action: 'تحليل الملف', mg_reparse_action: 'إعادة التحليل', mg_parse_impact: 'يُقرأ الملف في مرور واحد ويُجهّز. تُستبدل الصفوف المجهزة السابقة ولا يُرحّل شيء إلى الحسابات.',
+     mg_integrity: 'سلامة المصدر', mg_statements: 'عدد الجمل', mg_uncompressed: 'الحجم بعد فك الضغط', mg_errors_count: 'أخطاء القراءة', mg_clean: 'سليم: قُرئ كل صف وجُهّز.', mg_not_clean: 'تعذرت قراءة الملف دون فقد بيانات.',
+     mg_table: 'الجدول', mg_rows: 'الصفوف المقروءة', mg_staged: 'المجهزة', mg_rejected: 'المرفوضة',
+diff --git a/routes/platform.php b/routes/platform.php
+index f0ed83d..d0a3f7e 100644
+--- a/routes/platform.php
++++ b/routes/platform.php
+@@ -70,6 +70,7 @@
+             Route::middleware(['platform.can:data_migration.execute', 'platform.stepup', 'throttle:platform.write'])->group(function (): void {
+                 Route::post('/masters/create', [DataMigrationController::class, 'createMasters'])->name('masters.create');
+                 Route::post('/phase1/masters/create', [DataMigrationController::class, 'phaseOneCreateMasters'])->name('phase1.masters.create');
++                Route::post('/phase1/parties/create-all', [DataMigrationController::class, 'phaseOneCreateAllPartyMasters'])->name('phase1.parties.create-all');
+                 Route::post('/openings/post', [DataMigrationController::class, 'postOpenings'])->name('openings.post');
+                 Route::post('/phase1/post', [DataMigrationController::class, 'phaseOnePost'])->name('phase1.post');
+                 Route::post('/phase1/reverse', [DataMigrationController::class, 'phaseOneReverse'])->name('phase1.reverse');
+diff --git a/tests/Feature/DataMigrationRemediationTest.php b/tests/Feature/DataMigrationRemediationTest.php
+index 9b217b9..6288ba7 100644
+--- a/tests/Feature/DataMigrationRemediationTest.php
++++ b/tests/Feature/DataMigrationRemediationTest.php
+@@ -290,6 +290,34 @@ public function test_count_based_unit_bases_are_never_converted_or_accepted_as_w
+         $this->assertSame(1, DB::table('products')->where('company_id', $company->id)->where('material_category', '12')->where('quantity_basis', 'meter')->count());
+     }
+ 
++    public function test_phase_one_bulk_action_creates_all_new_parties_without_per_row_clicks_and_posts_balances(): void
++    {
++        $owner = $this->admin();
++        $company = $this->company($owner);
++        $rows = $this->baseRows();
++        $rows['customer'][] = ['id_customer' => 2, 'name_customer' => 'Customer Two', 'address' => 'y', 'phon' => '2', 'start_balance' => '0'];
++        $rows['import'][] = ['id_import' => 2, 'name' => 'Supplier Two'];
++        $rows['customer'][0]['start_balance'] = '100';
++        $rows['account_import'][] = ['id_account_import' => 1, 'id_import' => 1, 'start_cash' => '100'];
++
++        $runId = (int) $this->upload($owner, $company, $this->dump($rows), ['migration_scope' => 'party_openings_phase1'])->assertOk()->json('run.id');
++        $this->api($owner, 'POST', "/super-admin/data-migrations/{$runId}/parse")->assertOk();
++        $base = "/super-admin/data-migrations/{$runId}";
++
++        $bulk = $this->api($owner, 'POST', "{$base}/phase1/parties/create-all")->assertOk();
++        $this->assertSame(2, $bulk->json('result.created.customers'));
++        $this->assertSame(2, $bulk->json('result.created.suppliers'));
++        $this->assertSame('party_openings_ready', DataMigrationRun::query()->findOrFail($runId)->status);
++        $this->assertSame(2, DataMigrationMapping::query()->where('run_id', $runId)->where('entity_type', 'customer')->where('decision', 'matched')->whereNotNull('target_id')->count());
++        $this->assertSame(2, DataMigrationMapping::query()->where('run_id', $runId)->where('entity_type', 'supplier')->where('decision', 'matched')->whereNotNull('target_id')->count());
++        $this->assertSame(2, DB::table('customer_suppliers')->where('company_id', $company->id)->where('is_customer', true)->count());
++        $this->assertSame(2, DB::table('customer_suppliers')->where('company_id', $company->id)->where('is_supplier', true)->count());
++
++        $this->api($owner, 'POST', "{$base}/phase1/post")->assertOk();
++        $this->assertSame(2, DB::table('data_migration_links')->where('run_id', $runId)->where('document_type', 'party_opening_balance_phase1')->count());
++        $this->assertSame('phase1_completed', DataMigrationRun::query()->findOrFail($runId)->status);
++    }
++
+     public function test_retention_and_archive_require_a_reason_and_state(): void
+     {
+         $owner = $this->admin();

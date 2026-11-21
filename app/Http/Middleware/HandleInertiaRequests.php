@@ -44,6 +44,7 @@ class HandleInertiaRequests extends Middleware
             'flash' => [
                 'status' => fn () => $request->session()->get('status'),
                 'message' => fn () => $request->session()->get('message'),
+                'simplePartyImport' => fn () => $request->session()->get('simple_party_import'),
             ],
             'isCompanyOwner' => $user?->isCompanyOwner() ?? false,
             'capabilities' => $capabilities,

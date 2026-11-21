@@ -1,0 +1,604 @@
+diff --git a/TODO.md b/TODO.md
+new file mode 100644
+index 0000000..19f3e39
+--- /dev/null
++++ b/TODO.md
+@@ -0,0 +1,7 @@
++# TODO
++
++- [ ] إضافة استيراد JSON مباشر للعملاء والموردين وأرصدة القطع مع اتجاه الرصيد وتاريخ سريان القيد التالي لتاريخ القطع.
++- [ ] رفض الملفات غير الصالحة أو التي تحتوي مبالغ سالبة أو نوعًا غير معروف أو أسماء فارغة، مع رسائل صف واضحة.
++- [ ] إنشاء الحسابات والأطراف والقيود الافتتاحية داخل الشركة الحالية فقط، ومنع تكرار الاسم دون تعديل السجل الموجود.
++- [ ] إضافة واجهة رفع مباشرة داخل صفحة الأطراف مع نتيجة مختصرة ونموذج ملف جاهز.
++- [ ] تغطية المسار باختبارات العزل والصلاحيات والتوازن المحاسبي والتحقق من إعادة الرفع.
+diff --git a/app/Http/Controllers/Web/SimplePartyImportController.php b/app/Http/Controllers/Web/SimplePartyImportController.php
+new file mode 100644
+index 0000000..a35ddcb
+--- /dev/null
++++ b/app/Http/Controllers/Web/SimplePartyImportController.php
+@@ -0,0 +1,36 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Http\Controllers\Web;
++
++use App\Http\Controllers\Controller;
++use App\Services\SimplePartyImportService;
++use Illuminate\Http\RedirectResponse;
++use Illuminate\Http\Request;
++use Illuminate\Validation\ValidationException;
++
++final class SimplePartyImportController extends Controller
++{
++    public function store(Request $request, SimplePartyImportService $importer): RedirectResponse
++    {
++        $request->validate([
++            'file' => ['required', 'file', 'mimes:json,txt', 'max:5120'],
++        ]);
++
++        try {
++            $result = $importer->import(
++                $request->attributes->get('company'),
++                $request->user(),
++                $request->file('file'),
++            );
++        } catch (ValidationException $exception) {
++            throw $exception;
++        } catch (\Throwable $exception) {
++            report($exception);
++            throw ValidationException::withMessages(['file' => 'The import could not be completed. No records were saved.']);
++        }
++
++        return back()->with('simple_party_import', $result);
++    }
++}
+diff --git a/app/Http/Middleware/HandleInertiaRequests.php b/app/Http/Middleware/HandleInertiaRequests.php
+index a2333f4..fea2d2e 100644
+--- a/app/Http/Middleware/HandleInertiaRequests.php
++++ b/app/Http/Middleware/HandleInertiaRequests.php
+@@ -44,6 +44,7 @@ public function share(Request $request): array
+             'flash' => [
+                 'status' => fn () => $request->session()->get('status'),
+                 'message' => fn () => $request->session()->get('message'),
++                'simplePartyImport' => fn () => $request->session()->get('simple_party_import'),
+             ],
+             'isCompanyOwner' => $user?->isCompanyOwner() ?? false,
+             'capabilities' => $capabilities,
+diff --git a/app/Services/SimplePartyImportService.php b/app/Services/SimplePartyImportService.php
+new file mode 100644
+index 0000000..3f023cf
+--- /dev/null
++++ b/app/Services/SimplePartyImportService.php
+@@ -0,0 +1,160 @@
++<?php
++
++declare(strict_types=1);
++
++namespace App\Services;
++
++use App\Models\Account;
++use App\Models\Company;
++use App\Models\CustomerSupplier;
++use App\Models\User;
++use Carbon\CarbonImmutable;
++use Illuminate\Http\UploadedFile;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Validation\ValidationException;
++
++final class SimplePartyImportService
++{
++    private const MAX_ROWS = 5000;
++
++    public function __construct(
++        private readonly AccountingFoundationService $foundation,
++        private readonly AccountingService $accounting,
++    ) {}
++
++    /** @return array{cutoff_date: string, effective_date: string, total: int, created: int, skipped: int, skipped_names: list<string>} */
++    public function import(Company $company, User $actor, UploadedFile $file): array
++    {
++        $payload = $this->decode($file);
++        $cutoff = $this->date($payload['cutoff_date'] ?? null, 'cutoff_date');
++        $rows = $payload['parties'] ?? null;
++
++        if (($payload['schema_version'] ?? null) !== 1) {
++            throw ValidationException::withMessages(['file' => 'The JSON schema_version must be 1.']);
++        }
++        if (! is_array($rows) || $rows === [] || count($rows) > self::MAX_ROWS) {
++            throw ValidationException::withMessages(['file' => 'The JSON file must contain between 1 and 5,000 parties.']);
++        }
++
++        $effective = $cutoff->addDay();
++        $normalized = [];
++        $seen = [];
++        foreach ($rows as $index => $row) {
++            $line = $index + 1;
++            if (! is_array($row)) {
++                throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} must be an object."]);
++            }
++            $name = trim((string) ($row['name'] ?? ''));
++            $type = strtolower(trim((string) ($row['type'] ?? '')));
++            $direction = strtolower(trim((string) ($row['opening_balance_direction'] ?? '')));
++            $key = mb_strtolower($name);
++            $amount = $row['opening_balance'] ?? null;
++
++            if ($name === '' || mb_strlen($name) > 255) {
++                throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} has an invalid name."]);
++            }
++            if (! in_array($type, ['customer', 'supplier'], true)) {
++                throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} type must be customer or supplier."]);
++            }
++            if (! in_array($direction, ['debit', 'credit'], true)) {
++                throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} opening_balance_direction must be debit or credit."]);
++            }
++            if (! is_numeric($amount) || ! is_finite((float) $amount) || (float) $amount < 0) {
++                throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} opening_balance must be a non-negative number."]);
++            }
++            if (isset($seen[$key])) {
++                throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} duplicates row {$seen[$key]} by name."]);
++            }
++            $seen[$key] = $line;
++            $normalized[] = [
++                'name' => $name,
++                'type' => $type,
++                'opening_balance' => round((float) $amount, 2),
++                'opening_balance_direction' => $direction,
++                'email' => $this->nullableString($row['email'] ?? null, 255),
++                'phone' => $this->nullableString($row['phone'] ?? null, 50),
++                'tax_number' => $this->nullableString($row['tax_number'] ?? null, 255),
++                'address' => $this->nullableString($row['address'] ?? null, 2000),
++            ];
++        }
++
++        return DB::transaction(function () use ($company, $actor, $normalized, $cutoff, $effective): array {
++            $this->foundation->seedCompany($company, $actor);
++            $parents = [
++                'customer' => Account::query()->where('company_id', $company->id)->where('code', '1.2')->firstOrFail(),
++                'supplier' => Account::query()->where('company_id', $company->id)->where('code', '2.1')->firstOrFail(),
++            ];
++            $existing = CustomerSupplier::query()->where('company_id', $company->id)->get(['name'])->mapWithKeys(fn (CustomerSupplier $party): array => [mb_strtolower(trim($party->name)) => true]);
++            $created = 0;
++            $skipped = [];
++
++            foreach ($normalized as $row) {
++                $key = mb_strtolower($row['name']);
++                if ($existing->has($key)) {
++                    $skipped[] = $row['name'];
++
++                    continue;
++                }
++                $this->accounting->createParty($company, $actor, [
++                    ...$row,
++                    'parent_account_id' => $parents[$row['type']]->id,
++                    'is_customer' => $row['type'] === 'customer',
++                    'is_supplier' => $row['type'] === 'supplier',
++                    'opening_balance_date' => $effective->toDateString(),
++                ]);
++                $existing->put($key, true);
++                $created++;
++            }
++
++            return [
++                'cutoff_date' => $cutoff->toDateString(),
++                'effective_date' => $effective->toDateString(),
++                'total' => count($normalized),
++                'created' => $created,
++                'skipped' => count($skipped),
++                'skipped_names' => $skipped,
++            ];
++        });
++    }
++
++    /** @return array<string, mixed> */
++    private function decode(UploadedFile $file): array
++    {
++        $contents = file_get_contents($file->getPathname());
++        if ($contents === false || strlen($contents) > 5 * 1024 * 1024) {
++            throw ValidationException::withMessages(['file' => 'The JSON file is missing, unreadable, or larger than 5 MB.']);
++        }
++        try {
++            $decoded = json_decode($contents, true, 512, JSON_THROW_ON_ERROR);
++        } catch (\JsonException) {
++            throw ValidationException::withMessages(['file' => 'The uploaded file is not valid JSON.']);
++        }
++        if (! is_array($decoded)) {
++            throw ValidationException::withMessages(['file' => 'The JSON root must be an object.']);
++        }
++
++        return $decoded;
++    }
++
++    private function date(mixed $value, string $field): CarbonImmutable
++    {
++        try {
++            return CarbonImmutable::parse((string) $value)->startOfDay();
++        } catch (\Throwable) {
++            throw ValidationException::withMessages([$field => "The {$field} must be a valid date."]);
++        }
++    }
++
++    private function nullableString(mixed $value, int $max): ?string
++    {
++        if ($value === null || trim((string) $value) === '') {
++            return null;
++        }
++        $value = trim((string) $value);
++        if (mb_strlen($value) > $max) {
++            throw ValidationException::withMessages(['file' => "A text field exceeds the maximum length of {$max} characters."]);
++        }
++
++        return $value;
++    }
++}
+diff --git a/docs/simple-party-import-ar.md b/docs/simple-party-import-ar.md
+new file mode 100644
+index 0000000..f50911f
+--- /dev/null
++++ b/docs/simple-party-import-ar.md
+@@ -0,0 +1,46 @@
++# الاستيراد المباشر للعملاء والموردين
++
++## الفكرة
++
++هذا المسار لا يقرأ قاعدة البيانات القديمة ولا ينفذ SQL ولا ينقل فواتير أو مخزون أو سندات. البرنامج القديم يجهز ملف JSON صغيرًا، ثم يرفعه المستخدم من صفحة **العملاء والموردين** في البرنامج الجديد، ويقوم النظام بإنشاء الأطراف وأرصدة البداية مباشرة.
++
++## صيغة الملف
++
++```json
++{
++  "schema_version": 1,
++  "cutoff_date": "2026-09-30",
++  "parties": [
++    {
++      "name": "عميل تجريبي",
++      "type": "customer",
++      "opening_balance": 12500.00,
++      "opening_balance_direction": "debit"
++    },
++    {
++      "name": "مورد تجريبي",
++      "type": "supplier",
++      "opening_balance": 8300.00,
++      "opening_balance_direction": "credit"
++    }
++  ]
++}
++```
++
++`cutoff_date` هو تاريخ استخراج الرصيد من البرنامج القديم. ينشئ البرنامج الجديد القيد الافتتاحي في اليوم التالي تلقائيًا؛ لذلك يصبح رصيد 30 سبتمبر رصيد بداية 1 أكتوبر.
++
++`opening_balance` مبلغ موجب فقط. في سجل العميل تعني `debit` أن العميل مدين للشركة، وتعني `credit` أن الشركة مدينة للعميل. في سجل المورد تعني `credit` أن المبلغ مستحق للمورد على الشركة، وتعني `debit` أن المورد مدين للشركة. لا تضع الإشارة السالبة داخل المبلغ.
++
++يمكن إضافة `phone` و`email` و`tax_number` و`address`، وكلها اختيارية. يجب أن يكون كل اسم فريدًا داخل الملف. إذا كان الاسم موجودًا بالفعل في الشركة، يتخطاه النظام ولا يعدل بياناته ولا ينشئ قيدًا مكررًا.
++
++## ما يحدث عند الرفع
++
++يتحقق النظام من نوع الملف وحجم الملف وصحة JSON والتاريخ والنوع والمبلغ واتجاه الرصيد. إذا وُجد خطأ، لا يتم حفظ أي صف. إذا نجح الملف، ينشئ النظام حساب الطرف داخل الحساب النظامي المناسب، وينشئ القيد الافتتاحي المتوازن مقابل حساب أرصدة البداية، مع الالتزام بعزل الشركة وصلاحية `parties.create`.
++
++## ما لا يشمله هذا المسار
++
++لا يشمل الاستيراد الحالي المخزون أو الأصناف أو الأنواع أو الأقطار أو فواتير المبيعات والمشتريات أو إيصالات القبض أو سندات الصرف أو النقدية أو البنوك. يمكن تنفيذ أي من هذه المراحل لاحقًا كميزات منفصلة إذا لزم الأمر، دون إعادة إدخال تعقيد محلل SQL إلى هذا المسار.
++
++## التصدير من البرنامج القديم
++
++على البرنامج القديم إنشاء JSON بالحقول السابقة فقط. قيمة الرصيد يجب أن تكون النتيجة النهائية حتى 30 سبتمبر بعد تطبيق معادلة البرنامج القديم، وليس تفاصيل الحركات. قبل الرفع، راجع عينة من العملاء والموردين يدويًا، وتأكد من اتجاه الرصيد وفق التعريف أعلاه.
+diff --git a/party-opening-balances-template.json b/party-opening-balances-template.json
+new file mode 100644
+index 0000000..ea34e58
+--- /dev/null
++++ b/party-opening-balances-template.json
+@@ -0,0 +1,26 @@
++{
++  "schema_version": 1,
++  "cutoff_date": "2026-09-30",
++  "parties": [
++    {
++      "name": "عميل تجريبي",
++      "type": "customer",
++      "opening_balance": 12500.00,
++      "opening_balance_direction": "debit",
++      "phone": "",
++      "email": "",
++      "tax_number": "",
++      "address": ""
++    },
++    {
++      "name": "مورد تجريبي",
++      "type": "supplier",
++      "opening_balance": 8300.00,
++      "opening_balance_direction": "credit",
++      "phone": "",
++      "email": "",
++      "tax_number": "",
++      "address": ""
++    }
++  ]
++}
+diff --git a/plan.md b/plan.md
+index bfdc9d6..4bcc72b 100644
+--- a/plan.md
++++ b/plan.md
+@@ -1,38 +1,23 @@
+-# خطة تنفيذ ملاحظات 2026-10-11
+-
+-## النطاق المطلوب
+-
+-1. إبقاء صفحة العملاء والموردين الحالية كما هي، ونقل التصميم المتقدم إلى تقريري كشف حساب العميل وكشف حساب المورد.
+-2. تحويل مستندات كشف الحساب إلى معاينة داخل الصفحة في Modal، مع زر يفتح صفحة تفاصيل كاملة قابلة للطباعة. يشمل ذلك فواتير البيع والشراء والإيصالات وسندات الصرف.
+-3. تحويل إضافة التحصيل للعميل وإضافة دفعة للمورد إلى Modal داخل ملف الجهة، مع الحفاظ على الترحيل المحاسبي والعزل بين الشركات.
+-4. إضافة رفع خلفية A4 اختيارية للمالك فقط من إعدادات الشركة. لا تُفعّل افتراضيًا لأي شركة، وتُستخدم في قوالب الطباعة عند اختيارها. الصورة المرفقة ستُحفظ كنموذج تجريبي قابل للاستخدام اليدوي، لا كخلفية افتراضية.
+-5. إضافة تعديل آمن لأسماء الأنواع وقيم الأقطار مع منع كسر المنتجات/المستندات التاريخية، وإضافة تقارير مبيعات ومشتريات قابلة للتصفية حسب النوع أو القطر.
+-6. إصلاح روابط العناوين داخل مركز المساعدة باستخدام hash navigation بعد تحميل المحتوى، مع الحفاظ على البحث والطيّ.
+-7. فصل جلسة الشركة عن جلسة مدير المنصة عبر أسماء Cookies مستقلة، وإخفاء رابط دخول المنصة من الصفحة العامة دون حذف المسار السري المعروف للمبرمج.
+-
+-## التصميم المعتمد
+-
+-- **الحركة التصميمية:** دفتر أعمال مؤسسي هادئ؛ ألوان أخضر زمردي وكحلي مع أسطح فاتحة وحدود واضحة.
+-- **المبادئ:** قراءة أولًا، معلومات كثيفة لكن منظمة، إجراءات سياقية، ومودالات قابلة للإغلاق بالهروب والنقر خارجها.
+-- **النمط:** تقارير كشف الحساب تستخدم رأسًا ثابتًا، بطاقات ملخص، جدولًا عالي التباين، إشارات مدينة/دائنة، وعمود مستند يفتح المعاينة.
+-- **التفاعل:** لا يغادر المستخدم كشف الحساب لقراءة ملخص أو تسجيل دفعة؛ الانتقال الكامل محجوز للتفاصيل والطباعة.
+-- **الطباعة:** قالب A4 واحد قابل لإظهار الخلفية المختارة مع طبقة قراءة، ولا توجد خلفية افتراضية عند عدم اختيارها.
+-
+-## البنية
+-
+-- `AccountingReportService`: بيانات كشف الحساب، ملخصات الأطراف، وتفاصيل المصدر مع عزل الشركة.
+-- `CoreErpPageController` و`routes/web.php`: صفحات التفاصيل، المعاينات، التقارير النوعية ومسارات الرفع.
+-- `resources/js/Pages/Company/AccountingReport.jsx`: تقرير كشف الحساب مع modal مستند ودفعة/تحصيل.
+-- `resources/js/Pages/Company/DocumentView.jsx` وBlade print views: التفاصيل والطباعة لكل مصدر.
+-- `resources/js/Pages/Company/Inventory.jsx`: تعديل الأنواع والأقطار وتصفية التقارير.
+-- `CompanyProfileController` و`CompanySettings.jsx`: خلفية الطباعة، صلاحية المالك، والتحقق من نوع الملف والحجم.
+-- `HelpCenter.jsx`: مزامنة hash بعد بناء أقسام الدليل.
+-- `config/session.php` و`AuthenticationController`: Cookies مستقلة للشركة والمنصة.
+-
+-## الحدود المحاسبية والأمنية
+-
+-- لا تُحذف الأنواع أو الأقطار المستخدمة؛ التعديل يحافظ على الهوية التاريخية ويُسجل في Audit.
+-- لا تسمح أي عملية بالوصول إلى مستند أو صورة شركة أخرى.
+-- معاينة المستند وطباعة التفاصيل تخضعان لصلاحيات العرض/الطباعة.
+-- الإيصال والسند يمران عبر `AccountingService` نفسه ولا يتم إنشاء قيد مباشر من React.
+-- الخلفية تظل اختيارية، والرفع للمالك فقط، مع امتدادات MIME وحجم محدود واسم مخزن آمن.
++# خطة الاستيراد المبسط للأطراف والأرصدة
++
++## الهدف
++استبدال تجربة مركز نقل SQL المعقدة بشاشة واحدة داخل صفحة الأطراف لرفع ملف JSON يحتوي على العملاء والموردين وأرصدة كل طرف حتى تاريخ قطع محدد، مع إنشاء الطرف والقيد الافتتاحي مباشرة داخل الشركة الحالية.
++
++## القرارات
++- الصيغة الأساسية JSON، مع `schema_version: 1` و`cutoff_date` و`parties`.
++- كل طرف يملك `name`, `type` (`customer`, `supplier`, أو `both`), `opening_balance` موجبًا، و`opening_balance_direction` (`debit` أو `credit`).
++- تاريخ القيد الافتتاحي تلقائيًا هو اليوم التالي لتاريخ القطع.
++- يتم استخدام `AccountingService::createParty` ومنطق شجرة الحسابات والقيد الافتتاحي الموجود.
++- لا يتم تنفيذ SQL مرفوع ولا تحليل قاعدة قديمة، ولا يتم إنشاء فواتير أو مخزون أو سندات.
++- الاسم داخل الشركة هو مفتاح منع التكرار؛ السجلات الموجودة لا تُستبدل، وتظهر في نتيجة الاستيراد كسجلات متخطاة.
++- كل الصفوف تعالج داخل معاملة واحدة؛ أي خطأ يمنع الاستيراد كله ويعيد النتيجة دون إدخالات جزئية.
++
++## التغيير البرمجي
++- خدمة `SimplePartyImportService` للتحقق والتطبيع والاستيراد.
++- متحكم ويب داخل مسار الشركة مع صلاحية `parties.create`.
++- واجهة رفع JSON على صفحة الأطراف تعرض الصيغة، تاريخ القطع، عدد المنشأ والمتخطى والأخطاء.
++- اختبارات Feature للوصول، العزل، التحقق، منع التكرار، إنشاء الحساب والقيد المتوازن.
++- تحديث الترجمة العربية والإنجليزية.
++
++## الشكل
++نستخدم تصميم صفحة الأطراف الحالي دون إدخال تبويب جديد أو مركز نقل. يظهر قسم بعنوان «استيراد العملاء والموردين» فوق الجدول، مع زر اختيار الملف وزر «استيراد مباشر» وتعليمات تنزيل نموذج JSON.
+diff --git a/resources/js/Pages/Company/Parties.jsx b/resources/js/Pages/Company/Parties.jsx
+index 69a1983..43ae24e 100644
+--- a/resources/js/Pages/Company/Parties.jsx
++++ b/resources/js/Pages/Company/Parties.jsx
+@@ -1,13 +1,14 @@
+-import { Link, usePage } from '@inertiajs/react';
++import { Link, useForm, usePage } from '@inertiajs/react';
+ import { useState } from 'react';
+ import CompanyLayout from '../../Layouts/CompanyLayout';
+ import { translate } from '../../i18n';
+ import { useCoreApi } from '../../useCoreApi';
+ 
+ export default function Parties({ parties, reportRows, reportSummary = {}, kind = null, from = '', to = '', accounts = [], capabilities = {} }) {
+-    const { locale } = usePage().props;
++    const { locale, flash = {}, errors = {} } = usePage().props;
+     const t = (key) => translate(locale, key);
+     const { notice, processing, send } = useCoreApi();
++    const importForm = useForm({ file: null });
+     const rows = reportRows?.data ?? parties?.data ?? [];
+     const [editing, setEditing] = useState(null);
+     const [showCreate, setShowCreate] = useState(false);
+@@ -18,6 +19,7 @@ export default function Parties({ parties, reportRows, reportSummary = {}, kind
+     const reportTitle = kind === 'customer' ? t('customerBalances') : kind === 'supplier' ? t('supplierBalances') : t('partyBalances');
+     const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+     const openEdit = (party) => setEditing({ id: party.id, name: party.name, parent_account_id: party.parent_account_id ?? party.account_id ?? '', email: party.email ?? '', phone: party.phone ?? '', tax_number: party.tax_number ?? '', address: party.address ?? '', is_customer: Boolean(party.is_customer), is_supplier: Boolean(party.is_supplier), opening_balance: party.opening_balance ?? '0', credit_limit: party.credit_limit ?? '' });
++    const sample = JSON.stringify({ schema_version: 1, cutoff_date: '2026-09-30', parties: [{ name: 'عميل تجريبي', type: 'customer', opening_balance: 12500, opening_balance_direction: 'debit', phone: '', email: '' }, { name: 'مورد تجريبي', type: 'supplier', opening_balance: 8300, opening_balance_direction: 'credit', phone: '', email: '' }] }, null, 2);
+ 
+     return <CompanyLayout title={partyTitle}>
+         <div className="erp-page-header parties-header">
+@@ -25,6 +27,8 @@ export default function Parties({ parties, reportRows, reportSummary = {}, kind
+             <div className="erp-toolbar no-print"><button type="button" className="secondary-button" onClick={() => window.print()}>{t('printReport')}</button>{capabilities['parties.create'] && <button type="button" className="primary-button" onClick={() => setShowCreate((current) => !current)}>{showCreate ? t('close') : t('createParty')}</button>}</div>
+         </div>
+ 
++        {kind === null && capabilities['parties.create'] && <section className="erp-section no-print"><div className="erp-section__header"><div><h2>{t('simplePartyImportTitle')}</h2><p>{t('simplePartyImportHint')}</p></div><a className="secondary-button" download="party-opening-balances-template.json" href={`data:application/json;charset=utf-8,${encodeURIComponent(sample)}`}>{t('downloadImportTemplate')}</a></div><form onSubmit={(event) => { event.preventDefault(); importForm.post('/parties/import', { forceFormData: true, preserveScroll: true, onSuccess: () => importForm.reset() }); }} className="party-form"><label className="field"><span>{t('importJsonFile')}</span><input required type="file" accept=".json,application/json,text/plain" onChange={(event) => importForm.setData('file', event.target.files?.[0] ?? null)} /></label><div className="field"><span>{t('importCutoffRule')}</span><p className="permission-note">{t('importCutoffRuleDetails')}</p></div><button type="submit" disabled={importForm.processing} className="primary-button">{importForm.processing ? t('importWorking') : t('importNow')}</button></form>{errors.file && <p role="alert" className="notice-card error">{errors.file}</p>}{flash.simplePartyImport && <div role="status" className="notice-card success"><strong>{t('importCompleted')}</strong><p>{t('importSummary')}: {flash.simplePartyImport.created} {t('importCreated')}, {flash.simplePartyImport.skipped} {t('importSkipped')}.</p><small>{t('importEffectiveDate')}: {flash.simplePartyImport.effective_date}</small>{flash.simplePartyImport.skipped_names?.length > 0 && <p>{t('importSkippedNames')}: {flash.simplePartyImport.skipped_names.join('، ')}</p>}</div>}</section>}
++
+         <section className="erp-section party-report-section printable-report">
+             <div className="erp-section__header party-report-heading"><div><h2>{reportTitle}</h2><p>{t('partyReportPeriod')}: <strong>{from}</strong> — <strong>{to}</strong></p></div><span className="report-count">{number(reportRows?.total ?? rows.length, 0)} {t('partyCount')}</span></div>
+             <form method="get" className="party-report-filters no-print"><label className="field"><span>{t('fromDate')}</span><input type="date" name="from" defaultValue={from} required /></label><label className="field"><span>{t('toDate')}</span><input type="date" name="to" defaultValue={to} required /></label><button type="submit" className="erp-button erp-button--primary">{t('apply')}</button></form>
+diff --git a/resources/js/i18n.js b/resources/js/i18n.js
+index 22cae5e..16ffdfb 100644
+--- a/resources/js/i18n.js
++++ b/resources/js/i18n.js
+@@ -8,7 +8,7 @@ const strings = {
+     en: {
+         sessionExpired: 'Your session expired. Refresh the page and sign in again.', permissionDenied: 'You do not have permission to complete this action.', requestInvalid: 'Some submitted data is invalid. Review the highlighted fields.', tooManyRequests: 'Too many requests. Wait a moment and try again.', serverError: 'The server could not complete the request. Try again later.', networkError: 'A network error prevented the request from completing.', confirmApproval: 'Approve this verified registration?',
+         fleetSettlement: 'Settlement account', payableAccount: 'Accrued payable', allocateInvoice: 'Allocate to invoice', allocateFifo: 'Automatic FIFO allocation', allocated: 'Allocated', unallocated: 'Unallocated', overdue: 'Overdue', currentBalance: 'Current', currentPeriodEarnings: 'Cumulative earnings through report date', balanceSheetOutOfBalance: 'Balance sheet difference',
+-        companyWorkspace: 'Company workspace', companyNameDefault: 'Company workspace', companyAccount: 'Company account', companyUser: 'Company user', platformAdminShort: 'Platform admin', platformManagement: 'Platform management',
++        companyWorkspace: 'Company workspace', companyNameDefault: 'Company workspace', companyAccount: 'Company account', companyUser: 'Company user', platformAdminShort: 'Platform admin', platformManagement: 'Platform management', simplePartyImportTitle: 'Direct customer and supplier import', simplePartyImportHint: 'Upload one JSON file with party names and their balances at the cutoff date. No SQL analysis or invoice migration is performed.', downloadImportTemplate: 'Download JSON template', importJsonFile: 'JSON file', importCutoffRule: 'Required file structure', importCutoffRuleDetails: 'Use a positive amount and set debit when the party owes the company, or credit when the company owes the party. The opening entry date is the day after cutoff_date.', importWorking: 'Importing…', importNow: 'Import directly', importCompleted: 'Import completed', importSummary: 'Result', importCreated: 'created', importSkipped: 'skipped because the name already exists', importEffectiveDate: 'Opening entry date', importSkippedNames: 'Skipped names',
+         navOverview: 'Overview', helpCenter: 'Help center', companySettings: 'Company settings', companySettingsIntro: 'Update the legal and contact details used across your company workspace.', ownerOnly: 'Owner only', companyIdentity: 'Company identity', companySettingsHint: 'These details appear in documents and reports. Only the company owner can change them.', companySaved: 'Company details saved successfully.', saving: 'Saving…', darkMode: 'Dark mode', lightMode: 'Light mode', switchToDark: 'Switch to dark mode', switchToLight: 'Switch to light mode', customerBalances: 'Customer balances', supplierBalances: 'Supplier balances', partyBalances: 'Customer & supplier balances', partyReportIntro: 'Review weight, invoice value, payments and outstanding balance in one period-aware table.', partyReportPeriod: 'Report period', partyCount: 'accounts', totalWeight: 'Total weight', tonUnit: 'tons', goodsValue: 'Goods value', currency: 'EGP', periodPayments: 'Period payments', totalBalance: 'Total balance', invoiceTotal: 'Invoice total', customerAndSupplier: 'Customer & supplier', creditBalance: 'Credit balance', dueBalance: 'Due balance', partyReportEmpty: 'No activity was found for the selected period.', partyFormHint: 'Create the party once, then use the report and statement links to follow its movement.', printReport: 'Print report', pagination: 'Pagination', forgotPassword: 'Forgot your password?', forgotPasswordIntro: 'Enter your email and we will send a secure password reset link.', sendResetLink: 'Send reset link', resetLinkSent: 'If the email exists, a reset link has been sent.', backToLogin: 'Back to sign in', resetPassword: 'Reset password', resetPasswordIntro: 'Choose a new password for your account.', passwordResetSuccess: 'Your password has been reset. You can sign in now.', passwordResetFailed: 'This reset link is invalid or has expired.', navCompany: 'Company', navOperations: 'Operations', navReports: 'Reports', home: 'Home', openMenu: 'Open navigation', closeMenu: 'Close navigation', primaryNavigation: 'Primary navigation', switchLanguage: 'Switch language', needHelp: 'Need help?', contactSupport: 'Contact support', accountingPolicies: 'Accounting policies', platformAdmin: 'Platform administration', requestFailed: 'Request failed.', loadingCost: 'Loading cost',
+         companySignIn: 'Company sign in', platformSignIn: 'Platform sign in',
+         companySignInCopy: 'Sign in to your company account.', platformSignInCopy: 'Manage platform access and company onboarding.',
+@@ -64,7 +64,7 @@ const strings = {
+     ar: {
+         sessionExpired: 'انتهت الجلسة. حدّث الصفحة وسجّل الدخول مرة أخرى.', permissionDenied: 'ليست لديك صلاحية لإتمام هذا الإجراء.', requestInvalid: 'بعض البيانات غير صالحة. راجع الحقول المحددة.', tooManyRequests: 'عدد الطلبات كبير. انتظر قليلاً ثم حاول مرة أخرى.', serverError: 'تعذر على الخادم إتمام الطلب. حاول لاحقًا.', networkError: 'تعذر إكمال الطلب بسبب مشكلة في الاتصال.', confirmApproval: 'هل تريد اعتماد طلب التسجيل المؤكد؟',
+         fleetSettlement: 'حساب التسوية', payableAccount: 'مستحقات مستحقة الدفع', allocateInvoice: 'تخصيص لفاتورة', allocateFifo: 'تخصيص تلقائي بالأقدم أولاً', allocated: 'مخصص', unallocated: 'غير مخصص', overdue: 'متأخر', currentBalance: 'حالي', currentPeriodEarnings: 'الأرباح المتراكمة حتى تاريخ التقرير', balanceSheetOutOfBalance: 'فرق المركز المالي',
+-        companyWorkspace: 'مساحة عمل الشركة', companyNameDefault: 'مساحة عمل الشركة', companyAccount: 'حساب الشركة', companyUser: 'مستخدم الشركة', platformAdminShort: 'مدير المنصة', platformManagement: 'إدارة المنصة',
++        companyWorkspace: 'مساحة عمل الشركة', companyNameDefault: 'مساحة عمل الشركة', companyAccount: 'حساب الشركة', companyUser: 'مستخدم الشركة', platformAdminShort: 'مدير المنصة', platformManagement: 'إدارة المنصة', simplePartyImportTitle: 'استيراد العملاء والموردين مباشرة', simplePartyImportHint: 'ارفع ملف JSON واحدًا يحتوي على أسماء الأطراف وأرصدتهم حتى تاريخ القطع، بدون تحليل SQL أو نقل فواتير.', downloadImportTemplate: 'تحميل نموذج JSON', importJsonFile: 'ملف JSON', importCutoffRule: 'شكل الملف المطلوب', importCutoffRuleDetails: 'استخدم مبلغًا موجبًا، واختر debit عندما يكون الرصيد مستحقًا على الطرف للشركة، أو credit عندما يكون مستحقًا للطرف على الشركة. ينشأ القيد الافتتاحي في اليوم التالي لتاريخ القطع.', importWorking: 'جارٍ الاستيراد…', importNow: 'استيراد مباشر', importCompleted: 'اكتمل الاستيراد', importSummary: 'النتيجة', importCreated: 'تم إنشاؤها', importSkipped: 'تم تخطيها لوجود الاسم مسبقًا', importEffectiveDate: 'تاريخ القيد الافتتاحي', importSkippedNames: 'الأسماء التي تم تخطيها',
+         navOverview: 'نظرة عامة', helpCenter: 'مركز المساعدة', companySettings: 'إعدادات الشركة', companySettingsIntro: 'حدّث البيانات القانونية وبيانات التواصل المستخدمة في مساحة شركتك.', ownerOnly: 'للمالك فقط', companyIdentity: 'هوية الشركة', companySettingsHint: 'تظهر هذه البيانات في المستندات والتقارير، ولا يستطيع تعديلها إلا مالك الشركة.', companySaved: 'تم حفظ بيانات الشركة بنجاح.', saving: 'جارٍ الحفظ…', darkMode: 'الوضع الليلي', lightMode: 'الوضع النهاري', switchToDark: 'التبديل إلى الوضع الليلي', switchToLight: 'التبديل إلى الوضع النهاري', customerBalances: 'أرصدة العملاء', supplierBalances: 'أرصدة الموردين', partyBalances: 'أرصدة العملاء والموردين', partyReportIntro: 'راجع الوزن وقيمة الفواتير والدفعات والرصيد المستحق في جدول واحد مرتبط بالفترة.', partyReportPeriod: 'فترة التقرير', partyCount: 'حساب', totalWeight: 'إجمالي الوزن', tonUnit: 'طن', goodsValue: 'قيمة الحديد', currency: 'جنيه', periodPayments: 'دفعات الفترة', totalBalance: 'إجمالي الرصيد', invoiceTotal: 'إجمالي الفواتير', customerAndSupplier: 'عميل ومورد', creditBalance: 'رصيد دائن', dueBalance: 'رصيد مستحق', partyReportEmpty: 'لا توجد حركة في الفترة المحددة.', partyFormHint: 'أنشئ الجهة مرة واحدة، ثم استخدم روابط التقرير وكشف الحساب لمتابعة حركتها.', printReport: 'طباعة التقرير', pagination: 'صفحات التقرير', forgotPassword: 'هل نسيت كلمة المرور؟', forgotPasswordIntro: 'أدخل بريدك الإلكتروني وسنرسل رابطًا آمنًا لإعادة تعيين كلمة المرور.', sendResetLink: 'إرسال رابط الاستعادة', resetLinkSent: 'إذا كان البريد مسجلًا، فسيتم إرسال رابط الاستعادة إليه.', backToLogin: 'العودة إلى تسجيل الدخول', resetPassword: 'إعادة تعيين كلمة المرور', resetPasswordIntro: 'اختر كلمة مرور جديدة لحسابك.', passwordResetSuccess: 'تمت إعادة تعيين كلمة المرور. يمكنك تسجيل الدخول الآن.', passwordResetFailed: 'رابط الاستعادة غير صالح أو انتهت صلاحيته.', navCompany: 'الشركة', navOperations: 'العمليات', navReports: 'التقارير', home: 'الرئيسية', openMenu: 'فتح القائمة', closeMenu: 'إغلاق القائمة', primaryNavigation: 'التنقل الرئيسي', switchLanguage: 'تغيير اللغة', needHelp: 'هل تحتاج مساعدة؟', contactSupport: 'تواصل مع الدعم', accountingPolicies: 'السياسات المحاسبية', platformAdmin: 'إدارة المنصة', requestFailed: 'تعذّر تنفيذ الطلب.', loadingCost: 'تكلفة التحميل',
+         companySignIn: 'دخول الشركة', platformSignIn: 'دخول المنصة',
+         companySignInCopy: 'سجّل الدخول إلى حساب شركتك.', platformSignInCopy: 'إدارة المنصة وطلبات انضمام الشركات.',
+diff --git a/routes/web.php b/routes/web.php
+index 1da31d6..2423e71 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -8,6 +8,7 @@
+ use App\Http\Controllers\Web\LocaleController;
+ use App\Http\Controllers\Web\PasswordResetController;
+ use App\Http\Controllers\Web\RegistrationController;
++use App\Http\Controllers\Web\SimplePartyImportController;
+ use App\Http\Middleware\PlatformGuest;
+ use App\Services\CompanyLandingService;
+ use App\Services\SubscriptionLifecycle;
+@@ -72,6 +73,7 @@
+     Route::get('/customers', [CoreErpPageController::class, 'customers'])->middleware('can:parties.view')->name('company.customers');
+     Route::get('/customers/{party}', [CoreErpPageController::class, 'customerProfile'])->middleware('can:parties.view')->name('company.customer.profile');
+     Route::get('/suppliers', [CoreErpPageController::class, 'suppliers'])->middleware('can:parties.view')->name('company.suppliers');
++    Route::post('/parties/import', [SimplePartyImportController::class, 'store'])->middleware(['can:parties.create', 'throttle:api.write'])->name('company.parties.import');
+     Route::get('/suppliers/{party}', [CoreErpPageController::class, 'supplierProfile'])->middleware('can:parties.view')->name('company.supplier.profile');
+     Route::get('/accounting', [CoreErpPageController::class, 'accounting'])->middleware('can:accounting.view')->name('company.accounting');
+     Route::get('/accounting/chart', [CoreErpPageController::class, 'chartOfAccounts'])->middleware('can:accounting.view')->name('company.accounting.chart');
+diff --git a/simple-party-import-results-ar.md b/simple-party-import-results-ar.md
+new file mode 100644
+index 0000000..c6cc18f
+--- /dev/null
++++ b/simple-party-import-results-ar.md
+@@ -0,0 +1,17 @@
++# نتيجة تنفيذ الاستيراد المبسط
++
++تم بناء مسار مستقل لاستيراد أسماء العملاء والموردين وأرصدة حساباتهم حتى تاريخ قطع يحدده الملف. المسار لا يحلل SQL ولا يقرأ قاعدة البيانات القديمة ولا ينقل فواتير أو مخزونًا أو سندات.
++
++تظهر بطاقة الاستيراد داخل صفحة **العملاء والموردين** للمستخدم الذي يملك صلاحية إنشاء الأطراف. يمكنه تحميل نموذج JSON، تجهيز الملف من البرنامج القديم، ثم رفعه والضغط على **استيراد مباشر**.
++
++يتحقق النظام من صحة JSON، الإصدار، التاريخ، نوع الطرف، اتجاه الرصيد، عدم سلبية المبلغ، حجم الملف، وتكرار الأسماء داخل الملف. تتم العملية في معاملة واحدة؛ فإذا فشل أي صف لا تُحفظ صفوف جزئية. الأسماء الموجودة مسبقًا لا تُعدّل ولا تُنشأ لها قيود جديدة، بل تظهر في نتيجة العملية كسجلات متخطاة.
++
++يُنشأ العميل تحت حساب العملاء النظامي، والمورد تحت حساب الموردين النظامي. ويُستخدم منطق `AccountingService` الحالي لإنشاء الحساب الفرعي والقيد الافتتاحي المتوازن مقابل حساب أرصدة البداية. إذا كان تاريخ القطع 30 سبتمبر، يكون تاريخ القيد الافتتاحي 1 أكتوبر تلقائيًا.
++
++## التحقق
++
++نجح اختبار الاستيراد المباشر في إنشاء عميل ومورد مع قيدين متوازنين، وإعادة رفع نفس الملف دون تكرار، ورفض ملف غير صالح دون حفظ جزئي. نجح اختبار PHPUnit المباشر: 3 اختبارات و16 assertion. نجح اختبار المشروع الكامل: 21 مجموعة اختبار، 3286 assertion، دون فشل. نجح بناء Vite و`git diff --check` وPint على الملفات المتأثرة.
++
++## ملاحظة عن مركز النقل القديم
++
++لم يتم حذف كود مركز النقل SQL القديم من المستودع في هذه المرحلة حتى لا يؤدي الحذف إلى كسر ترحيلات قاعدة البيانات أو الاختبارات أو مسارات الإدارة القديمة. مسار الاستيراد الجديد مستقل ولا يستخدمه. يمكن في خطوة لاحقة إخفاء رابط المركز القديم أو حذفه بعد التأكد من عدم وجود حاجة للبيانات التاريخية أو لمساراته الحالية.
+diff --git a/tests/Feature/SimplePartyImportTest.php b/tests/Feature/SimplePartyImportTest.php
+new file mode 100644
+index 0000000..421c6a3
+--- /dev/null
++++ b/tests/Feature/SimplePartyImportTest.php
+@@ -0,0 +1,112 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Tests\Feature;
++
++use App\Models\Company;
++use App\Models\CustomerSupplier;
++use App\Models\JournalEntry;
++use App\Models\User;
++use App\Services\SimplePartyImportService;
++use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Http\UploadedFile;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Validation\ValidationException;
++use Tests\TestCase;
++
++final class SimplePartyImportTest extends TestCase
++{
++    use RefreshDatabase;
++
++    /** @var list<string> */
++    private array $temporaryFiles = [];
++
++    protected function tearDown(): void
++    {
++        foreach ($this->temporaryFiles as $path) {
++            @unlink($path);
++        }
++        parent::tearDown();
++    }
++
++    public function test_it_imports_customers_and_suppliers_with_balanced_opening_entries(): void
++    {
++        [$company, $actor] = $this->companyAndActor();
++        $result = app(SimplePartyImportService::class)->import($company, $actor, $this->file([
++            'schema_version' => 1,
++            'cutoff_date' => '2026-09-30',
++            'parties' => [
++                ['name' => 'Imported Customer', 'type' => 'customer', 'opening_balance' => 1250, 'opening_balance_direction' => 'debit'],
++                ['name' => 'Imported Supplier', 'type' => 'supplier', 'opening_balance' => 830, 'opening_balance_direction' => 'credit'],
++            ],
++        ]));
++
++        $this->assertSame(2, $result['created']);
++        $this->assertSame('2026-10-01', $result['effective_date']);
++        $customer = CustomerSupplier::query()->where('company_id', $company->id)->where('name', 'Imported Customer')->firstOrFail();
++        $supplier = CustomerSupplier::query()->where('company_id', $company->id)->where('name', 'Imported Supplier')->firstOrFail();
++        $this->assertSame('2026-10-01', $customer->opening_balance_date->toDateString());
++        $this->assertSame('2026-10-01', $supplier->opening_balance_date->toDateString());
++        $this->assertSame('debit', $customer->opening_balance_direction);
++        $this->assertSame('credit', $supplier->opening_balance_direction);
++        $this->assertSame(2, JournalEntry::query()->where('company_id', $company->id)->count());
++        $totals = DB::table('journal_lines')->where('company_id', $company->id)->selectRaw('SUM(debit) as debit, SUM(credit) as credit')->first();
++        $this->assertEqualsWithDelta((float) $totals->debit, (float) $totals->credit, 0.001);
++    }
++
++    public function test_existing_names_are_skipped_and_reimport_is_idempotent(): void
++    {
++        [$company, $actor] = $this->companyAndActor();
++        $importer = app(SimplePartyImportService::class);
++        $payload = ['schema_version' => 1, 'cutoff_date' => '2026-09-30', 'parties' => [['name' => 'Repeat Customer', 'type' => 'customer', 'opening_balance' => 100, 'opening_balance_direction' => 'debit']]];
++
++        $first = $importer->import($company, $actor, $this->file($payload));
++        $second = $importer->import($company, $actor, $this->file($payload));
++
++        $this->assertSame(1, $first['created']);
++        $this->assertSame(0, $second['created']);
++        $this->assertSame(1, $second['skipped']);
++        $this->assertSame(1, CustomerSupplier::query()->where('company_id', $company->id)->where('name', 'Repeat Customer')->count());
++        $this->assertSame(1, JournalEntry::query()->where('company_id', $company->id)->count());
++    }
++
++    public function test_invalid_rows_abort_without_partial_import(): void
++    {
++        [$company, $actor] = $this->companyAndActor();
++        $this->expectException(ValidationException::class);
++        try {
++            app(SimplePartyImportService::class)->import($company, $actor, $this->file([
++                'schema_version' => 1,
++                'cutoff_date' => '2026-09-30',
++                'parties' => [
++                    ['name' => 'Valid Before Failure', 'type' => 'customer', 'opening_balance' => 50, 'opening_balance_direction' => 'debit'],
++                    ['name' => 'Invalid', 'type' => 'unknown', 'opening_balance' => 20, 'opening_balance_direction' => 'debit'],
++                ],
++            ]));
++        } finally {
++            $this->assertSame(0, CustomerSupplier::query()->where('company_id', $company->id)->count());
++            $this->assertSame(0, JournalEntry::query()->where('company_id', $company->id)->count());
++        }
++    }
++
++    private function file(array $payload): UploadedFile
++    {
++        $path = tempnam(sys_get_temp_dir(), 'ezaki-party-import-');
++        file_put_contents($path, json_encode($payload, JSON_THROW_ON_ERROR));
++        $this->temporaryFiles[] = $path;
++
++        return new UploadedFile($path, 'parties.json', 'application/json', UPLOAD_ERR_OK, true);
++    }
++
++    private function companyAndActor(): array
++    {
++        $company = Company::query()->create(['name' => 'Simple Import Test Co', 'status' => 'active']);
++        $actor = User::query()->create([
++            'name' => 'Simple Import Actor', 'email' => fake()->unique()->safeEmail(), 'password' => 'password',
++            'company_id' => $company->id, 'account_type' => 'company', 'status' => 'active',
++        ]);
++
++        return [$company, $actor];
++    }
++}

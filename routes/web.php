@@ -8,6 +8,7 @@ use App\Http\Controllers\Web\CoreErpPageController;
 use App\Http\Controllers\Web\LocaleController;
 use App\Http\Controllers\Web\PasswordResetController;
 use App\Http\Controllers\Web\RegistrationController;
+use App\Http\Controllers\Web\SimplePartyImportController;
 use App\Http\Middleware\PlatformGuest;
 use App\Services\CompanyLandingService;
 use App\Services\SubscriptionLifecycle;
@@ -72,6 +73,7 @@ Route::middleware(['auth', 'account.type:company', 'tenant', 'subscription', 'lo
     Route::get('/customers', [CoreErpPageController::class, 'customers'])->middleware('can:parties.view')->name('company.customers');
     Route::get('/customers/{party}', [CoreErpPageController::class, 'customerProfile'])->middleware('can:parties.view')->name('company.customer.profile');
     Route::get('/suppliers', [CoreErpPageController::class, 'suppliers'])->middleware('can:parties.view')->name('company.suppliers');
+    Route::post('/parties/import', [SimplePartyImportController::class, 'store'])->middleware(['can:parties.create', 'throttle:api.write'])->name('company.parties.import');
     Route::get('/suppliers/{party}', [CoreErpPageController::class, 'supplierProfile'])->middleware('can:parties.view')->name('company.supplier.profile');
     Route::get('/accounting', [CoreErpPageController::class, 'accounting'])->middleware('can:accounting.view')->name('company.accounting');
     Route::get('/accounting/chart', [CoreErpPageController::class, 'chartOfAccounts'])->middleware('can:accounting.view')->name('company.accounting.chart');

@@ -1,13 +1,14 @@
-import { Link, usePage } from '@inertiajs/react';
+import { Link, useForm, usePage } from '@inertiajs/react';
 import { useState } from 'react';
 import CompanyLayout from '../../Layouts/CompanyLayout';
 import { translate } from '../../i18n';
 import { useCoreApi } from '../../useCoreApi';
 
 export default function Parties({ parties, reportRows, reportSummary = {}, kind = null, from = '', to = '', accounts = [], capabilities = {} }) {
-    const { locale } = usePage().props;
+    const { locale, flash = {}, errors = {} } = usePage().props;
     const t = (key) => translate(locale, key);
     const { notice, processing, send } = useCoreApi();
+    const importForm = useForm({ file: null });
     const rows = reportRows?.data ?? parties?.data ?? [];
     const [editing, setEditing] = useState(null);
     const [showCreate, setShowCreate] = useState(false);
@@ -18,12 +19,15 @@ export default function Parties({ parties, reportRows, reportSummary = {}, kind 
     const reportTitle = kind === 'customer' ? t('customerBalances') : kind === 'supplier' ? t('supplierBalances') : t('partyBalances');
     const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
     const openEdit = (party) => setEditing({ id: party.id, name: party.name, parent_account_id: party.parent_account_id ?? party.account_id ?? '', email: party.email ?? '', phone: party.phone ?? '', tax_number: party.tax_number ?? '', address: party.address ?? '', is_customer: Boolean(party.is_customer), is_supplier: Boolean(party.is_supplier), opening_balance: party.opening_balance ?? '0', credit_limit: party.credit_limit ?? '' });
+    const sample = JSON.stringify({ schema_version: 1, cutoff_date: '2026-09-30', parties: [{ name: 'عميل تجريبي', type: 'customer', opening_balance: 12500, opening_balance_direction: 'debit', phone: '', email: '' }, { name: 'مورد تجريبي', type: 'supplier', opening_balance: 8300, opening_balance_direction: 'credit', phone: '', email: '' }] }, null, 2);
 
     return <CompanyLayout title={partyTitle}>
         <div className="erp-page-header parties-header">
             <div><p className="eyebrow">{t('reports')} · {partyTitle}</p><h1>{reportTitle}</h1><p>{t('partyReportIntro')}</p></div>
             <div className="erp-toolbar no-print"><button type="button" className="secondary-button" onClick={() => window.print()}>{t('printReport')}</button>{capabilities['parties.create'] && <button type="button" className="primary-button" onClick={() => setShowCreate((current) => !current)}>{showCreate ? t('close') : t('createParty')}</button>}</div>
         </div>
+
+        {kind === null && capabilities['parties.create'] && <section className="erp-section no-print"><div className="erp-section__header"><div><h2>{t('simplePartyImportTitle')}</h2><p>{t('simplePartyImportHint')}</p></div><a className="secondary-button" download="party-opening-balances-template.json" href={`data:application/json;charset=utf-8,${encodeURIComponent(sample)}`}>{t('downloadImportTemplate')}</a></div><form onSubmit={(event) => { event.preventDefault(); importForm.post('/parties/import', { forceFormData: true, preserveScroll: true, onSuccess: () => importForm.reset() }); }} className="party-form"><label className="field"><span>{t('importJsonFile')}</span><input required type="file" accept=".json,application/json,text/plain" onChange={(event) => importForm.setData('file', event.target.files?.[0] ?? null)} /></label><div className="field"><span>{t('importCutoffRule')}</span><p className="permission-note">{t('importCutoffRuleDetails')}</p></div><button type="submit" disabled={importForm.processing} className="primary-button">{importForm.processing ? t('importWorking') : t('importNow')}</button></form>{errors.file && <p role="alert" className="notice-card error">{errors.file}</p>}{flash.simplePartyImport && <div role="status" className="notice-card success"><strong>{t('importCompleted')}</strong><p>{t('importSummary')}: {flash.simplePartyImport.created} {t('importCreated')}, {flash.simplePartyImport.skipped} {t('importSkipped')}.</p><small>{t('importEffectiveDate')}: {flash.simplePartyImport.effective_date}</small>{flash.simplePartyImport.skipped_names?.length > 0 && <p>{t('importSkippedNames')}: {flash.simplePartyImport.skipped_names.join('، ')}</p>}</div>}</section>}
 
         <section className="erp-section party-report-section printable-report">
             <div className="erp-section__header party-report-heading"><div><h2>{reportTitle}</h2><p>{t('partyReportPeriod')}: <strong>{from}</strong> — <strong>{to}</strong></p></div><span className="report-count">{number(reportRows?.total ?? rows.length, 0)} {t('partyCount')}</span></div>
