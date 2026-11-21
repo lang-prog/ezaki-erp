@@ -74,6 +74,10 @@ class AccountingFoundationService
                 );
             }
 
+            // Party ledgers belong under dedicated control accounts.
+            $this->ensurePartyControlAccount($company, 'customer_control', '1.2', 'Customers', 'العملاء');
+            $this->ensurePartyControlAccount($company, 'supplier_control', '2.1', 'Suppliers', 'الموردون');
+
             $year = now()->year;
             FiscalPeriod::query()->firstOrCreate(
                 ['company_id' => $company->id, 'name' => (string) $year],
@@ -82,6 +86,41 @@ class AccountingFoundationService
 
             $this->fillSystemNames($company);
         });
+    }
+
+    private function ensurePartyControlAccount(Company $company, string $key, string $parentCode, string $nameEn, string $nameAr): Account
+    {
+        $existing = Account::query()->where('company_id', $company->id)->where('system_key', $key)->first();
+        if ($existing) {
+            return $existing;
+        }
+
+        $parent = Account::query()->where('company_id', $company->id)->where('code', $parentCode)->firstOrFail();
+        $existing = Account::query()
+            ->where('company_id', $company->id)
+            ->where('parent_id', $parent->id)
+            ->where(function ($query) use ($nameEn, $nameAr): void {
+                $query->where('name', $nameEn)->orWhere('name', $nameAr)->orWhere('name_en', $nameEn)->orWhere('name_ar', $nameAr);
+            })
+            ->first();
+        if ($existing) {
+            $existing->forceFill(['system_key' => $key, 'is_system' => true, 'is_active' => true, 'name_en' => $nameEn, 'name_ar' => $nameAr])->save();
+
+            return $existing;
+        }
+
+        return Account::query()->create([
+            'company_id' => $company->id,
+            'parent_id' => $parent->id,
+            'code' => $this->nextChildCode($company, $parent),
+            'name' => $nameAr,
+            'name_ar' => $nameAr,
+            'name_en' => $nameEn,
+            'account_type' => $parent->account_type,
+            'system_key' => $key,
+            'is_system' => true,
+            'is_active' => true,
+        ]);
     }
 
     // Fills blanks only, so provisioning is idempotent and never overwrites a company's own display names.

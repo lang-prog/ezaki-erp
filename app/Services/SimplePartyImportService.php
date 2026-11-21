@@ -22,8 +22,8 @@ final class SimplePartyImportService
         private readonly AccountingService $accounting,
     ) {}
 
-    /** @return array{cutoff_date: string, effective_date: string, total: int, created: int, skipped: int, skipped_names: list<string>} */
-    public function import(Company $company, User $actor, UploadedFile $file): array
+    /** @return array{cutoff_date: string, effective_date: string, total: int, created: int, reparented: int, skipped: int, skipped_names: list<string>} */
+    public function import(Company $company, User $actor, UploadedFile $file, ?int $customerParentId = null, ?int $supplierParentId = null): array
     {
         $payload = $this->decode($file);
         $cutoff = $this->date($payload['cutoff_date'] ?? null, 'cutoff_date');
@@ -47,7 +47,8 @@ final class SimplePartyImportService
             $name = trim((string) ($row['name'] ?? ''));
             $type = strtolower(trim((string) ($row['type'] ?? '')));
             $direction = strtolower(trim((string) ($row['opening_balance_direction'] ?? '')));
-            $key = mb_strtolower($name);
+            $sourceId = $row['source_id'] ?? null;
+            $key = $type.'|'.mb_strtolower($name).'|'.($sourceId === null ? 'no-source' : (string) $sourceId);
             $amount = $row['opening_balance'] ?? null;
 
             if ($name === '' || mb_strlen($name) > 255) {
@@ -63,7 +64,7 @@ final class SimplePartyImportService
                 throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} opening_balance must be a non-negative number."]);
             }
             if (isset($seen[$key])) {
-                throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} duplicates row {$seen[$key]} by name."]);
+                throw ValidationException::withMessages(["file.line_{$line}" => "Party row {$line} duplicates row {$seen[$key]} by source identity."]);
             }
             $seen[$key] = $line;
             $normalized[] = [
@@ -75,34 +76,48 @@ final class SimplePartyImportService
                 'phone' => $this->nullableString($row['phone'] ?? null, 50),
                 'tax_number' => $this->nullableString($row['tax_number'] ?? null, 255),
                 'address' => $this->nullableString($row['address'] ?? null, 2000),
+                'source_id' => $sourceId,
             ];
         }
 
-        return DB::transaction(function () use ($company, $actor, $normalized, $cutoff, $effective): array {
+        return DB::transaction(function () use ($company, $actor, $normalized, $cutoff, $effective, $customerParentId, $supplierParentId): array {
             $this->foundation->seedCompany($company, $actor);
             $parents = [
-                'customer' => Account::query()->where('company_id', $company->id)->where('code', '1.2')->firstOrFail(),
-                'supplier' => Account::query()->where('company_id', $company->id)->where('code', '2.1')->firstOrFail(),
+                'customer' => $customerParentId ? $this->parentAccount($company, $customerParentId, 'asset', 'customer_parent_account_id') : $this->foundation->systemAccount($company, 'customer_control'),
+                'supplier' => $supplierParentId ? $this->parentAccount($company, $supplierParentId, 'liability', 'supplier_parent_account_id') : $this->foundation->systemAccount($company, 'supplier_control'),
             ];
-            $existing = CustomerSupplier::query()->where('company_id', $company->id)->get(['name'])->mapWithKeys(fn (CustomerSupplier $party): array => [mb_strtolower(trim($party->name)) => true]);
+            $existing = CustomerSupplier::query()->where('company_id', $company->id)->get();
+            $existingByName = $existing->mapWithKeys(fn (CustomerSupplier $party): array => [$this->partyKey($party->name, $party->is_supplier) => $party]);
             $created = 0;
+            $reparented = 0;
             $skipped = [];
 
             foreach ($normalized as $row) {
-                $key = mb_strtolower($row['name']);
-                if ($existing->has($key)) {
+                $key = $this->partyKey($row['name'], $row['type'] === 'supplier');
+                if ($existingByName->has($key)) {
+                    $party = $existingByName->get($key);
+                    $expectedParent = $parents[$row['type']];
+                    if ($party->account && (int) $party->account->parent_id !== (int) $expectedParent->id) {
+                        $this->foundation->moveAccount($company, $party->account, $expectedParent);
+                        $party->forceFill(['parent_account_id' => $expectedParent->id])->save();
+                        $reparented++;
+                    }
                     $skipped[] = $row['name'];
 
                     continue;
                 }
+
+                $partyData = $row;
+                unset($partyData['source_id']);
                 $this->accounting->createParty($company, $actor, [
-                    ...$row,
+                    ...$partyData,
                     'parent_account_id' => $parents[$row['type']]->id,
                     'is_customer' => $row['type'] === 'customer',
                     'is_supplier' => $row['type'] === 'supplier',
                     'opening_balance_date' => $effective->toDateString(),
                 ]);
-                $existing->put($key, true);
+                // Do not add newly-created rows to this map: distinct source_id
+                // rows with the same display name are independent legacy accounts.
                 $created++;
             }
 
@@ -111,10 +126,26 @@ final class SimplePartyImportService
                 'effective_date' => $effective->toDateString(),
                 'total' => count($normalized),
                 'created' => $created,
+                'reparented' => $reparented,
                 'skipped' => count($skipped),
                 'skipped_names' => $skipped,
             ];
         });
+    }
+
+    private function parentAccount(Company $company, int $id, string $type, string $field): Account
+    {
+        $account = Account::query()->where('company_id', $company->id)->whereKey($id)->where('is_active', true)->first();
+        if (! $account || $account->account_type !== $type) {
+            throw ValidationException::withMessages([$field => $type === 'asset' ? 'The customer parent must be an active asset account.' : 'The supplier parent must be an active liability account.']);
+        }
+
+        return $account;
+    }
+
+    private function partyKey(string $name, bool $supplier): string
+    {
+        return ($supplier ? 'supplier|' : 'customer|').mb_strtolower(trim($name));
     }
 
     /** @return array<string, mixed> */

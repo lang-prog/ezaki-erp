@@ -16,6 +16,8 @@ final class SimplePartyImportController extends Controller
     {
         $request->validate([
             'file' => ['required', 'file', 'mimes:json,txt', 'max:5120'],
+            'customer_parent_account_id' => ['nullable', 'integer'],
+            'supplier_parent_account_id' => ['nullable', 'integer'],
         ]);
 
         try {
@@ -23,6 +25,8 @@ final class SimplePartyImportController extends Controller
                 $request->attributes->get('company'),
                 $request->user(),
                 $request->file('file'),
+                $request->integer('customer_parent_account_id') ?: null,
+                $request->integer('supplier_parent_account_id') ?: null,
             );
         } catch (ValidationException $exception) {
             throw $exception;
